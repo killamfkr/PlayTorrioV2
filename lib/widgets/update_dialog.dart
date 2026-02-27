@@ -406,7 +406,10 @@ class _UpdateDialogState extends State<UpdateDialog> with SingleTickerProviderSt
             setState(() {
               switch (event.status) {
                 case OtaStatus.DOWNLOADING:
-                  _downloadProgress = (event.value ?? 0) / 100.0;
+                  final value = event.value;
+                  if (value != null) {
+                    _downloadProgress = (value as num).toDouble() / 100.0;
+                  }
                   break;
                 case OtaStatus.INSTALLING:
                   _downloadProgress = 1.0;
