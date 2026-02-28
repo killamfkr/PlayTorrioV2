@@ -7,7 +7,6 @@ import 'package:logging/logging.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'api/audio_handler.dart';
 import 'api/audiobook_player_service.dart';
@@ -177,13 +176,25 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   }
 
   Future<void> _initEngine() async {
+    debugPrint('═══════════════════════════════════════════════════════════');
+    debugPrint('[Boot] Starting engine initialization...');
+    debugPrint('═══════════════════════════════════════════════════════════');
+    
+    debugPrint('[Boot] Step 1: Checking network connectivity...');
     final connectivityResult = await Connectivity().checkConnectivity();
     final isOffline = connectivityResult.contains(ConnectivityResult.none);
+    debugPrint('[Boot] Network status: ${isOffline ? "OFFLINE" : "ONLINE"}');
 
     if (isOffline) {
       debugPrint('[Boot] Device is offline, initializing local services only');
-      await MusicPlayerService().init().catchError((e) => debugPrint('[Boot] MusicPlayer error: $e'));
+      debugPrint('[Boot] Initializing MusicPlayer...');
+      await MusicPlayerService().init().catchError((e) {
+        debugPrint('[Boot] ✗ MusicPlayer error: $e');
+        return null;
+      });
+      debugPrint('[Boot] ✓ Local services initialized');
       if (mounted) {
+        debugPrint('[Boot] Navigating to MainScreen (offline mode)');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const MainScreen()),
         );
@@ -191,37 +202,73 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       return;
     }
 
+    debugPrint('[Boot] Step 2: Initializing services in parallel...');
     final api = TmdbApi();
     
-    await Future.wait([
-      // ── FIX: onTimeout and catchError must return bool (same type as start()) ──
+    debugPrint('[Boot]   - Starting TorrServer...');
+    debugPrint('[Boot]   - Starting LocalServer...');
+    debugPrint('[Boot]   - Initializing MusicPlayer...');
+    debugPrint('[Boot]   - Fetching TMDB data (trending, popular, top rated, now playing)...');
+    
+    final results = await Future.wait([
       TorrServerService().start().timeout(
         const Duration(seconds: 10),
         onTimeout: () {
-          debugPrint('[Boot] TorrServer startup timed out');
-          return false; // ← was missing, caused the build error
+          debugPrint('[Boot] ⚠ TorrServer startup timed out after 10s');
+          return false;
         },
-      ).catchError((e) {
-        debugPrint('[Boot] TorrServer error: $e');
-        return false; // ← was missing, caused the build error
+      ).catchError((e, st) {
+        debugPrint('[Boot] ✗ TorrServer error: $e');
+        debugPrint('[Boot] Stack trace: $st');
+        return false;
       }),
-      LocalServerService().start().catchError((e) => debugPrint('[Boot] LocalServer error: $e')),
-      MusicPlayerService().init().catchError((e) => debugPrint('[Boot] MusicPlayer error: $e')),
-      api.getTrending().catchError((e) => <Movie>[]),
-      api.getPopular().catchError((e) => <Movie>[]),
-      api.getTopRated().catchError((e) => <Movie>[]),
-      api.getNowPlaying().catchError((e) => <Movie>[]),
+      LocalServerService().start().catchError((e) {
+        debugPrint('[Boot] ✗ LocalServer error: $e');
+        return null;
+      }),
+      MusicPlayerService().init().catchError((e) {
+        debugPrint('[Boot] ✗ MusicPlayer error: $e');
+        return null;
+      }),
+      api.getTrending().catchError((e) {
+        debugPrint('[Boot] ✗ TMDB trending error: $e');
+        return <Movie>[];
+      }),
+      api.getPopular().catchError((e) {
+        debugPrint('[Boot] ✗ TMDB popular error: $e');
+        return <Movie>[];
+      }),
+      api.getTopRated().catchError((e) {
+        debugPrint('[Boot] ✗ TMDB top rated error: $e');
+        return <Movie>[];
+      }),
+      api.getNowPlaying().catchError((e) {
+        debugPrint('[Boot] ✗ TMDB now playing error: $e');
+        return <Movie>[];
+      }),
     ]);
 
+    debugPrint('[Boot] Step 3: Service initialization results:');
+    debugPrint('[Boot]   TorrServer: ${results[0] == true ? "✓ READY" : "✗ FAILED"}');
+    debugPrint('[Boot]   LocalServer: ${results[1] != null ? "✓ READY" : "✗ FAILED"}');
+    debugPrint('[Boot]   MusicPlayer: ${results[2] != null ? "✓ READY" : "✗ FAILED"}');
+    debugPrint('[Boot]   TMDB Trending: ${(results[3] as List).isNotEmpty ? "✓ ${(results[3] as List).length} items" : "✗ Empty"}');
+    debugPrint('[Boot]   TMDB Popular: ${(results[4] as List).isNotEmpty ? "✓ ${(results[4] as List).length} items" : "✗ Empty"}');
+    debugPrint('[Boot]   TMDB Top Rated: ${(results[5] as List).isNotEmpty ? "✓ ${(results[5] as List).length} items" : "✗ Empty"}');
+    debugPrint('[Boot]   TMDB Now Playing: ${(results[6] as List).isNotEmpty ? "✓ ${(results[6] as List).length} items" : "✗ Empty"}');
+
+    debugPrint('[Boot] Step 4: Pre-warming screens...');
     // ignore: unused_local_variable
     const warmupSearch = SearchScreen();
     // ignore: unused_local_variable
     const warmupDiscover = DiscoverScreen();
+    debugPrint('[Boot] ✓ Screens pre-warmed');
     
-    // Check for updates silently in background
+    debugPrint('[Boot] Step 5: Checking for updates in background...');
     _checkForUpdatesInBackground();
     
     if (mounted) {
+      debugPrint('[Boot] Step 6: Navigating to MainScreen...');
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) => const MainScreen(),
@@ -231,28 +278,38 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           transitionDuration: const Duration(milliseconds: 800),
         ),
       );
+      debugPrint('═══════════════════════════════════════════════════════════');
+      debugPrint('[Boot] ✓✓✓ ENGINE INITIALIZATION COMPLETE ✓✓✓');
+      debugPrint('═══════════════════════════════════════════════════════════');
     }
   }
   
   Future<void> _checkForUpdatesInBackground() async {
     try {
+      debugPrint('[Boot] Checking for app updates...');
       final updater = AppUpdaterService();
       final updateInfo = await updater.checkForUpdates();
       
-      if (updateInfo != null && mounted) {
-        // Wait a bit before showing the dialog so user can see the main screen first
-        await Future.delayed(const Duration(seconds: 3));
-        
+      if (updateInfo != null) {
+        debugPrint('[Boot] ✓ Update available: ${updateInfo.version}');
         if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => UpdateDialog(updateInfo: updateInfo),
-          );
+          // Wait a bit before showing the dialog so user can see the main screen first
+          await Future.delayed(const Duration(seconds: 3));
+          
+          if (mounted) {
+            debugPrint('[Boot] Showing update dialog...');
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => UpdateDialog(updateInfo: updateInfo),
+            );
+          }
         }
+      } else {
+        debugPrint('[Boot] ✓ App is up to date');
       }
     } catch (e) {
-      debugPrint('[Boot] Update check failed: $e');
+      debugPrint('[Boot] ✗ Update check failed: $e');
     }
   }
 

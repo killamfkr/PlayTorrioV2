@@ -918,13 +918,50 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
           onPlayAll: p.tracks.isNotEmpty ? () {
             _playerService.playTrack(p.tracks[0], newPlaylist: List.from(p.tracks));
           } : null,
+          extraActions: [
+            _buildActionButton(Icons.delete_outline_rounded, 'Delete', () async {
+              final shouldDelete = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  backgroundColor: const Color(0xFF1A1030),
+                  title: const Text('Delete Playlist?'),
+                  content: Text('Are you sure you want to delete "${p.name}"?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                    ),
+                  ],
+                ),
+              );
+              if (shouldDelete == true) {
+                await _storageService.deletePlaylist(p.name);
+                await _loadUserData();
+                if (mounted) {
+                  setState(() => _currentView = MusicView.playlists);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Playlist deleted'),
+                      backgroundColor: const Color(0xFF1A1030),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  );
+                }
+              }
+            }),
+          ],
         )),
         // Track list
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 180),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
-              (context, index) => _buildTrackTile(p.tracks[index], p.tracks, index: index, showNumber: true),
+              (context, index) => _buildTrackTile(p.tracks[index], p.tracks, index: index, showNumber: true, fromPlaylist: p),
               childCount: p.tracks.length,
             ),
           ),
@@ -1246,7 +1283,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   //  TRACK TILE (List item)
   // ─────────────────────────────────────────────
 
-  Widget _buildTrackTile(MusicTrack track, List<MusicTrack> queue, {int? index, bool showNumber = false}) {
+  Widget _buildTrackTile(MusicTrack track, List<MusicTrack> queue, {int? index, bool showNumber = false, MusicPlaylist? fromPlaylist}) {
     return ValueListenableBuilder<MusicTrack?>(
       valueListenable: _playerService.currentTrack,
       builder: (context, currentTrack, _) {
@@ -1327,7 +1364,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     // More button
                     IconButton(
                       icon: Icon(Icons.more_horiz_rounded, color: Colors.white.withValues(alpha: 0.3), size: 22),
-                      onPressed: () => _showTrackMenu(track),
+                      onPressed: () => _showTrackMenu(track, fromPlaylist: fromPlaylist),
                       visualDensity: VisualDensity.compact,
                     ),
                   ],
@@ -1345,6 +1382,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   // ─────────────────────────────────────────────
 
   Widget _buildAlbumCard(MusicAlbum album, VoidCallback onTap) {
+    final isSaved = _userAlbums.any((a) => a.id == album.id);
+    
     return _HoverScaleCard(
       onTap: onTap,
       borderRadius: 16,
@@ -1381,6 +1420,46 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [Colors.transparent, Colors.black.withValues(alpha: 0.6)],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Save/Unsave button
+                  Positioned(
+                    top: 8, right: 8,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () async {
+                          if (isSaved) {
+                            await _storageService.unsaveAlbum(album.id);
+                          } else {
+                            await _storageService.saveAlbum(album);
+                          }
+                          await _loadUserData();
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(isSaved ? 'Album removed' : 'Album saved!'),
+                                backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.9),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            );
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            isSaved ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                            color: isSaved ? Colors.amberAccent : Colors.white70,
+                            size: 20,
+                          ),
                         ),
                       ),
                     ),
@@ -1779,7 +1858,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   //  TRACK MENU (Bottom Sheet)
   // ─────────────────────────────────────────────
 
-  void _showTrackMenu(MusicTrack track) {
+  void _showTrackMenu(MusicTrack track, {MusicPlaylist? fromPlaylist}) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1826,6 +1905,26 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
             ),
             Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
             // Menu items
+            if (fromPlaylist != null)
+              _buildMenuItem(Icons.playlist_remove_rounded, 'Remove from Playlist', Colors.redAccent, () async {
+                Navigator.pop(context);
+                final updatedTracks = List<MusicTrack>.from(fromPlaylist.tracks)..removeWhere((t) => t.id == track.id);
+                final updatedPlaylist = MusicPlaylist(name: fromPlaylist.name, tracks: updatedTracks);
+                await _storageService.savePlaylist(updatedPlaylist);
+                await _loadUserData();
+                if (mounted) {
+                  final messenger = ScaffoldMessenger.of(context);
+                  setState(() => _selectedPlaylist = updatedPlaylist);
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: const Text('Removed from playlist'),
+                      backgroundColor: const Color(0xFF1A1030),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  );
+                }
+              }),
             _buildMenuItem(Icons.playlist_add_rounded, 'Add to Playlist', AppTheme.primaryColor, () {
               Navigator.pop(context);
               _showPlaylistPicker(track);

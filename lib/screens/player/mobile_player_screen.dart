@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../api/subtitle_api.dart';
 import '../../services/watch_history_service.dart';
 import '../../api/torr_server_service.dart';
+import '../../api/stream_extractor.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
 import 'utils.dart';
@@ -370,6 +371,7 @@ class MobilePlayerScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? externalSubtitles;
   final String? stremioId;
   final String? stremioAddonBaseUrl;
+  final Map<String, dynamic>? providers;
 
   const MobilePlayerScreen({
     super.key,
@@ -388,6 +390,7 @@ class MobilePlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
+    this.providers,
   });
 
   @override
@@ -448,6 +451,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   // ── Subtitles ─────────────────────────────────────────────────────────────
   List<Map<String, dynamic>> _externalSubtitles = [];
+
+  // ── Provider switching ────────────────────────────────────────────────────
+  String? _currentProvider;
+  bool _isSwitchingProvider = false;
   bool _isFetchingSubs = false;
   String? _selectedExternalSubUrl;
 
@@ -465,6 +472,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   @override
   void initState() {
     super.initState();
+
+    // ── Provider initialization ──────────────────────────────────────────
+    _currentProvider = widget.activeProvider;
 
     // ── Lifecycle Observer ───────────────────────────────────────────────
     WidgetsBinding.instance.addObserver(this);
@@ -629,18 +639,34 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   Future<void> _initPlayback() async {
     if (_disposed) return;
-    try {
-      _subscribeToStreams();
-      await _configureMpvProperties();
-      await _player.open(
-          Media(widget.mediaPath, httpHeaders: widget.headers));
-      _player.setVolume(_volume);
-    } catch (e) {
-      if (!mounted || _disposed) return;
-      setState(() {
-        _hasError = true;
-        _errorMessage = e.toString();
-      });
+    
+    int retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        _subscribeToStreams();
+        await _configureMpvProperties();
+        await _player.open(
+            Media(widget.mediaPath, httpHeaders: widget.headers));
+        _player.setVolume(_volume);
+        return; // Success, exit
+      } catch (e) {
+        retryCount++;
+        debugPrint('[Player] Open failed (attempt $retryCount/$maxRetries): $e');
+        
+        if (retryCount < maxRetries) {
+          // Wait before retry with exponential backoff
+          await Future.delayed(Duration(milliseconds: 500 * retryCount));
+        } else {
+          // All retries failed, show error
+          if (!mounted || _disposed) return;
+          setState(() {
+            _hasError = true;
+            _errorMessage = e.toString();
+          });
+        }
+      }
     }
   }
 
@@ -1356,6 +1382,142 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     );
   }
 
+  void _showProviderMenu() {
+    if (widget.providers == null || widget.providers!.isEmpty || widget.movie == null) {
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0E0E0E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 40, height: 4,
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('Switch Provider',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold)),
+          ),
+          Expanded(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: widget.providers!.length,
+              itemBuilder: (context, index) {
+                final key = widget.providers!.keys.elementAt(index);
+                final provider = widget.providers![key];
+                final isCurrent = key == _currentProvider;
+                return ListTile(
+                  leading: Icon(
+                    Icons.stream_rounded,
+                    color: isCurrent ? const Color(0xFF7C3AED) : Colors.white70,
+                  ),
+                  title: Text(
+                    provider['name'],
+                    style: TextStyle(
+                      color: isCurrent ? const Color(0xFF7C3AED) : Colors.white,
+                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                  trailing: isCurrent
+                      ? const Icon(Icons.check, color: Color(0xFF7C3AED))
+                      : null,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    if (!isCurrent) {
+                      await _switchProvider(key);
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _switchProvider(String newProvider) async {
+    if (_isSwitchingProvider) return;
+    
+    setState(() => _isSwitchingProvider = true);
+    
+    final currentPos = _positionNotifier.value;
+    final messenger = ScaffoldMessenger.of(context);
+    
+    try {
+      final provider = widget.providers![newProvider];
+      final String url;
+      
+      if (widget.movie!.mediaType == 'tv') {
+        url = provider['tv'](
+          widget.movie!.id.toString(),
+          widget.selectedSeason,
+          widget.selectedEpisode,
+        );
+      } else {
+        url = provider['movie'](widget.movie!.id.toString());
+      }
+      
+      messenger.showSnackBar(SnackBar(
+        content: Text('Extracting from ${provider['name']}...'),
+        duration: const Duration(seconds: 2),
+      ));
+      
+      final extractor = StreamExtractor();
+      final result = await extractor.extract(url);
+      
+      if (result != null && result.url.isNotEmpty) {
+        await _player.open(
+          Media(result.url, httpHeaders: result.headers),
+        );
+        
+        if (currentPos.inSeconds > 0) {
+          await _player.seek(currentPos);
+        }
+        
+        setState(() {
+          _currentProvider = newProvider;
+        });
+        
+        if (mounted) {
+          messenger.showSnackBar(SnackBar(
+            content: Text('Switched to ${provider['name']}'),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      } else {
+        if (mounted) {
+          messenger.showSnackBar(SnackBar(
+            content: Text('Failed to extract from ${provider['name']}'),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Error switching provider: $e'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSwitchingProvider = false);
+      }
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   //  MISC
   // ─────────────────────────────────────────────────────────────────────────
@@ -1669,8 +1831,18 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                     ),
                   ]),
 
-                  // Right: copy URL / subtitle settings / aspect ratio
+                  // Right: copy URL / subtitle settings / aspect ratio / provider switcher
                   Row(children: [
+                    // Show provider switcher only when providers are available and not using torrent/stremio
+                    if (widget.providers != null && widget.providers!.isNotEmpty && 
+                        widget.magnetLink == null && widget.activeProvider != 'stremio_direct') ...[
+                      _GlassIconButton(
+                        icon: Icons.swap_horiz_rounded,
+                        onPressed: _isSwitchingProvider ? () {} : _showProviderMenu,
+                        size: 40, iconSize: 18,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     _GlassIconButton(
                       icon: Icons.link_rounded,
                       onPressed: () async {

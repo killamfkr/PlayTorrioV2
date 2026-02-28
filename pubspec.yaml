@@ -2,7 +2,7 @@ name: play_torrio_native
 description: "PlayTorrio - Your cinema universe, Stream anything, anywhere."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.11.0
@@ -72,6 +72,7 @@ flutter:
     # TorrServer binaries — CI downloads these automatically.
     # For local dev, download from https://github.com/YouROK/TorrServer/releases
     # and uncomment the line for your platform.
+    #- assets/bin/android/TorrServer-arm64
     #- assets/bin/windows/TorrServer.exe
     #- assets/bin/linux/TorrServer
     #- assets/bin/macos/TorrServer

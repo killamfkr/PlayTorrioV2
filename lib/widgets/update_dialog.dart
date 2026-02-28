@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import '../services/app_updater_service.dart';
@@ -461,8 +460,8 @@ class _UpdateDialogState extends State<UpdateDialog> with SingleTickerProviderSt
     try {
       // Determine download directory and file extension
       final dir = Platform.isWindows 
-          ? Directory(Platform.environment['USERPROFILE']! + r'\Downloads')
-          : Directory(Platform.environment['HOME']! + '/Downloads');
+          ? Directory('${Platform.environment['USERPROFILE']}\\Downloads')
+          : Directory('${Platform.environment['HOME']}/Downloads');
       
       final extension = Platform.isWindows ? '.exe' : '.AppImage';
       final fileName = 'PlayTorrio-${widget.updateInfo.latestVersion}$extension';

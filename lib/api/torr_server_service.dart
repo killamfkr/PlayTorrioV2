@@ -156,17 +156,24 @@ class TorrServerService {
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<String> _getBinaryPath() async {
+    _log('_getBinaryPath() called');
     if (_extractedBinaryPath != null) {
       final cached = File(_extractedBinaryPath!);
-      if (await cached.exists()) return _extractedBinaryPath!;
+      if (await cached.exists()) {
+        _log('  Using cached binary path: $_extractedBinaryPath');
+        return _extractedBinaryPath!;
+      }
+      _log('  Cached path no longer exists, re-extracting...');
       _extractedBinaryPath = null; // stale cache — re-extract
     }
 
     // Android: the .so is placed in the native lib dir by the APK installer.
     if (Platform.isAndroid) {
+      _log('  Platform: Android - looking for native library...');
       try {
         final String libDir =
             await _platform.invokeMethod('getNativeLibraryDir');
+        _log('  Native library directory: $libDir');
         final candidates = [
           path.join(libDir, 'libtorrserver.so'),
           path.join(libDir, 'arm64-v8a', 'libtorrserver.so'),
@@ -174,42 +181,71 @@ class TorrServerService {
           path.join(libDir, 'arm64', 'libtorrserver.so'),
           path.join(libDir, 'arm', 'libtorrserver.so'),
         ];
+        _log('  Checking ${candidates.length} candidate paths...');
         for (final p in candidates) {
+          _log('    Checking: $p');
           if (await File(p).exists()) {
             _extractedBinaryPath = p;
-            _log('Binary found at: $p');
+            _log('  ✓ Binary found at: $p');
             return p;
           }
         }
+        _log('  ✗ No binary found in any candidate path');
       } catch (e) {
-        _log('Native library dir error: $e');
+        _log('  ✗ Native library dir error: $e');
       }
     }
 
     // Desktop / fallback: extract from Flutter assets.
+    _log('  Platform: ${Platform.operatingSystem} - extracting from assets...');
     final (assetPath, binaryName) = _assetForPlatform();
+    _log('  Asset path: $assetPath');
+    _log('  Binary name: $binaryName');
+    
     final tmpDir = await getTemporaryDirectory();
+    _log('  Temp directory: ${tmpDir.path}');
+    
     final extractedPath =
         path.join(tmpDir.path, 'torrserver_bin', binaryName);
+    _log('  Target extraction path: $extractedPath');
+    
     final extractedFile = File(extractedPath);
 
     // Re-use already-extracted binary if it exists.
     if (await extractedFile.exists()) {
+      _log('  Binary already extracted, reusing...');
       _extractedBinaryPath = extractedPath;
       return extractedPath;
     }
 
-    _log('Extracting binary from assets → $extractedPath');
-    final byteData = await rootBundle.load(assetPath);
-    await Directory(path.dirname(extractedPath)).create(recursive: true);
-    await extractedFile.writeAsBytes(byteData.buffer.asUint8List());
+    _log('  Extracting binary from assets...');
+    try {
+      final byteData = await rootBundle.load(assetPath);
+      _log('  ✓ Asset loaded: ${byteData.lengthInBytes} bytes');
+      
+      await Directory(path.dirname(extractedPath)).create(recursive: true);
+      _log('  ✓ Directory created');
+      
+      await extractedFile.writeAsBytes(byteData.buffer.asUint8List());
+      _log('  ✓ Binary written to disk');
 
-    if (!Platform.isWindows) {
-      await Process.run('chmod', ['755', extractedPath]);
+      if (!Platform.isWindows) {
+        _log('  Setting executable permissions (chmod 755)...');
+        final chmodResult = await Process.run('chmod', ['755', extractedPath]);
+        _log('  chmod exit code: ${chmodResult.exitCode}');
+        if (chmodResult.exitCode != 0) {
+          _log('  chmod stderr: ${chmodResult.stderr}');
+        }
+      }
+
+      _extractedBinaryPath = extractedPath;
+      _log('  ✓ Binary ready at: $extractedPath');
+      return extractedPath;
+    } catch (e, st) {
+      _log('  ✗ Failed to extract binary: $e');
+      _log('  Stack trace: $st');
+      rethrow;
     }
-
-    _extractedBinaryPath = extractedPath;
-    return extractedPath;
   }
 
   (String, String) _assetForPlatform() {
@@ -234,6 +270,10 @@ class TorrServerService {
   /// Starts TorrServer and applies the optimized streaming configuration.
   /// Safe to call multiple times — is a no-op if already running.
   Future<bool> start() async {
+    _log('═══════════════════════════════════════════════════════════');
+    _log('START CALLED - Current state: $_state');
+    _log('═══════════════════════════════════════════════════════════');
+    
     if (_state == EngineState.starting || _state == EngineState.configuring) {
       _log('Engine is already starting, waiting…');
       return await _waitForEcho(timeout: const Duration(seconds: 20));
@@ -247,14 +287,42 @@ class TorrServerService {
     }
 
     _setState(EngineState.starting);
+    _log('State changed to: starting');
 
     try {
+      _log('Step 1: Getting binary path...');
       final binary = await _getBinaryPath();
+      _log('✓ Binary path: $binary');
+      
+      _log('Step 2: Resolving data directory...');
       final dataDir = await _resolveDataDir();
+      _log('✓ Data directory: $dataDir');
+      
+      _log('Step 3: Creating data directory if needed...');
       await Directory(dataDir).create(recursive: true);
+      _log('✓ Data directory ready');
 
+      _log('Step 4: Building launch arguments...');
       final args = _buildLaunchArgs(dataDir);
-      _log('Starting TorrServer → $binary ${args.join(' ')}');
+      _log('✓ Arguments: ${args.join(' ')}');
+      
+      _log('Step 5: Checking binary permissions...');
+      final binaryFile = File(binary);
+      final exists = await binaryFile.exists();
+      _log('  Binary exists: $exists');
+      if (exists) {
+        final stat = await binaryFile.stat();
+        _log('  Binary size: ${stat.size} bytes');
+        _log('  Binary modified: ${stat.modified}');
+        if (!Platform.isWindows) {
+          _log('  Checking if executable bit is set...');
+          final result = await Process.run('ls', ['-la', binary]);
+          _log('  Permissions: ${result.stdout}');
+        }
+      }
+      
+      _log('Step 6: Starting process...');
+      _log('Command: $binary ${args.join(' ')}');
 
       _serverProcess = await Process.start(
         binary,
@@ -263,43 +331,55 @@ class TorrServerService {
         environment: _processEnvironment(),
       );
 
+      _log('✓ Process started successfully!');
+      _log('  PID: ${_serverProcess!.pid}');
+
       // Pipe stdout/stderr to our log callback.
       _serverProcess!.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
-          .listen(_log);
+          .listen((line) {
+            _log('[TorrServer STDOUT] $line');
+          });
       _serverProcess!.stderr
           .transform(utf8.decoder)
           .transform(const LineSplitter())
-          .listen((line) => _log('[ERR] $line'));
+          .listen((line) {
+            _log('[TorrServer STDERR] $line');
+          });
 
       // Monitor unexpected exit.
       _serverProcess!.exitCode.then((code) {
-        _log('TorrServer exited with code $code');
+        _log('⚠ TorrServer process exited with code $code');
         if (_state != EngineState.stopped) {
           _setState(EngineState.error);
         }
       });
 
-      _log('Process started (PID: ${_serverProcess!.pid})');
-
-      // ── Step 1: Wait for /echo to respond ──────────────────────────────
+      _log('Step 7: Waiting for /echo endpoint to respond...');
       _setState(EngineState.configuring);
       final ready = await _waitForEcho(timeout: const Duration(seconds: 30));
       if (!ready) {
-        _log('Engine did not respond within 30 s. Aborting.');
+        _log('✗ Engine did not respond within 30s. Aborting.');
         _setState(EngineState.error);
         return false;
       }
+      _log('✓ /echo endpoint responded!');
 
-      // ── Step 2: Apply optimized configuration ──────────────────────────
+      _log('Step 8: Applying optimized configuration...');
       await _configureServer();
 
       _setState(EngineState.ready);
-      _log('Engine ready. Configuration applied.');
+      _log('═══════════════════════════════════════════════════════════');
+      _log('✓✓✓ ENGINE READY - TorrServer is fully operational! ✓✓✓');
+      _log('═══════════════════════════════════════════════════════════');
       return true;
     } catch (e, st) {
-      _log('Failed to start engine: $e\n$st');
+      _log('✗✗✗ FAILED TO START ENGINE ✗✗✗');
+      _log('Error: $e');
+      _log('Stack trace:');
+      _log('$st');
+      _log('═══════════════════════════════════════════════════════════');
       _setState(EngineState.error);
       return false;
     }
@@ -349,11 +429,15 @@ class TorrServerService {
   /// This confirms the HTTP server AND the BT engine are both up.
   Future<bool> _isEchoAlive() async {
     try {
+      _log('Checking /echo endpoint at $_base/echo...');
       final response = await _httpClient
           .get(Uri.parse('$_base/echo'))
           .timeout(const Duration(milliseconds: 800));
-      return response.statusCode == 200;
-    } catch (_) {
+      final alive = response.statusCode == 200;
+      _log('  /echo response: ${response.statusCode} - ${alive ? "ALIVE" : "NOT ALIVE"}');
+      return alive;
+    } catch (e) {
+      _log('  /echo check failed: $e');
       return false;
     }
   }
@@ -363,11 +447,19 @@ class TorrServerService {
     Duration timeout = const Duration(seconds: 20),
     Duration interval = const Duration(milliseconds: 150),
   }) async {
+    _log('Polling /echo endpoint (timeout: ${timeout.inSeconds}s, interval: ${interval.inMilliseconds}ms)...');
     final deadline = DateTime.now().add(timeout);
+    int attempts = 0;
     while (DateTime.now().isBefore(deadline)) {
-      if (await _isEchoAlive()) return true;
+      attempts++;
+      _log('  Attempt $attempts...');
+      if (await _isEchoAlive()) {
+        _log('✓ /echo responded after $attempts attempts');
+        return true;
+      }
       await Future.delayed(interval);
     }
+    _log('✗ /echo did not respond after $attempts attempts');
     return false;
   }
 
@@ -523,14 +615,42 @@ class TorrServerService {
       current['StoreViewedInJson'] = true;
 
       final payload = jsonEncode({'action': 'set', 'sets': current});
+      _log('Sending settings payload: ${payload.substring(0, payload.length > 500 ? 500 : payload.length)}...');
+      
       final setResp = await _httpClient
           .post(settingsUri, headers: _jsonHeaders, body: payload)
           .timeout(const Duration(seconds: 8));
 
       if (setResp.statusCode == 200) {
         _log('✓ Configuration applied successfully.');
+        
+        // Verify settings were actually applied by reading them back
+        try {
+          final verifyResp = await _httpClient
+              .post(
+                settingsUri,
+                headers: _jsonHeaders,
+                body: jsonEncode({'action': 'get'}),
+              )
+              .timeout(const Duration(seconds: 5));
+          
+          if (verifyResp.statusCode == 200 && verifyResp.body.isNotEmpty) {
+            final applied = jsonDecode(verifyResp.body) as Map<String, dynamic>;
+            _log('✓ Verified settings:');
+            _log('  CacheSize: ${applied['CacheSize']} (expected: $_cacheSize)');
+            _log('  PreloadCache: ${applied['PreloadCache']}% (expected: ${_isMobile ? 2 : 1}%)');
+            _log('  ReaderReadAHead: ${applied['ReaderReadAHead']}% (expected: 95%)');
+            _log('  ResponsiveMode: ${applied['ResponsiveMode']} (expected: true)');
+            _log('  Strategy: ${applied['Strategy']} (expected: 2)');
+            _log('  ConnectionsLimit: ${applied['ConnectionsLimit']} (expected: $_connectionsLimit)');
+            _log('  DisableUpload: ${applied['DisableUpload']} (expected: true)');
+            _log('  RetrackersMode: ${applied['RetrackersMode']} (expected: 1)');
+          }
+        } catch (e) {
+          _log('Could not verify settings (non-fatal): $e');
+        }
       } else {
-        _log('Settings apply returned HTTP ${setResp.statusCode}: ${setResp.body}');
+        _log('⚠ Settings apply returned HTTP ${setResp.statusCode}: ${setResp.body}');
       }
     } catch (e) {
       _log('Configuration error (non-fatal): $e');
@@ -632,7 +752,7 @@ class TorrServerService {
     // can serve any stream. fileIdx from the Stremio addon is a preferred-file
     // hint used during selection, but does NOT skip the polling.
     _log('Polling metadata for $hash… (preferred fileIdx: $fileIdx)');
-    final int? fileIndex = await _resolveFileIndex(
+    final fileInfo = await _resolveFileIndex(
       torrentsUri: torrentsUri,
       hash: hash,
       season: season,
@@ -640,15 +760,17 @@ class TorrServerService {
       preferredIdx: fileIdx,
     );
 
-    if (fileIndex == null) {
+    if (fileInfo == null) {
       _log('Could not resolve a video file for $hash');
       return null;
     }
 
     // ── Step 3: Build and return the stream URL ────────────────────────────
     // ?play  → TorrServer opens the byte-range HTTP stream immediately.
-    // No title/poster params needed for pure streaming URL.
-    final streamUrl = '$_base/stream/video.mp4?link=$hash&index=$fileIndex&play';
+    // Use the actual filename from the torrent for better codec detection
+    // and proper MIME type handling by the server.
+    final encodedFilename = Uri.encodeComponent(fileInfo.filename);
+    final streamUrl = '$_base/stream/$encodedFilename?link=$hash&index=${fileInfo.index}&play';
     _log('Stream URL ready: $streamUrl');
 
     return streamUrl;
@@ -747,8 +869,8 @@ class TorrServerService {
 
   /// Polls /torrents?action=get until file_stats appears, then selects the
   /// best video file, sets its download priority to 1 (active), and returns
-  /// its index.
-  Future<int?> _resolveFileIndex({
+  /// its index and filename.
+  Future<({int index, String filename})?> _resolveFileIndex({
     required Uri torrentsUri,
     required String hash,
     int? season,
@@ -759,6 +881,7 @@ class TorrServerService {
     const pollInterval = Duration(milliseconds: 250);
     final deadline = DateTime.now().add(Duration(milliseconds: maxPollMs));
     int? bestIndex;
+    String? bestFilename;
     bool priorityCommitted = false;
 
     while (DateTime.now().isBefore(deadline)) {
@@ -793,8 +916,10 @@ class TorrServerService {
         // ── File selection ─────────────────────────────────────────────
         final files = rawFiles.cast<Map<String, dynamic>>();
         int? bestEpisodeMatch;
+        String? bestEpisodeFilename;
         int bestEpisodeSize = -1;
         int? largestVideo;
+        String? largestVideoFilename;
         int largestSize = -1;
 
         for (final f in files) {
@@ -811,6 +936,7 @@ class TorrServerService {
               if (size > bestEpisodeSize) {
                 bestEpisodeSize = size;
                 bestEpisodeMatch = id;
+                bestEpisodeFilename = name;
               }
             }
           }
@@ -818,23 +944,34 @@ class TorrServerService {
           if (size > largestSize) {
             largestSize = size;
             largestVideo = id;
+            largestVideoFilename = name;
           }
         }
 
         // Priority order:
         // 1. S/E pattern match (most reliable for TV)
-        // 2. preferredIdx from Stremio addon (addon knows exactly which file)
+        // 2. preferredIdx from Stremio addon (addon knows exactly which file) - BUT only if it's a video file
         // 3. Largest video file (fallback)
         int? preferredFile;
+        String? preferredFilename;
         if (preferredIdx != null) {
-          // Find the file whose id matches preferredIdx
-          final match = files.where((f) => f['id'] == preferredIdx).toList();
+          // Find the file whose id matches preferredIdx AND is a video file
+          final match = files.where((f) {
+            final id = f['id'] as int;
+            final name = (f['path'] ?? f['name'] ?? '') as String;
+            return id == preferredIdx && TorrentFilter.isVideoFile(name);
+          }).toList();
           if (match.isNotEmpty) {
             preferredFile = preferredIdx;
+            preferredFilename = (match.first['path'] ?? match.first['name'] ?? '') as String;
+            _log('Using preferredIdx $preferredIdx (validated as video file)');
+          } else {
+            _log('preferredIdx $preferredIdx is not a video file, ignoring');
           }
         }
 
         bestIndex = bestEpisodeMatch ?? preferredFile ?? largestVideo;
+        bestFilename = bestEpisodeFilename ?? preferredFilename ?? largestVideoFilename;
 
         if (bestIndex != null && !priorityCommitted) {
           // ── Set download priority ──────────────────────────────────
@@ -863,7 +1000,9 @@ class TorrServerService {
 
           // Return immediately after first successful priority commit.
           // We don't need to wait for the full 30-second window.
-          return bestIndex;
+          if (bestFilename != null) {
+            return (index: bestIndex, filename: bestFilename);
+          }
         }
       } catch (e) {
         _log('Metadata poll error: $e');
@@ -873,7 +1012,10 @@ class TorrServerService {
     }
 
     _log('Metadata timeout. Best index so far: $bestIndex');
-    return bestIndex;
+    if (bestIndex != null && bestFilename != null) {
+      return (index: bestIndex, filename: bestFilename);
+    }
+    return null;
   }
 
   // ─────────────────────────────────────────────────────────────────────────

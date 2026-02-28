@@ -186,16 +186,33 @@ jobs:
       - run: flutter pub get
       - run: flutter build macos --release
 
-      - name: Package
+      - name: Package as DMG
         run: |
           cd build/macos/Build/Products/Release
           mv play_torrio_native.app PlayTorrio.app
+          
+          # Create DMG using hdiutil (built into macOS)
+          mkdir -p dmg_temp
+          cp -R PlayTorrio.app dmg_temp/
+          
+          # Create Applications symlink for drag-and-drop install
+          ln -s /Applications dmg_temp/Applications
+          
+          # Create DMG
+          hdiutil create -volname "PlayTorrio" \
+            -srcfolder dmg_temp \
+            -ov -format UDZO \
+            ../../../../../PlayTorrio-macOS-arm64.dmg
+          
+          # Also create ZIP as backup
           zip -ry ../../../../../PlayTorrio-macOS-arm64.zip PlayTorrio.app
 
       - uses: actions/upload-artifact@v4
         with:
           name: PlayTorrio-macOS-arm64
-          path: PlayTorrio-macOS-arm64.zip
+          path: |
+            PlayTorrio-macOS-arm64.dmg
+            PlayTorrio-macOS-arm64.zip
 
   # ─── Create GitHub Release ───────────────────────────────────────────────
   release:
@@ -215,4 +232,5 @@ jobs:
           files: |
             PlayTorrio-Windows-Installer/*.exe
             PlayTorrio-Linux-x64/*.AppImage
+            PlayTorrio-macOS-arm64/*.dmg
             PlayTorrio-macOS-arm64/*.zip

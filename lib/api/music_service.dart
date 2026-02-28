@@ -234,6 +234,8 @@ class MusicService {
         videoId,
         ytClients: [
           YoutubeApiClient.androidVr,
+          YoutubeApiClient.android,
+          YoutubeApiClient.ios,
         ],
       );
     } catch (e) {

@@ -62,6 +62,7 @@ class PlayerScreen extends StatelessWidget {
         externalSubtitles: externalSubtitles,
         stremioId: stremioId,
         stremioAddonBaseUrl: stremioAddonBaseUrl,
+        providers: providers,
       );
     } else {
       return DesktopPlayerScreen(
@@ -80,6 +81,7 @@ class PlayerScreen extends StatelessWidget {
         externalSubtitles: externalSubtitles,
         stremioId: stremioId,
         stremioAddonBaseUrl: stremioAddonBaseUrl,
+        providers: providers,
       );
     }
   }
