@@ -154,20 +154,47 @@ jobs:
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
 
-      - name: Generate macOS platform files
+      - name: Configure macOS platform files
         run: |
-          flutter create --platforms=macos .
+          # Regenerate platform scaffolding only if macos/ folder is missing
+          if [ ! -d "macos" ]; then
+            flutter create --platforms=macos .
+          fi
 
-          # Network entitlements (TorrServer runs a local TCP server)
+          # ── Entitlements ──
+          # Disable App Sandbox and enable all permissions needed for
+          # TorrServer binary execution + hardened runtime compatibility.
           for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
-            # Use PlistBuddy to safely add/modify boolean values
+            # Disable sandbox (the root cause of TorrServer process-exec denial)
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.app-sandbox bool false" "$f"
+
+            # Hardened runtime: allow JIT (Flutter engine needs this)
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-jit" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-jit bool true" "$f"
+
+            # Hardened runtime: allow loading unsigned helper binaries (TorrServer)
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.disable-library-validation" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$f"
+
+            # Hardened runtime: unsigned executable memory (Go runtime in TorrServer)
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-unsigned-executable-memory" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-unsigned-executable-memory bool true" "$f"
+
+            # Hardened runtime: allow DYLD env vars for child processes
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-dyld-environment-variables" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-dyld-environment-variables bool true" "$f"
+
+            # Network: server (TorrServer listens on localhost:8090)
             /usr/libexec/PlistBuddy -c "Delete :com.apple.security.network.server" "$f" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.server bool true" "$f"
+
+            # Network: client (torrent peer connections + API calls)
             /usr/libexec/PlistBuddy -c "Delete :com.apple.security.network.client" "$f" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.client bool true" "$f"
           done
 
-          # App name
+          # ── App name ──
           /usr/libexec/PlistBuddy -c "Set :CFBundleName PlayTorrio" \
             macos/Runner/Info.plist || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleName string PlayTorrio" \
@@ -179,6 +206,9 @@ jobs:
           mkdir -p assets/bin/macos
           curl -fSL "$TORR_URL/TorrServer-darwin-arm64" -o assets/bin/macos/TorrServer
           chmod +x assets/bin/macos/TorrServer
+          # Strip quarantine & ad-hoc sign so Gatekeeper doesn't block it at runtime
+          xattr -cr assets/bin/macos/TorrServer
+          codesign --sign - --force assets/bin/macos/TorrServer
 
       - name: Enable macOS TorrServer asset
         run: |
@@ -191,6 +221,10 @@ jobs:
         run: |
           cd build/macos/Build/Products/Release
           mv play_torrio_native.app PlayTorrio.app
+
+          # Ad-hoc sign the entire .app bundle (deep) so macOS doesn't kill it on launch.
+          # --deep signs all nested frameworks/binaries inside the bundle.
+          codesign --sign - --force --deep PlayTorrio.app
           
           # Create DMG using hdiutil (built into macOS)
           mkdir -p dmg_temp
@@ -215,10 +249,96 @@ jobs:
             PlayTorrio-macOS-arm64.dmg
             PlayTorrio-macOS-arm64.zip
 
+  # ─── macOS Intel (x86_64 via Rosetta 2) ─────────────────────────────────
+  # GitHub no longer offers Intel macOS runners (macos-13 deprecated).
+  # We cross-compile on the ARM64 runner using Rosetta 2 + x64 Flutter SDK.
+  macos-intel:
+    name:  macOS (Intel)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rosetta 2
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          architecture: x64
+
+      - name: Configure macOS platform files
+        run: |
+          if [ ! -d "macos" ]; then
+            flutter create --platforms=macos .
+          fi
+
+          for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.app-sandbox bool false" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-jit" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-jit bool true" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.disable-library-validation" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-unsigned-executable-memory" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-unsigned-executable-memory bool true" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.cs.allow-dyld-environment-variables" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.allow-dyld-environment-variables bool true" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.network.server" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.server bool true" "$f"
+            /usr/libexec/PlistBuddy -c "Delete :com.apple.security.network.client" "$f" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.network.client bool true" "$f"
+          done
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName PlayTorrio" \
+            macos/Runner/Info.plist || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleName string PlayTorrio" \
+            macos/Runner/Info.plist
+
+      - name: Download TorrServer (Intel)
+        run: |
+          TORR_URL="https://github.com/$TORRSERVER_REPO/releases/latest/download"
+          mkdir -p assets/bin/macos
+          curl -fSL "$TORR_URL/TorrServer-darwin-amd64" -o assets/bin/macos/TorrServer
+          chmod +x assets/bin/macos/TorrServer
+          xattr -cr assets/bin/macos/TorrServer
+          codesign --sign - --force assets/bin/macos/TorrServer
+
+      - name: Enable macOS TorrServer asset
+        run: |
+          sed -i '' 's|#- assets/bin/macos/TorrServer|- assets/bin/macos/TorrServer|' pubspec.yaml
+
+      - run: arch -x86_64 flutter pub get
+      - run: arch -x86_64 flutter build macos --release
+
+      - name: Package as DMG
+        run: |
+          cd build/macos/Build/Products/Release
+          mv play_torrio_native.app PlayTorrio.app
+
+          codesign --sign - --force --deep PlayTorrio.app
+
+          mkdir -p dmg_temp
+          cp -R PlayTorrio.app dmg_temp/
+          ln -s /Applications dmg_temp/Applications
+
+          hdiutil create -volname "PlayTorrio" \
+            -srcfolder dmg_temp \
+            -ov -format UDZO \
+            ../../../../../PlayTorrio-macOS-intel.dmg
+
+          zip -ry ../../../../../PlayTorrio-macOS-intel.zip PlayTorrio.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlayTorrio-macOS-intel
+          path: |
+            PlayTorrio-macOS-intel.dmg
+            PlayTorrio-macOS-intel.zip
+
   # ─── Create GitHub Release ───────────────────────────────────────────────
   release:
     name:  Create Release
-    needs: [windows, macos-arm64]
+    needs: [windows, macos-arm64, macos-intel]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -234,3 +354,5 @@ jobs:
             PlayTorrio-Windows-Installer/*.exe
             PlayTorrio-macOS-arm64/*.dmg
             PlayTorrio-macOS-arm64/*.zip
+            PlayTorrio-macOS-intel/*.dmg
+            PlayTorrio-macOS-intel/*.zip

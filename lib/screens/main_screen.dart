@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'discover_screen.dart';
 import 'search_screen.dart';
+import 'my_list_screen.dart';
 import 'settings_screen.dart';
 import 'music_screen.dart';
 import 'audiobook_screen.dart';
@@ -52,6 +53,7 @@ class _MainScreenState extends State<MainScreen> {
     const HomeScreen(),
     const DiscoverScreen(),
     const SearchScreen(),
+    const MyListScreen(),
     const LiveMatchesScreen(),
     const IptvLoginScreen(),
     const AudiobookScreen(),
@@ -66,9 +68,9 @@ class _MainScreenState extends State<MainScreen> {
   void _onItemTapped(int index) {
     setState(() { 
       _selectedIndex = index;
-      if (index != 8) _pendingComicSearch = null;
-      if (index != 9) _pendingMangaSearch = null;
-      // Indices: 0=Home 1=Discover 2=Search 3=LiveMatches 4=IPTV 5=Audiobooks 6=Books 7=Music 8=Comics 9=Manga 10=Jellyfin 11=Settings
+      if (index != 9) _pendingComicSearch = null;
+      if (index != 10) _pendingMangaSearch = null;
+      // Indices: 0=Home 1=Discover 2=Search 3=MyList 4=LiveMatches 5=IPTV 6=Audiobooks 7=Books 8=Music 9=Comics 10=Manga 11=Jellyfin 12=Settings
     });
     _pageController.jumpToPage(index);
   }
@@ -76,17 +78,17 @@ class _MainScreenState extends State<MainScreen> {
   void searchComics(String query) {
     setState(() {
       _pendingComicSearch = query;
-      _selectedIndex = 8;
+      _selectedIndex = 9;
     });
-    _pageController.jumpToPage(8);
+    _pageController.jumpToPage(9);
   }
 
   void searchManga(String query) {
     setState(() {
       _pendingMangaSearch = query;
-      _selectedIndex = 9;
+      _selectedIndex = 10;
     });
-    _pageController.jumpToPage(9);
+    _pageController.jumpToPage(10);
   }
 
   @override
@@ -152,6 +154,11 @@ class _MainScreenState extends State<MainScreen> {
                               icon: Icon(Icons.search, color: Colors.white54),
                               selectedIcon: Icon(Icons.search, color: Colors.white),
                               label: Text('Search'),
+                            ),
+                            NavigationRailDestination(
+                              icon: Icon(Icons.bookmark_outline, color: Colors.white54),
+                              selectedIcon: Icon(Icons.bookmark, color: Colors.white),
+                              label: Text('My List'),
                             ),
                             NavigationRailDestination(
                               icon: Icon(Icons.sports_soccer_outlined, color: Colors.white54),
@@ -227,6 +234,7 @@ class _MainScreenState extends State<MainScreen> {
       {'icon': Icons.home_outlined, 'active': Icons.home, 'label': 'Home'},
       {'icon': Icons.explore_outlined, 'active': Icons.explore, 'label': 'Discover'},
       {'icon': Icons.search, 'active': Icons.search, 'label': 'Search'},
+      {'icon': Icons.bookmark_outline, 'active': Icons.bookmark, 'label': 'My List'},
       {'icon': Icons.sports_soccer_outlined, 'active': Icons.sports_soccer_rounded, 'label': 'Live Matches'},
       {'icon': Icons.live_tv_outlined, 'active': Icons.live_tv, 'label': 'IPTV'},
       {'icon': Icons.menu_book_outlined, 'active': Icons.menu_book, 'label': 'Audiobooks'},

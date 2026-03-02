@@ -5,6 +5,7 @@ import '../api/tmdb_api.dart';
 import '../api/stremio_service.dart';
 import '../api/settings_service.dart';
 import '../models/movie.dart';
+import '../services/my_list_service.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
@@ -513,6 +514,12 @@ class _SearchCard extends StatelessWidget {
                 ),
               ),
             ),
+
+            // My List add/remove button
+            Positioned(
+              top: 8, left: 8,
+              child: _AddToMyListButton(movie: movie),
+            ),
           ],
         ),
       ),
@@ -616,9 +623,107 @@ class _StremioSearchCard extends StatelessWidget {
                 ),
               ),
             ),
+
+            // My List add/remove button
+            Positioned(
+              bottom: 34, right: 6,
+              child: _AddToMyListStremioButton(item: item),
+            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// My List button helpers for search cards
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AddToMyListButton extends StatelessWidget {
+  final Movie movie;
+  const _AddToMyListButton({required this.movie});
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = MyListService.movieId(movie.id, movie.mediaType);
+    return ValueListenableBuilder<int>(
+      valueListenable: MyListService.changeNotifier,
+      builder: (context, _, __) {
+        final inList = MyListService().contains(uid);
+        return GestureDetector(
+          onTap: () async {
+            final added = await MyListService().toggleMovie(
+              tmdbId: movie.id,
+              imdbId: movie.imdbId,
+              title: movie.title,
+              posterPath: movie.posterPath,
+              mediaType: movie.mediaType,
+              voteAverage: movie.voteAverage,
+              releaseDate: movie.releaseDate,
+            );
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).clearSnackBars();
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                duration: const Duration(seconds: 1),
+              ));
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              inList ? Icons.bookmark : Icons.add,
+              size: 16,
+              color: inList ? AppTheme.primaryColor : Colors.white70,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AddToMyListStremioButton extends StatelessWidget {
+  final Map<String, dynamic> item;
+  const _AddToMyListStremioButton({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = MyListService.stremioItemId(item);
+    return ValueListenableBuilder<int>(
+      valueListenable: MyListService.changeNotifier,
+      builder: (context, _, __) {
+        final inList = MyListService().contains(uid);
+        return GestureDetector(
+          onTap: () async {
+            final added = await MyListService().toggleStremioItem(item);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).clearSnackBars();
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                duration: const Duration(seconds: 1),
+              ));
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              inList ? Icons.bookmark : Icons.add,
+              size: 16,
+              color: inList ? AppTheme.primaryColor : Colors.white70,
+            ),
+          ),
+        );
+      },
     );
   }
 }

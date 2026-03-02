@@ -11,7 +11,9 @@ import '../api/stream_providers.dart';
 import '../api/amri_extractor.dart';
 import '../api/torr_server_service.dart';
 import '../api/debrid_api.dart';
+import '../api/trakt_service.dart';
 import '../services/watch_history_service.dart';
+import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
@@ -60,6 +62,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
 
     // Reload catalogs whenever addons are added/removed in Settings
     SettingsService.addonChangeNotifier.addListener(_onAddonsChanged);
+
+    // Trakt auto-sync (runs once per session, no-op if not logged in)
+    TraktService().fullSync();
   }
 
   void _startHeroTimer() {
@@ -636,6 +641,12 @@ class _MovieCard extends StatelessWidget {
                 ],
               ),
             ),
+
+            // My List add/remove button
+            Positioned(
+              top: 6, left: 6,
+              child: _MyListButton.movie(movie: movie),
+            ),
           ],
         ),
       ),
@@ -856,6 +867,30 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
           debugPrint('[Resume] Using local torrent engine');
           streamUrl = await TorrServerService().streamTorrent(magnetLink, season: season, episode: episode);
         }
+      } else if (method == 'trakt_import') {
+        // Trakt-imported items have no stream source — open details page
+        if (mounted) {
+          final mediaType = item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final movie = Movie(
+            id: tmdbId,
+            title: title,
+            posterPath: posterPath,
+            backdropPath: '',
+            overview: '',
+            releaseDate: '',
+            voteAverage: 0,
+            mediaType: mediaType,
+            genres: [],
+            imdbId: item['imdbId'],
+          );
+          final isStreaming = await SettingsService().isStreamingModeEnabled();
+          Navigator.push(context, MaterialPageRoute(
+            builder: (_) => isStreaming
+                ? StreamingDetailsScreen(movie: movie)
+                : DetailsScreen(movie: movie),
+          ));
+        }
+        return;
       }
 
       if (streamUrl != null && mounted) {
@@ -1359,9 +1394,85 @@ class _StremioCatalogCard extends StatelessWidget {
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
               ),
             ),
+
+            // My List add/remove button
+            Positioned(
+              top: 6, left: 6,
+              child: _MyListButton.stremio(stremioItem: item),
+            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared My List add/remove button used on movie & stremio cards
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MyListButton extends StatelessWidget {
+  final Movie? movie;
+  final Map<String, dynamic>? stremioItem;
+
+  const _MyListButton.movie({required Movie this.movie}) : stremioItem = null;
+  const _MyListButton.stremio({required Map<String, dynamic> this.stremioItem}) : movie = null;
+
+  String get _uniqueId {
+    if (movie != null) return MyListService.movieId(movie!.id, movie!.mediaType);
+    return MyListService.stremioItemId(stremioItem!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: MyListService.changeNotifier,
+      builder: (context, _, __) {
+        final inList = MyListService().contains(_uniqueId);
+        return GestureDetector(
+          onTap: () async {
+            if (movie != null) {
+              final added = await MyListService().toggleMovie(
+                tmdbId: movie!.id,
+                imdbId: movie!.imdbId,
+                title: movie!.title,
+                posterPath: movie!.posterPath,
+                mediaType: movie!.mediaType,
+                voteAverage: movie!.voteAverage,
+                releaseDate: movie!.releaseDate,
+              );
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                  duration: const Duration(seconds: 1),
+                ));
+              }
+            } else if (stremioItem != null) {
+              final added = await MyListService().toggleStremioItem(stremioItem!);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                  duration: const Duration(seconds: 1),
+                ));
+              }
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              inList ? Icons.bookmark : Icons.add,
+              size: 16,
+              color: inList ? AppTheme.primaryColor : Colors.white70,
+            ),
+          ),
+        );
+      },
     );
   }
 }

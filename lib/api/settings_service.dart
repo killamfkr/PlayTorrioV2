@@ -17,6 +17,9 @@ class SettingsService {
   static const String _debridServiceKey = 'debrid_service';
   static const String _stremioAddonsKey = 'stremio_addons';
   
+  // External player setting
+  static const String _externalPlayerKey = 'external_player';
+
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
   static const String _jackettApiKeyKey = 'jackett_api_key';
@@ -87,6 +90,20 @@ class SettingsService {
   Future<void> setDebridService(String service) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_debridServiceKey, service);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // External Player
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<String> getExternalPlayer() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_externalPlayerKey) ?? 'Built-in Player';
+  }
+
+  Future<void> setExternalPlayer(String player) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_externalPlayerKey, player);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

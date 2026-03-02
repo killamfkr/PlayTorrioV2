@@ -16,6 +16,7 @@ import '../../api/subtitle_api.dart';
 import '../../api/torr_server_service.dart';
 import '../../api/stream_extractor.dart';
 import '../../services/watch_history_service.dart';
+import '../../api/trakt_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASSY WIDGET PRIMITIVES  (MPVEx-style frosted black glass)
@@ -497,6 +498,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       _initPlayback();
       _startHideTimer();
       _fetchSubtitles();
+      // Trakt scrobble start
+      if (widget.movie != null) {
+        TraktService().scrobbleStart(
+          tmdbId: widget.movie!.id,
+          mediaType: widget.movie!.mediaType,
+          season: widget.selectedSeason,
+          episode: widget.selectedEpisode,
+          progressPercent: 0,
+        );
+      }
     });
   }
 
@@ -563,6 +574,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       } else if (isStremioDirect) {
         method = 'stremio_direct';
         sourceId = widget.mediaPath;
+      } else if (widget.activeProvider == 'amri') {
+        method = 'amri';
+        sourceId = widget.mediaPath;
       } else if (widget.activeProvider != null) {
         method = 'stream';
         sourceId = widget.activeProvider!;
@@ -591,6 +605,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioType: widget.movie!.mediaType == 'tv' ? 'series' : 'movie',
         mediaType: widget.movie!.mediaType,
+      );
+
+      // Trakt scrobble — fire and forget
+      final progressPercent = dur > 0 ? (pos / dur * 100) : 0.0;
+      TraktService().scrobbleStop(
+        tmdbId: widget.movie!.id,
+        mediaType: widget.movie!.mediaType,
+        season: widget.selectedSeason,
+        episode: widget.selectedEpisode,
+        progressPercent: progressPercent,
       );
     }
   }

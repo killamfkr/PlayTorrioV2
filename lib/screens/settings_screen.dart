@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
+import '../services/external_player_service.dart';
 import '../api/debrid_api.dart';
+import '../api/trakt_service.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../services/app_updater_service.dart';
@@ -25,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final ProwlarrService _prowlarr = ProwlarrService();
   
   bool _isStreamingMode = false;
+  String _externalPlayer = 'Built-in Player';
   String _sortPreference = 'Seeders (High to Low)';
   List<Map<String, dynamic>> _installedAddons = [];
   bool _isInstalling = false;
@@ -50,6 +54,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _rdUserCode;
   Timer? _rdPollTimer;
   
+  // Trakt
+  final TraktService _trakt = TraktService();
+  bool _isTraktLoggedIn = false;
+  String? _traktUserCode;
+  String? _traktVerifyUrl;
+  Timer? _traktPollTimer;
+  bool _isTraktSyncing = false;
+  String? _traktUsername;
+
   bool _isCheckingUpdate = false;
   final AppUpdaterService _updater = AppUpdaterService();
 
@@ -61,6 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final streaming = await _settings.isStreamingModeEnabled();
+    final externalPlayer = await _settings.getExternalPlayer();
     final sort = await _settings.getSortPreference();
     final useDebrid = await _settings.useDebridForStreams();
     final service = await _settings.getDebridService();
@@ -68,6 +82,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
+    // Load Trakt status
+    final traktLoggedIn = await _trakt.isLoggedIn();
+    String? traktUser;
+    if (traktLoggedIn) {
+      final profile = await _trakt.getUserProfile();
+      traktUser = profile?['user']?['username']?.toString() ?? profile?['username']?.toString();
+    }
+
     // Load Jackett settings
     final jackettUrl = await _settings.getJackettBaseUrl();
     final jackettKey = await _settings.getJackettApiKey();
@@ -79,12 +101,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       setState(() {
         _isStreamingMode = streaming;
+        // Ensure saved value is in the current platform's player list
+        final validNames = ExternalPlayerService.playerNames;
+        _externalPlayer = validNames.contains(externalPlayer)
+            ? externalPlayer
+            : 'Built-in Player';
         _sortPreference = sort;
         _installedAddons = addons;
         _useDebrid = useDebrid;
         _debridService = service;
         _torboxController.text = torboxKey ?? '';
         _isRDLoggedIn = rdToken != null;
+        _isTraktLoggedIn = traktLoggedIn;
+        _traktUsername = traktUser;
         
         _jackettUrlController.text = jackettUrl ?? '';
         _jackettApiKeyController.text = jackettKey ?? '';
@@ -133,6 +162,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _prowlarrUrlController.dispose();
     _prowlarrApiKeyController.dispose();
     _rdPollTimer?.cancel();
+    _traktPollTimer?.cancel();
     _jackett.dispose();
     _prowlarr.dispose();
     super.dispose();
@@ -216,6 +246,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         setState(() => _isStreamingMode = val);
                       },
                     ),
+                    _buildFocusableDropdown(
+                      'Video Player',
+                      'Choose which player opens videos. External players must be installed.',
+                      _externalPlayer,
+                      ExternalPlayerService.playerNames,
+                      (val) async {
+                        if (val != null) {
+                          await _settings.setExternalPlayer(val);
+                          setState(() => _externalPlayer = val);
+                        }
+                      },
+                    ),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Search & Sorting'),
                     _buildFocusableDropdown(
@@ -269,12 +311,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     if (_debridService == 'Real-Debrid') _buildRDLogin(),
                     if (_debridService == 'TorBox') _buildTorBoxConfig(),
                     const SizedBox(height: 32),
+                    _buildSectionHeader('Trakt'),
+                    _buildTraktSection(),
+                    const SizedBox(height: 32),
                     _buildSectionHeader('App Updates'),
                     _buildUpdateChecker(),
                     const SizedBox(height: 64),
                     const Center(
                       child: Text(
-                        'PlayTorrio Native v1.0.1',
+                        'PlayTorrio Native v1.0.2',
                         style: TextStyle(color: Colors.white24, fontSize: 12, letterSpacing: 2, fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -747,7 +792,282 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     }
   }
-  
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Trakt
+  // ═══════════════════════════════════════════════════════════════════════
+
+  void _startTraktLogin() async {
+    final data = await _trakt.startDeviceAuth();
+    if (data == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to start Trakt login')),
+        );
+      }
+      return;
+    }
+
+    final userCode = data['user_code'] as String;
+    final verifyUrl = data['verification_url'] as String;
+    final interval = (data['interval'] as int?) ?? 5;
+    final expiresIn = (data['expires_in'] as int?) ?? 600;
+    final deviceCode = data['device_code'] as String;
+
+    setState(() {
+      _traktUserCode = userCode;
+      _traktVerifyUrl = verifyUrl;
+    });
+
+    await Clipboard.setData(ClipboardData(text: userCode));
+
+    // Auto-open the verification URL in the default browser
+    final uri = Uri.parse(verifyUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Code $userCode copied! Opening $verifyUrl...')),
+      );
+    }
+
+    _traktPollTimer?.cancel();
+    _traktPollTimer = Timer.periodic(Duration(seconds: interval), (timer) async {
+      final result = await _trakt.pollForToken(deviceCode);
+      if (result == 'success') {
+        timer.cancel();
+        // Fetch username
+        final profile = await _trakt.getUserProfile();
+        final username = profile?['user']?['username']?.toString() ?? profile?['username']?.toString();
+        if (mounted) {
+          setState(() {
+            _traktUserCode = null;
+            _traktVerifyUrl = null;
+            _isTraktLoggedIn = true;
+            _traktUsername = username;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Logged in to Trakt${username != null ? " as $username" : ""}!')),
+          );
+        }
+        // Auto-sync after login
+        _syncTrakt();
+      } else if (result == 'expired' || result == 'denied') {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            _traktUserCode = null;
+            _traktVerifyUrl = null;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(result == 'denied' ? 'Trakt login denied' : 'Code expired, try again')),
+          );
+        }
+      }
+      // 'pending' → keep polling
+    });
+
+    // Expire timer
+    Future.delayed(Duration(seconds: expiresIn), () {
+      if (_traktPollTimer?.isActive ?? false) {
+        _traktPollTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            _traktUserCode = null;
+            _traktVerifyUrl = null;
+          });
+        }
+      }
+    });
+  }
+
+  void _logoutTrakt() async {
+    await _trakt.logout();
+    if (mounted) {
+      setState(() {
+        _isTraktLoggedIn = false;
+        _traktUsername = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logged out of Trakt')),
+      );
+    }
+  }
+
+  Future<void> _syncTrakt() async {
+    if (_isTraktSyncing) return;
+    setState(() => _isTraktSyncing = true);
+
+    try {
+      final watchlistCount = await _trakt.importWatchlistToMyList();
+      final playbackCount = await _trakt.importPlaybackToWatchHistory();
+      final exportedCount = await _trakt.exportMyListToWatchlist();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Trakt sync done! Imported $watchlistCount to My List, '
+              '$playbackCount to Continue Watching, '
+              'exported $exportedCount to Trakt',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Trakt sync error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isTraktSyncing = false);
+    }
+  }
+
+  Widget _buildTraktSection() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Sync your watchlist and watch history with Trakt.tv',
+            style: TextStyle(fontSize: 13, color: Colors.white54),
+          ),
+          const SizedBox(height: 16),
+
+          if (_isTraktLoggedIn) ...[
+            // ── Logged in ──
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Connected${_traktUsername != null ? " as $_traktUsername" : ""}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        const Text('Trakt.tv', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.sync, color: AppTheme.primaryColor, size: 18),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Sync button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isTraktSyncing ? null : _syncTrakt,
+                icon: _isTraktSyncing
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.sync),
+                label: Text(_isTraktSyncing ? 'Syncing...' : 'Sync Now'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Logout button
+            ElevatedButton.icon(
+              onPressed: _logoutTrakt,
+              icon: const Icon(Icons.logout),
+              label: const Text('Logout from Trakt'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent.withValues(alpha: 0.1),
+                foregroundColor: Colors.redAccent,
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ] else if (_traktUserCode != null) ...[
+            // ── Polling — show code ──
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    'Go to the URL below and enter this code:',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _traktUserCode!,
+                    style: const TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primaryColor,
+                      letterSpacing: 6,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    _traktVerifyUrl ?? 'https://trakt.tv/activate',
+                    style: const TextStyle(color: Colors.white54, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  const LinearProgressIndicator(
+                    color: AppTheme.primaryColor,
+                    backgroundColor: Colors.white10,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Waiting for authorization...',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            // ── Not logged in ──
+            ElevatedButton.icon(
+              onPressed: _startTraktLogin,
+              icon: const Icon(Icons.login),
+              label: const Text('Login with Trakt'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white10,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildUpdateChecker() {
     return Padding(
       padding: const EdgeInsets.all(16),

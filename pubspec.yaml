@@ -2,7 +2,7 @@ name: play_torrio_native
 description: "PlayTorrio - Your cinema universe, Stream anything, anywhere."
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.11.0
@@ -32,6 +32,7 @@ dependencies:
   audio_service: ^0.18.17
   audio_session: ^0.1.25
   url_launcher: ^6.3.1
+  android_intent_plus: ^5.1.0
   flutter_secure_storage: ^9.2.4
   permission_handler: ^11.3.1
   connectivity_plus: ^7.0.0

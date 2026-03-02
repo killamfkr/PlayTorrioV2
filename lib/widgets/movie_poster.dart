@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
+import '../services/my_list_service.dart';
 import '../api/tmdb_api.dart';
 import '../screens/details_screen.dart';
 import '../screens/streaming_details_screen.dart';
@@ -135,6 +136,50 @@ class _MoviePosterState extends State<MoviePoster> {
                         ),
                       ],
                     ),
+                  ),
+                ),
+
+                // My List add/remove button
+                Positioned(
+                  top: 6, left: 6,
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: MyListService.changeNotifier,
+                    builder: (context, _, __) {
+                      final uid = MyListService.movieId(widget.movie.id, widget.movie.mediaType);
+                      final inList = MyListService().contains(uid);
+                      return GestureDetector(
+                        onTap: () async {
+                          final added = await MyListService().toggleMovie(
+                            tmdbId: widget.movie.id,
+                            imdbId: widget.movie.imdbId,
+                            title: widget.movie.title,
+                            posterPath: widget.movie.posterPath,
+                            mediaType: widget.movie.mediaType,
+                            voteAverage: widget.movie.voteAverage,
+                            releaseDate: widget.movie.releaseDate,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).clearSnackBars();
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                              duration: const Duration(seconds: 1),
+                            ));
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            inList ? Icons.bookmark : Icons.add,
+                            size: 16,
+                            color: inList ? Colors.deepPurpleAccent : Colors.white70,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],

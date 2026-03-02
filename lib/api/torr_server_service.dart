@@ -214,6 +214,10 @@ class TorrServerService {
     // Re-use already-extracted binary if it exists.
     if (await extractedFile.exists()) {
       _log('  Binary already extracted, reusing...');
+      // macOS: ensure quarantine is cleared and binary is signed on reuse too.
+      if (Platform.isMacOS) {
+        await _prepareMacOSBinary(extractedPath);
+      }
       _extractedBinaryPath = extractedPath;
       return extractedPath;
     }
@@ -238,6 +242,13 @@ class TorrServerService {
         }
       }
 
+      // macOS: remove quarantine attribute and ad-hoc sign the binary.
+      // Without this, Gatekeeper / hardened runtime blocks execution of
+      // binaries extracted at runtime (they inherit com.apple.quarantine).
+      if (Platform.isMacOS) {
+        await _prepareMacOSBinary(extractedPath);
+      }
+
       _extractedBinaryPath = extractedPath;
       _log('  ✓ Binary ready at: $extractedPath');
       return extractedPath;
@@ -245,6 +256,37 @@ class TorrServerService {
       _log('  ✗ Failed to extract binary: $e');
       _log('  Stack trace: $st');
       rethrow;
+    }
+  }
+
+  /// Removes quarantine attributes and ad-hoc signs a binary on macOS.
+  /// Required because macOS Gatekeeper / hardened runtime blocks execution
+  /// of unsigned binaries that were extracted at runtime.
+  Future<void> _prepareMacOSBinary(String binaryPath) async {
+    _log('  macOS: removing quarantine attribute...');
+    final xattrResult = await Process.run('xattr', ['-cr', binaryPath]);
+    _log('  xattr exit code: ${xattrResult.exitCode}');
+    if (xattrResult.exitCode != 0) {
+      _log('  xattr stderr: ${xattrResult.stderr}');
+    }
+
+    _log('  macOS: ad-hoc code signing the binary...');
+    final codesignResult = await Process.run(
+      'codesign',
+      ['--sign', '-', '--force', '--preserve-metadata=entitlements', binaryPath],
+    );
+    _log('  codesign exit code: ${codesignResult.exitCode}');
+    if (codesignResult.exitCode != 0) {
+      _log('  codesign stderr: ${codesignResult.stderr}');
+      // Try without --preserve-metadata as fallback
+      _log('  macOS: retrying codesign without --preserve-metadata...');
+      final fallbackResult = await Process.run(
+        'codesign', ['--sign', '-', '--force', binaryPath],
+      );
+      _log('  codesign fallback exit code: ${fallbackResult.exitCode}');
+      if (fallbackResult.exitCode != 0) {
+        _log('  codesign fallback stderr: ${fallbackResult.stderr}');
+      }
     }
   }
 

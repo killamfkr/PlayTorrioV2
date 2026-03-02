@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../api/subtitle_api.dart';
 import '../../services/watch_history_service.dart';
+import '../../api/trakt_service.dart';
 import '../../api/torr_server_service.dart';
 import '../../api/stream_extractor.dart';
 import '../../models/movie.dart';
@@ -529,6 +530,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       _initPlayback();
       _startHideTimer();
       _fetchSubtitles();
+      // Trakt scrobble start
+      if (widget.movie != null) {
+        TraktService().scrobbleStart(
+          tmdbId: widget.movie!.id,
+          mediaType: widget.movie!.mediaType,
+          season: widget.selectedSeason,
+          episode: widget.selectedEpisode,
+          progressPercent: 0,
+        );
+      }
     });
   }
 
@@ -601,6 +612,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       } else if (isStremioDirect) {
         method = 'stremio_direct';
         sourceId = widget.mediaPath;
+      } else if (widget.activeProvider == 'amri') {
+        method = 'amri';
+        sourceId = widget.mediaPath;
       } else if (widget.activeProvider != null) {
         method = 'stream';
         sourceId = widget.activeProvider!;
@@ -629,6 +643,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioType: widget.movie!.mediaType == 'tv' ? 'series' : 'movie',
         mediaType: widget.movie!.mediaType,
+      );
+
+      // Trakt scrobble — fire and forget
+      final progressPercent = dur > 0 ? (pos / dur * 100) : 0.0;
+      TraktService().scrobbleStop(
+        tmdbId: widget.movie!.id,
+        mediaType: widget.movie!.mediaType,
+        season: widget.selectedSeason,
+        episode: widget.selectedEpisode,
+        progressPercent: progressPercent,
       );
     }
   }
@@ -965,6 +989,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _showSubtitlesMenu() {
+    String searchQuery = '';
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0E0E0E),
@@ -974,7 +999,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       constraints:
           BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
       builder: (context) {
-        String searchQuery = '';
         return StatefulBuilder(builder: (context, setModalState) {
           final current = _player.state.track.subtitle;
 
