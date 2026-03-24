@@ -28,6 +28,10 @@ class SettingsService {
   static const String _builtinPlayerPictureInPictureKey =
       'builtin_player_picture_in_picture';
 
+  /// Built-in player: auto-load embedded subtitles for movies/shows (not IPTV). Default on.
+  static const String _builtinPlayerEmbeddedSubtitlesKey =
+      'builtin_player_embedded_subtitles_default';
+
   static const String _stremioPreferredStreamAddonKey =
       'stremio_preferred_stream_addon_base_url';
 
@@ -159,6 +163,17 @@ class SettingsService {
   Future<void> setBuiltinPlayerPictureInPicture(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_builtinPlayerPictureInPictureKey, enabled);
+  }
+
+  /// When true (default), embedded subtitles are selected automatically. When false, they stay off until chosen in the player.
+  Future<bool> getBuiltinPlayerEmbeddedSubtitlesDefault() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_builtinPlayerEmbeddedSubtitlesKey) ?? true;
+  }
+
+  Future<void> setBuiltinPlayerEmbeddedSubtitlesDefault(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_builtinPlayerEmbeddedSubtitlesKey, enabled);
   }
 
   /// Empty string = no preference (keep arrival order from addons).

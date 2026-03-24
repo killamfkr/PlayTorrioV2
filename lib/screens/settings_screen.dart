@@ -35,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _externalPlayer = 'Built-in Player';
   bool _builtinBackgroundPlay = false;
   bool _builtinPictureInPicture = false;
+  bool _builtinEmbeddedSubtitles = true;
   String _sortPreference = 'Seeders (High to Low)';
   List<Map<String, dynamic>> _installedAddons = [];
   List<Map<String, dynamic>> _streamCapabilityAddons = [];
@@ -170,6 +171,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ramCacheMb = await _settings.getTorrentRamCacheMb();
     final builtinBg = await _settings.getBuiltinPlayerBackgroundPlay();
     final builtinPip = await _settings.getBuiltinPlayerPictureInPicture();
+    final builtinEmbSubs =
+        await _settings.getBuiltinPlayerEmbeddedSubtitlesDefault();
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -217,6 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _navbarOrder = navOrder;
         _builtinBackgroundPlay = builtinBg;
         _builtinPictureInPicture = builtinPip;
+        _builtinEmbeddedSubtitles = builtinEmbSubs;
       });
     }
   }
@@ -383,6 +387,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         (val) async {
                           await _settings.setBuiltinPlayerPictureInPicture(val);
                           setState(() => _builtinPictureInPicture = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Load embedded subtitles by default',
+                        'Movies, shows, and other built-in playback (not IPTV). Turn off to start with no subtitles; use the subtitle button in the player anytime.',
+                        _builtinEmbeddedSubtitles,
+                        (val) async {
+                          await _settings.setBuiltinPlayerEmbeddedSubtitlesDefault(val);
+                          setState(() => _builtinEmbeddedSubtitles = val);
                         },
                       ),
                     ],

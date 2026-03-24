@@ -489,6 +489,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   double _subtitleDelay = 0.0;
   double _subtitleSize = 24.0;
   final double _subtitleBottomPadding = 24.0;
+  /// User chose Subtitles > Off; keeps mpv [sub-auto] from re-picking a track.
+  bool _subsOffByUserChoice = false;
 
   // ── Next Episode State ────────────────────────────────────────────────────
   bool _isLoadingNextEp = false;
@@ -841,13 +843,22 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _afterOpenRespectCaptionPref() {
-    if (widget.captionsEnabled) return;
+    if (widget.captionsEnabled && !_subsOffByUserChoice) return;
     Future.delayed(const Duration(milliseconds: 120), () {
       if (_disposed || !mounted) return;
       try {
         _player.setSubtitleTrack(SubtitleTrack.no());
       } catch (_) {}
     });
+  }
+
+  Future<void> _applySubAutoToMpv() async {
+    if (_player.platform is! NativePlayer) return;
+    final mpv = _player.platform as NativePlayer;
+    final useAll = widget.captionsEnabled && !_subsOffByUserChoice;
+    try {
+      await mpv.setProperty('sub-auto', useAll ? 'all' : 'no');
+    } catch (_) {}
   }
 
   Future<void> _autoFallbackToNextProvider() async {
@@ -1063,7 +1074,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // Flutter renders subtitles — kill mpv's own OSD overlay.
     await mpv.setProperty('sub-visibility', 'no');
-    await mpv.setProperty('sub-auto', widget.captionsEnabled ? 'all' : 'no');
+    await mpv.setProperty(
+      'sub-auto',
+      (widget.captionsEnabled && !_subsOffByUserChoice) ? 'all' : 'no',
+    );
 
     // ── Video Sync ────────────────────────────────────────────────────────
     // On mobile we use audio sync (not display-resample).
@@ -1390,8 +1404,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         ? const Icon(Icons.check, color: Color(0xFF7C3AED))
                         : null,
                     onTap: () {
+                      setState(() => _subsOffByUserChoice = true);
                       _selectedExternalSubUrl = null;
                       _player.setSubtitleTrack(SubtitleTrack.no());
+                      unawaited(_applySubAutoToMpv());
                       Navigator.pop(context);
                     },
                   ),
@@ -1422,8 +1438,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                                 color: Color(0xFF7C3AED))
                             : null,
                         onTap: () {
+                          setState(() => _subsOffByUserChoice = false);
                           _selectedExternalSubUrl = null;
                           _player.setSubtitleTrack(t);
+                          unawaited(_applySubAutoToMpv());
                           Navigator.pop(context);
                         },
                       );
@@ -1461,11 +1479,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                                 color: Color(0xFF7C3AED))
                             : null,
                         onTap: () {
+                          setState(() => _subsOffByUserChoice = false);
                           _selectedExternalSubUrl = s['url'];
                           _player.setSubtitleTrack(SubtitleTrack.uri(
                               s['url'],
                               title: s['display'],
                               language: s['language']));
+                          unawaited(_applySubAutoToMpv());
                           Navigator.pop(context);
                         },
                       );

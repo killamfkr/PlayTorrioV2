@@ -25,8 +25,9 @@ class PlayerScreen extends StatefulWidget {
   final String? stremioId;
   final String? stremioAddonBaseUrl;
 
-  /// When false, embedded subtitles stay off until the user picks one in the menu.
-  final bool captionsEnabled;
+  /// When null, uses Settings "Load embedded subtitles by default" for built-in player.
+  /// When set (e.g. IPTV), that value is used instead.
+  final bool? captionsEnabled;
 
   const PlayerScreen({
     super.key,
@@ -46,7 +47,7 @@ class PlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
-    this.captionsEnabled = true,
+    this.captionsEnabled,
   });
 
   @override
@@ -58,6 +59,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _externalLaunched = false;
   bool _checkingPlayer = true;
   String _externalPlayerName = '';
+  bool _effectiveCaptionsEnabled = true;
 
   @override
   void initState() {
@@ -79,11 +81,36 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
       _launchExternal();
     } else {
+      final cap = widget.captionsEnabled;
+      final effective = cap ??
+          await SettingsService().getBuiltinPlayerEmbeddedSubtitlesDefault();
+      if (!mounted) return;
       setState(() {
         _useExternalPlayer = false;
         _checkingPlayer = false;
+        _effectiveCaptionsEnabled = effective;
       });
     }
+  }
+
+  void _switchToBuiltIn() {
+    final cap = widget.captionsEnabled;
+    if (cap != null) {
+      setState(() {
+        _useExternalPlayer = false;
+        _externalLaunched = false;
+        _effectiveCaptionsEnabled = cap;
+      });
+      return;
+    }
+    SettingsService().getBuiltinPlayerEmbeddedSubtitlesDefault().then((def) {
+      if (!mounted) return;
+      setState(() {
+        _useExternalPlayer = false;
+        _externalLaunched = false;
+        _effectiveCaptionsEnabled = def;
+      });
+    });
   }
 
   Future<void> _launchExternal() async {
@@ -137,12 +164,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         streamUrl: widget.streamUrl,
         launched: _externalLaunched,
         onRelaunch: _launchExternal,
-        onSwitchBuiltIn: () {
-          setState(() {
-            _useExternalPlayer = false;
-            _externalLaunched = false;
-          });
-        },
+        onSwitchBuiltIn: _switchToBuiltIn,
       );
     }
 
@@ -165,7 +187,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         providers: widget.providers,
-        captionsEnabled: widget.captionsEnabled,
+        captionsEnabled: _effectiveCaptionsEnabled,
       );
     } else {
       return DesktopPlayerScreen(
@@ -185,7 +207,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         providers: widget.providers,
-        captionsEnabled: widget.captionsEnabled,
+        captionsEnabled: _effectiveCaptionsEnabled,
       );
     }
   }

@@ -478,6 +478,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   double _subtitleSize = 44.0;
   // ignore: unused_field
   final double _subtitleBottomPadding = 24.0;
+  bool _subsOffByUserChoice = false;
 
   // ── Next Episode State ────────────────────────────────────────────────────
   bool _isLoadingNextEp = false;
@@ -762,13 +763,22 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   }
 
   void _afterOpenRespectCaptionPref() {
-    if (widget.captionsEnabled) return;
+    if (widget.captionsEnabled && !_subsOffByUserChoice) return;
     Future.delayed(const Duration(milliseconds: 120), () {
       if (_disposed || !mounted) return;
       try {
         _player.setSubtitleTrack(SubtitleTrack.no());
       } catch (_) {}
     });
+  }
+
+  Future<void> _applySubAutoToMpv() async {
+    if (_player.platform is! NativePlayer) return;
+    final mpv = _player.platform as NativePlayer;
+    final useAll = widget.captionsEnabled && !_subsOffByUserChoice;
+    try {
+      await mpv.setProperty('sub-auto', useAll ? 'all' : 'no');
+    } catch (_) {}
   }
 
   Future<void> _autoFallbackToNextProvider() async {
@@ -981,7 +991,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     // Disable built-in OSD / subtitle rendering – Flutter renders them.
     await mpv.setProperty('sub-visibility', 'no');
-    await mpv.setProperty('sub-auto', widget.captionsEnabled ? 'all' : 'no');
+    await mpv.setProperty(
+      'sub-auto',
+      (widget.captionsEnabled && !_subsOffByUserChoice) ? 'all' : 'no',
+    );
 
     // ── Video Sync & Smoothness ───────────────────────────────────────────
     // display-resample: syncs to the monitor's refresh rate, eliminates judder.
@@ -1196,7 +1209,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                             color: Color(0xFF7C3AED))
                         : null,
                     onTap: () {
+                      setState(() => _subsOffByUserChoice = true);
                       _player.setSubtitleTrack(SubtitleTrack.no());
+                      unawaited(_applySubAutoToMpv());
                       Navigator.pop(context);
                     },
                   ),
@@ -1226,7 +1241,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                                 color: Color(0xFF7C3AED))
                             : null,
                         onTap: () {
+                          setState(() => _subsOffByUserChoice = false);
                           _player.setSubtitleTrack(t);
+                          unawaited(_applySubAutoToMpv());
                           Navigator.pop(context);
                         },
                       );
@@ -1264,10 +1281,12 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                                 color: Color(0xFF7C3AED))
                             : null,
                         onTap: () {
+                          setState(() => _subsOffByUserChoice = false);
                           _player.setSubtitleTrack(SubtitleTrack.uri(
                               s['url'],
                               title: s['display'],
                               language: s['language']));
+                          unawaited(_applySubAutoToMpv());
                           Navigator.pop(context);
                         },
                       );
