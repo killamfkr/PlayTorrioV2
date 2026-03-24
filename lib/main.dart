@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,7 @@ import 'utils/webview_cleanup.dart';
 import 'utils/app_theme.dart';
 import 'widgets/update_dialog.dart';
 import 'platform/android_tv_platform.dart';
+import 'platform/android_battery_background.dart';
 import 'network/play_torrio_network.dart';
 
 import 'screens/main_screen.dart';
@@ -36,6 +38,8 @@ void main() async {
     await AndroidTvPlatform.initAndroid();
     if (AndroidTvPlatform.isTv) {
       debugPrint('[Boot] Android TV / leanback device — landscape-first UI');
+    } else {
+      unawaited(AndroidBatteryBackground.requestAfterUpgradeIfNeeded());
     }
   }
 

@@ -16,6 +16,8 @@ import '../utils/app_theme.dart';
 import '../network/play_torrio_network.dart';
 import '../platform/android_tv_platform.dart';
 import '../services/settings_lan_sync_service.dart';
+import '../utils/platform_flags.dart';
+import '../platform/android_battery_background.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -399,6 +401,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         },
                       ),
                     ],
+                    if (!kIsWeb && showAndroidAutoSettingsDisclaimer) ...[
+                      const SizedBox(height: 24),
+                      _buildSectionHeader('Android Auto'),
+                      _buildAndroidAutoDisclaimer(),
+                      const SizedBox(height: 20),
+                      _buildSectionHeader('Background on this device'),
+                      _buildAndroidBatteryBackgroundTile(),
+                    ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('IPTV'),
                     _buildFocusableToggle(
@@ -566,6 +576,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontSize: 13,
           letterSpacing: 2,
         ),
+      ),
+    );
+  }
+
+  Widget _buildAndroidBatteryBackgroundTile() {
+    return FocusableControl(
+      onTap: () async {
+        final ok = await AndroidBatteryBackground.openBatteryOptimizationRequest();
+        if (!mounted) return;
+        if (!ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not open battery settings.')),
+          );
+        }
+      },
+      scaleOnFocus: 1.0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Icon(Icons.battery_charging_full_rounded,
+                color: AppTheme.accentColor, size: 22),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Allow background without battery limits',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Opens Android so PlayTorrio is not put to sleep during background playback or torrents. Use this any time streams stop when the screen is off.',
+                    style: TextStyle(fontSize: 13, color: Colors.white54),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.25)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAndroidAutoDisclaimer() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.directions_car_filled_outlined,
+            color: AppTheme.primaryColor.withValues(alpha: 0.85),
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'PlayTorrio appears in Android Auto for media. When you play music or audiobooks, '
+              'you can control them from your car display. Video is not shown on the Android Auto screen. '
+              'If you watch video on your phone in a vehicle, only do so when parked safely (vehicle in Park or equivalent) and follow local laws. '
+              'Never watch video while driving.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white.withValues(alpha: 0.55),
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

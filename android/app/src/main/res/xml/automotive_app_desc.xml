@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares media use for Android Auto / Android Automotive (browse & playback via MediaBrowserService). -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>
