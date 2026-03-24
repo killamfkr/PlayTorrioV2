@@ -38,6 +38,17 @@ class SettingsService {
   static const String _detailsDefaultStremioFirstKey =
       'details_default_stremio_first';
 
+  /// IPTV: built-in player loads embedded subtitles. Default on.
+  static const String _iptvCaptionsEnabledKey = 'iptv_captions_enabled';
+
+  /// Live TV: compact horizontal channel strip vs full vertical list.
+  static const String _iptvLivePlaylistCompactKey = 'iptv_live_playlist_compact';
+
+  static const String _socks5EnabledKey = 'socks5_enabled';
+  static const String _socks5HostKey = 'socks5_host';
+  static const String _socks5PortKey = 'socks5_port';
+  static const String _socks5UsernameKey = 'socks5_username';
+
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
   static const String _jackettApiKeyKey = 'jackett_api_key';
@@ -169,6 +180,67 @@ class SettingsService {
   Future<void> setStremioAutoPickFirstStream(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_stremioAutoPickFirstStreamKey, enabled);
+  }
+
+  Future<bool> getIptvCaptionsEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_iptvCaptionsEnabledKey) ?? true;
+  }
+
+  Future<void> setIptvCaptionsEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_iptvCaptionsEnabledKey, enabled);
+  }
+
+  Future<bool> getIptvLivePlaylistCompact() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_iptvLivePlaylistCompactKey) ?? false;
+  }
+
+  Future<void> setIptvLivePlaylistCompact(bool compact) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_iptvLivePlaylistCompactKey, compact);
+  }
+
+  Future<bool> getSocks5Enabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_socks5EnabledKey) ?? false;
+  }
+
+  Future<void> setSocks5Enabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_socks5EnabledKey, enabled);
+  }
+
+  Future<String> getSocks5Host() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_socks5HostKey) ?? '';
+  }
+
+  Future<void> setSocks5Host(String host) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_socks5HostKey, host.trim());
+  }
+
+  Future<int> getSocks5Port() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_socks5PortKey) ?? 1080;
+  }
+
+  Future<void> setSocks5Port(int port) async {
+    final prefs = await SharedPreferences.getInstance();
+    final p = port.clamp(1, 65535);
+    await prefs.setInt(_socks5PortKey, p);
+  }
+
+  Future<String> getSocks5Username() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_socks5UsernameKey) ?? '';
+  }
+
+  Future<void> setSocks5Username(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_socks5UsernameKey, username.trim());
   }
 
   /// Default `true`: title details open on Stremio addon streams when addons exist.

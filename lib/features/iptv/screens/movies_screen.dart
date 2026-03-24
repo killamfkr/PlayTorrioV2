@@ -5,6 +5,7 @@ import 'package:shimmer/shimmer.dart';
 import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_movie.dart';
+import '../../../api/settings_service.dart';
 import '../../../screens/player_screen.dart';
 
 class IptvMoviesScreen extends StatefulWidget {
@@ -412,7 +413,7 @@ class _MovieDetailSheetState extends State<_MovieDetailSheet> {
     }
   }
 
-  void _play() {
+  Future<void> _play() async {
     final ext = _vodInfo?.movieData.containerExtension ?? widget.movie.containerExtension;
     final url = widget.iptvService.getMovieUrl(widget.movie.streamId, ext);
 
@@ -422,6 +423,8 @@ class _MovieDetailSheetState extends State<_MovieDetailSheet> {
       'url': s['url']?.toString() ?? '',
     }).where((s) => (s['url'] ?? '').isNotEmpty).toList();
 
+    final captionsOn = await SettingsService().getIptvCaptionsEnabled();
+    if (!mounted) return;
     Navigator.pop(context);
     Navigator.push(
       context,
@@ -430,6 +433,7 @@ class _MovieDetailSheetState extends State<_MovieDetailSheet> {
           streamUrl: url,
           title: widget.movie.name,
           externalSubtitles: externalSubs?.isNotEmpty == true ? externalSubs : null,
+          captionsEnabled: captionsOn,
         ),
       ),
     );

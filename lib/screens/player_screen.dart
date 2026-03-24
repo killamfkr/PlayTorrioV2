@@ -25,6 +25,9 @@ class PlayerScreen extends StatefulWidget {
   final String? stremioId;
   final String? stremioAddonBaseUrl;
 
+  /// When false, embedded subtitles stay off until the user picks one in the menu.
+  final bool captionsEnabled;
+
   const PlayerScreen({
     super.key,
     required this.streamUrl,
@@ -43,6 +46,7 @@ class PlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
+    this.captionsEnabled = true,
   });
 
   @override
@@ -161,6 +165,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         providers: widget.providers,
+        captionsEnabled: widget.captionsEnabled,
       );
     } else {
       return DesktopPlayerScreen(
@@ -180,6 +185,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         providers: widget.providers,
+        captionsEnabled: widget.captionsEnabled,
       );
     }
   }

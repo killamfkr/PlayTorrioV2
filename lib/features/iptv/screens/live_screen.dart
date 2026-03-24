@@ -5,7 +5,9 @@ import 'package:shimmer/shimmer.dart';
 import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_channel.dart';
+import '../../../api/settings_service.dart';
 import '../../../screens/player_screen.dart';
+import 'iptv_epg_guide_screen.dart';
 
 class IptvLiveScreen extends StatefulWidget {
   const IptvLiveScreen({super.key});
@@ -26,11 +28,33 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
   bool _loadingCategories = true;
   bool _loadingChannels = false;
   String? _error;
+  bool _playlistCompact = false;
 
   @override
   void initState() {
     super.initState();
     _loadCategories();
+    _loadPlaylistLayoutPref();
+  }
+
+  Future<void> _loadPlaylistLayoutPref() async {
+    final compact = await SettingsService().getIptvLivePlaylistCompact();
+    if (mounted) setState(() => _playlistCompact = compact);
+  }
+
+  Future<void> _togglePlaylistCompact() async {
+    final next = !_playlistCompact;
+    await SettingsService().setIptvLivePlaylistCompact(next);
+    if (mounted) setState(() => _playlistCompact = next);
+  }
+
+  void _openTvGuide() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IptvEpgGuideScreen(initialCategoryId: _selectedCategory),
+      ),
+    );
   }
 
   Future<void> _loadCategories() async {
@@ -61,14 +85,17 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
     return _channels.where((c) => c.name.toLowerCase().contains(q)).toList();
   }
 
-  void _playChannel(IptvChannel channel) {
+  Future<void> _playChannel(IptvChannel channel) async {
     final url = _iptvService.getLiveStreamUrl(channel);
+    final captionsOn = await SettingsService().getIptvCaptionsEnabled();
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           streamUrl: url,
           title: channel.name,
+          captionsEnabled: captionsOn,
         ),
       ),
     );
@@ -111,10 +138,27 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
                     const SizedBox(width: 8),
                     Text('LIVE TV', style: GoogleFonts.bebasNeue(fontSize: 26, color: Colors.white, letterSpacing: 3)),
                     const Spacer(),
+                    IconButton(
+                      tooltip: 'TV guide',
+                      icon: const Icon(Icons.view_timeline_rounded, color: Color(0xFF7C3AED), size: 26),
+                      onPressed: _openTvGuide,
+                    ),
+                    IconButton(
+                      tooltip: _playlistCompact ? 'Expand playlist' : 'Shrink playlist',
+                      icon: Icon(
+                        _playlistCompact ? Icons.unfold_more_rounded : Icons.view_sidebar_rounded,
+                        color: Colors.white54,
+                        size: 24,
+                      ),
+                      onPressed: _togglePlaylistCompact,
+                    ),
                     if (!_loadingChannels)
-                      Text(
-                        '${_filteredChannels.length} channels',
-                        style: TextStyle(color: Colors.white38, fontSize: 12),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Text(
+                          '${_filteredChannels.length}',
+                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
                       ),
                   ],
                 ),
@@ -158,10 +202,13 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
                     children: [
                       _CategoryArrow(
                         icon: Icons.chevron_left,
-                        onTap: () => _categoryScrollController.animateTo(
-                          (_categoryScrollController.offset - 200).clamp(0.0, _categoryScrollController.position.maxScrollExtent),
-                          duration: const Duration(milliseconds: 300), curve: Curves.easeOut,
-                        ),
+                        onTap: () {
+                          if (!_categoryScrollController.hasClients) return;
+                          _categoryScrollController.animateTo(
+                            (_categoryScrollController.offset - 200).clamp(0.0, _categoryScrollController.position.maxScrollExtent),
+                            duration: const Duration(milliseconds: 300), curve: Curves.easeOut,
+                          );
+                        },
                       ),
                       Expanded(
                         child: ListView.builder(
@@ -202,10 +249,13 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
                       ),
                       _CategoryArrow(
                         icon: Icons.chevron_right,
-                        onTap: () => _categoryScrollController.animateTo(
-                          (_categoryScrollController.offset + 200).clamp(0.0, _categoryScrollController.position.maxScrollExtent),
-                          duration: const Duration(milliseconds: 300), curve: Curves.easeOut,
-                        ),
+                        onTap: () {
+                          if (!_categoryScrollController.hasClients) return;
+                          _categoryScrollController.animateTo(
+                            (_categoryScrollController.offset + 200).clamp(0.0, _categoryScrollController.position.maxScrollExtent),
+                            duration: const Duration(milliseconds: 300), curve: Curves.easeOut,
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -242,6 +292,53 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
             Text('No channels found', style: TextStyle(color: Colors.white.withValues(alpha: 0.3))),
           ],
         ),
+      );
+    }
+    if (_playlistCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 118,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+              itemCount: channels.length,
+              itemBuilder: (context, index) => _CompactChannelStripTile(
+                channel: channels[index],
+                onTap: () => _playChannel(channels[index]),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.swipe_rounded, size: 44, color: Colors.white.withValues(alpha: 0.2)),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Compact playlist',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Scroll the channel strip above to pick a channel, open the TV guide for schedules, or tap the sidebar icon to show the full list again.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13, height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       );
     }
     return ListView.builder(
@@ -392,6 +489,73 @@ class _ChannelTile extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 const Icon(Icons.play_circle_filled, color: Color(0xFF1565C0), size: 28),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactChannelStripTile extends StatelessWidget {
+  final IptvChannel channel;
+  final VoidCallback onTap;
+
+  const _CompactChannelStripTile({required this.channel, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 86,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: Colors.white.withValues(alpha: 0.06),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  height: 52,
+                  width: double.infinity,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: channel.streamIcon != null && channel.streamIcon!.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: channel.streamIcon!,
+                            fit: BoxFit.cover,
+                            placeholder: (_, _) => Container(
+                              color: const Color(0xFF1A1A2E),
+                              child: const Icon(Icons.live_tv, color: Colors.white24, size: 22),
+                            ),
+                            errorWidget: (_, _, _) => Container(
+                              color: const Color(0xFF1A1A2E),
+                              child: const Icon(Icons.live_tv, color: Colors.white24, size: 22),
+                            ),
+                          )
+                        : Container(
+                            color: const Color(0xFF1A1A2E),
+                            child: const Icon(Icons.live_tv, color: Colors.white24, size: 22),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  channel.name,
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w500),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
               ],
             ),
           ),

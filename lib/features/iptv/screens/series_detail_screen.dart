@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/iptv_service.dart';
 import '../models/iptv_series.dart';
+import '../../../api/settings_service.dart';
 import '../../../screens/player_screen.dart';
 
 class SeriesDetailScreen extends StatefulWidget {
@@ -49,13 +50,15 @@ class _SeriesDetailScreenState extends State<SeriesDetailScreen> {
     return _seriesInfo!.episodes[_selectedSeason] ?? [];
   }
 
-  void _playEpisode(IptvEpisode episode) {
+  Future<void> _playEpisode(IptvEpisode episode) async {
     final url = _iptvService.getEpisodeUrl(episode.id, episode.containerExtension);
     final externalSubs = episode.info?.subtitles.map((s) => {
       'lang': s['lang']?.toString() ?? 'Unknown',
       'url': s['url']?.toString() ?? '',
     }).where((s) => (s['url'] ?? '').isNotEmpty).toList();
 
+    final captionsOn = await SettingsService().getIptvCaptionsEnabled();
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -63,6 +66,7 @@ class _SeriesDetailScreenState extends State<SeriesDetailScreen> {
           streamUrl: url,
           title: '${widget.series.name} S${episode.season}E${episode.episodeNum} - ${episode.title}',
           externalSubtitles: externalSubs?.isNotEmpty == true ? externalSubs : null,
+          captionsEnabled: captionsOn,
         ),
       ),
     );

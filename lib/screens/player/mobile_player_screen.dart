@@ -388,6 +388,9 @@ class MobilePlayerScreen extends StatefulWidget {
   final String? stremioAddonBaseUrl;
   final Map<String, dynamic>? providers;
 
+  /// When false, mpv does not auto-select subtitle tracks (IPTV / user preference).
+  final bool captionsEnabled;
+
   const MobilePlayerScreen({
     super.key,
     required this.mediaPath,
@@ -406,6 +409,7 @@ class MobilePlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.providers,
+    this.captionsEnabled = true,
   });
 
   @override
@@ -789,6 +793,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
           await _player.open(Media(source.url, httpHeaders: srcHeaders));
+          _afterOpenRespectCaptionPref();
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
             final ref = source.headers!['Referer'] ?? source.headers!['referer'];
@@ -817,6 +822,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          _afterOpenRespectCaptionPref();
           _player.setVolume(_volume);
           return;
         } catch (e) {
@@ -832,6 +838,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     } finally {
       _isInitPlaybackRunning = false;
     }
+  }
+
+  void _afterOpenRespectCaptionPref() {
+    if (widget.captionsEnabled) return;
+    Future.delayed(const Duration(milliseconds: 120), () {
+      if (_disposed || !mounted) return;
+      try {
+        _player.setSubtitleTrack(SubtitleTrack.no());
+      } catch (_) {}
+    });
   }
 
   Future<void> _autoFallbackToNextProvider() async {
@@ -908,6 +924,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
         await _player.open(Media(streamUrl, httpHeaders: headers));
+        _afterOpenRespectCaptionPref();
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
         
         setState(() {
@@ -1046,7 +1063,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // Flutter renders subtitles — kill mpv's own OSD overlay.
     await mpv.setProperty('sub-visibility', 'no');
-    await mpv.setProperty('sub-auto', 'all');
+    await mpv.setProperty('sub-auto', widget.captionsEnabled ? 'all' : 'no');
 
     // ── Video Sync ────────────────────────────────────────────────────────
     // On mobile we use audio sync (not display-resample).
@@ -1677,6 +1694,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         await _player.open(
                           Media(result.url, httpHeaders: result.headers),
                         );
+                        _afterOpenRespectCaptionPref();
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
                           url: result.url,
@@ -1699,6 +1717,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         await _player.open(
                           Media(source.url, httpHeaders: srcHeaders),
                         );
+                        _afterOpenRespectCaptionPref();
                         setState(() {
                           _currentUrl = source.url;
                           _currentFallbackSourceIndex = 0;
@@ -1851,6 +1870,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         await _player.open(
           Media(streamUrl, httpHeaders: headers),
         );
+        _afterOpenRespectCaptionPref();
         
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);

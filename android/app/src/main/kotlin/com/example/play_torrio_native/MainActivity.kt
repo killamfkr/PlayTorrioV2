@@ -1,6 +1,8 @@
 package com.example.play_torrio_native
 
 import android.app.PictureInPictureParams
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -21,6 +23,25 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "play_torrio/platform",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isAndroidTv" -> {
+                    val pm = packageManager
+                    val leanback = pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                    @Suppress("DEPRECATION")
+                    val television = pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION)
+                    val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
+                    val televisionUi = uiMode == Configuration.UI_MODE_TYPE_TELEVISION
+                    result.success(leanback || television || televisionUi)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "play_torrio/builtin_player",

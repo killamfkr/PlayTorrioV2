@@ -5,6 +5,7 @@ import '../models/iptv_category.dart';
 import '../models/iptv_channel.dart';
 import '../models/iptv_movie.dart';
 import '../models/iptv_series.dart';
+import '../models/iptv_epg_listing.dart';
 
 class XtreamApiService {
   final String serverUrl;
@@ -122,6 +123,26 @@ class XtreamApiService {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Multiple upcoming programmes for the guide (Xtream `get_short_epg`).
+  Future<List<IptvEpgListing>> getShortEpgListings(int streamId, {int limit = 12}) async {
+    try {
+      final r = await _client
+          .get(Uri.parse('$_base&action=get_short_epg&stream_id=$streamId&limit=$limit'))
+          .timeout(const Duration(seconds: 12));
+      if (r.statusCode != 200) return [];
+      final data = jsonDecode(r.body);
+      if (data is! Map<String, dynamic>) return [];
+      final listings = data['epg_listings'] as List?;
+      if (listings == null) return [];
+      return listings
+          .map((e) => IptvEpgListing.fromXtreamJson(Map<String, dynamic>.from(e as Map)))
+          .where((e) => e.title.isNotEmpty || e.start != null)
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   // ─── URL Builders ───────────────────────────────────────────

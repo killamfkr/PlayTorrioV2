@@ -43,6 +43,7 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
+      # One release APK: phones, tablets, and Android TV (LEANBACK_LAUNCHER + leanback feature in manifest).
       - run: flutter build apk --release
 
       - name: Stage APK for artifact

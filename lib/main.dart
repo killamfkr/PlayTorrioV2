@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -20,6 +21,8 @@ import 'services/app_updater_service.dart';
 import 'utils/webview_cleanup.dart';
 import 'utils/app_theme.dart';
 import 'widgets/update_dialog.dart';
+import 'platform/android_tv_platform.dart';
+import 'network/play_torrio_network.dart';
 
 import 'screens/main_screen.dart';
 import 'screens/search_screen.dart';
@@ -28,6 +31,17 @@ import 'screens/discover_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('[Boot] Flutter binding initialized');
+
+  if (Platform.isAndroid) {
+    await AndroidTvPlatform.initAndroid();
+    if (AndroidTvPlatform.isTv) {
+      debugPrint('[Boot] Android TV / leanback device — landscape-first UI');
+    }
+  }
+
+  if (!kIsWeb) {
+    await PlayTorrioNetwork.installHttpOverrides();
+  }
 
   // Configure InAppWebView (Android only — not supported on iOS)
   if (Platform.isAndroid) {
@@ -51,11 +65,18 @@ void main() async {
   
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    if (AndroidTvPlatform.isTv) {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
   }
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -157,6 +178,21 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
       debugShowCheckedModeBanner: false,
       theme: AppTheme.themeData,
       home: const SplashScreen(),
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        if (!AndroidTvPlatform.isTv) return child;
+        final mq = MediaQuery.of(context);
+        final scaled = mq.textScaler.scale(1.0) * 1.1;
+        return MediaQuery(
+          data: mq.copyWith(
+            textScaler: TextScaler.linear(scaled.clamp(0.9, 1.35)),
+          ),
+          child: FocusTraversalGroup(
+            policy: ReadingOrderTraversalPolicy(),
+            child: child,
+          ),
+        );
+      },
     );
   }
 }

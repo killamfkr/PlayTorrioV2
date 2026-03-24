@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,6 +13,9 @@ import '../services/prowlarr_service.dart';
 import '../services/app_updater_service.dart';
 import '../widgets/update_dialog.dart';
 import '../utils/app_theme.dart';
+import '../network/play_torrio_network.dart';
+import '../platform/android_tv_platform.dart';
+import '../services/settings_lan_sync_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -37,13 +41,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _preferredStremioStreamAddon = '';
   bool _stremioAutoPickFirst = false;
   bool _detailsDefaultStremioFirst = true;
+  bool _iptvCaptionsEnabled = true;
+  bool _iptvLivePlaylistCompact = false;
+  bool _socks5Enabled = false;
   bool _isInstalling = false;
   
   bool _useDebrid = false;
   String _debridService = 'None';
   final TextEditingController _addonController = TextEditingController();
   final TextEditingController _torboxController = TextEditingController();
-  
+  final TextEditingController _socksHostController = TextEditingController();
+  final TextEditingController _socksPortController = TextEditingController(text: '1080');
+  final TextEditingController _socksUserController = TextEditingController();
+  final TextEditingController _socksPassController = TextEditingController();
+  bool _socksPassObscure = true;
+
   // Jackett
   final TextEditingController _jackettUrlController = TextEditingController();
   final TextEditingController _jackettApiKeyController = TextEditingController();
@@ -80,10 +92,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _navbarVisible = [];
   List<String> _navbarOrder = [];
 
+  // LAN settings sync (phone hosts → TV pulls)
+  bool _lanHosting = false;
+  String _lanHintIp = '';
+  int _lanShownPort = 0;
+  String _lanShownToken = '';
+  bool _lanBusy = false;
+  final TextEditingController _lanTvHostController = TextEditingController();
+  final TextEditingController _lanTvPortController =
+      TextEditingController(text: '${SettingsLanSyncService.defaultPort}');
+  final TextEditingController _lanTvTokenController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    if (!kIsWeb && SettingsLanSyncService.instance.isHosting) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _syncLanHostingUi());
+    }
+  }
+
+  Future<void> _syncLanHostingUi() async {
+    final svc = SettingsLanSyncService.instance;
+    if (!svc.isHosting || !mounted) return;
+    final ip = await SettingsLanSyncService.guessLanIPv4() ?? '';
+    setState(() {
+      _lanHosting = true;
+      _lanHintIp = ip;
+      _lanShownPort = svc.port;
+      _lanShownToken = svc.token ?? '';
+    });
   }
 
   Future<void> _loadSettings() async {
@@ -102,6 +140,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     final stremioAutoPick = await _settings.getStremioAutoPickFirstStream();
     final detailsStremioDefault = await _settings.getDetailsDefaultStremioFirst();
+    final iptvCaps = await _settings.getIptvCaptionsEnabled();
+    final iptvCompact = await _settings.getIptvLivePlaylistCompact();
+    final socks5On = await _settings.getSocks5Enabled();
+    final socksHost = await _settings.getSocks5Host();
+    final socksPort = await _settings.getSocks5Port();
+    final socksUser = await _settings.getSocks5Username();
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
@@ -148,6 +192,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _preferredStremioStreamAddon = prefStremioAddon;
         _stremioAutoPickFirst = stremioAutoPick;
         _detailsDefaultStremioFirst = detailsStremioDefault;
+        _iptvCaptionsEnabled = iptvCaps;
+        _iptvLivePlaylistCompact = iptvCompact;
+        _socks5Enabled = socks5On;
+        _socksHostController.text = socksHost;
+        _socksPortController.text = socksPort.toString();
+        _socksUserController.text = socksUser;
+        _socksPassController.clear();
         _useDebrid = useDebrid;
         _debridService = service;
         _torboxController.text = torboxKey ?? '';
@@ -206,6 +257,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _addonController.dispose();
     _torboxController.dispose();
+    _socksHostController.dispose();
+    _socksPortController.dispose();
+    _socksUserController.dispose();
+    _socksPassController.dispose();
+    _lanTvHostController.dispose();
+    _lanTvPortController.dispose();
+    _lanTvTokenController.dispose();
+    unawaited(SettingsLanSyncService.instance.stopHosting());
     _jackettUrlController.dispose();
     _jackettApiKeyController.dispose();
     _prowlarrUrlController.dispose();
@@ -326,6 +385,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           setState(() => _builtinPictureInPicture = val);
                         },
                       ),
+                    ],
+                    const SizedBox(height: 32),
+                    _buildSectionHeader('IPTV'),
+                    _buildFocusableToggle(
+                      'Show captions for IPTV',
+                      'Built-in player loads embedded subtitles for live TV and VOD. Turn off to start with subtitles disabled; you can still turn them on from the player.',
+                      _iptvCaptionsEnabled,
+                      (val) async {
+                        await _settings.setIptvCaptionsEnabled(val);
+                        setState(() => _iptvCaptionsEnabled = val);
+                      },
+                    ),
+                    _buildFocusableToggle(
+                      'Compact Live TV playlist',
+                      'Use a horizontal channel strip on Live TV instead of the full list. You can also toggle this from the Live TV screen.',
+                      _iptvLivePlaylistCompact,
+                      (val) async {
+                        await _settings.setIptvLivePlaylistCompact(val);
+                        setState(() => _iptvLivePlaylistCompact = val);
+                      },
+                    ),
+                    const SizedBox(height: 32),
+                    _buildSectionHeader('SOCKS5 proxy'),
+                    _buildSocks5Section(),
+                    if (!kIsWeb) ...[
+                      const SizedBox(height: 32),
+                      if (AndroidTvPlatform.isTv) ...[
+                        _buildSectionHeader('Sync from phone (same Wi-Fi)'),
+                        _buildLanSyncTvSection(),
+                      ] else ...[
+                        _buildSectionHeader('Share settings (local network)'),
+                        _buildLanSyncHostSection(),
+                      ],
                     ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('Search & Sorting'),
@@ -1546,6 +1638,379 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
       }
+    }
+  }
+
+  InputDecoration _socksFieldDecoration(String label, {String? hint}) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+      labelStyle: const TextStyle(color: Colors.white54),
+      filled: true,
+      fillColor: Colors.white.withValues(alpha: 0.06),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+    );
+  }
+
+  Widget _buildSocks5Section() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 12),
+            child: Text(
+              'Routes HTTP/HTTPS requests made through Dart\'s http client over SOCKS5 (e.g. APIs, IPTV playlists, scrapers). '
+              'Torrent streams and some native players may still bypass this. Fully restart the app after saving.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white.withValues(alpha: 0.5),
+                height: 1.35,
+              ),
+            ),
+          ),
+          _buildFocusableToggle(
+            'Use SOCKS5 proxy',
+            'Requires a reachable SOCKS5 server (no auth, or username + password).',
+            _socks5Enabled,
+            (val) async {
+              await _settings.setSocks5Enabled(val);
+              setState(() => _socks5Enabled = val);
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _socksHostController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Proxy host', hint: '127.0.0.1 or hostname'),
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _socksPortController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Port', hint: '1080'),
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _socksUserController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Username (optional)'),
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _socksPassController,
+              obscureText: _socksPassObscure,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Password (optional)', hint: 'Leave blank to keep saved password')
+                  .copyWith(
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _socksPassObscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    color: Colors.white38,
+                  ),
+                  onPressed: () => setState(() => _socksPassObscure = !_socksPassObscure),
+                ),
+              ),
+              textInputAction: TextInputAction.done,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saveSocks5Settings,
+                icon: const Icon(Icons.save_outlined, size: 20),
+                label: const Text('Save SOCKS5 settings'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _saveSocks5Settings() async {
+    final host = _socksHostController.text.trim();
+    final port = int.tryParse(_socksPortController.text.trim());
+    if (_socks5Enabled && host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a proxy host or turn SOCKS5 off.')),
+        );
+      }
+      return;
+    }
+    if (port == null || port < 1 || port > 65535) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a valid port (1–65535).')),
+        );
+      }
+      return;
+    }
+
+    final user = _socksUserController.text.trim();
+    final pass = _socksPassController.text;
+
+    await _settings.setSocks5Enabled(_socks5Enabled);
+    await _settings.setSocks5Host(host);
+    await _settings.setSocks5Port(port);
+    await _settings.setSocks5Username(user);
+
+    if (pass.isNotEmpty) {
+      await PlayTorrioNetwork.savePassword(pass);
+    } else if (user.isEmpty) {
+      await PlayTorrioNetwork.clearPassword();
+    }
+
+    await PlayTorrioNetwork.refreshFromStorage();
+    if (mounted) {
+      _socksPassController.clear();
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('SOCKS5 saved. Restart the app so all connections use the new proxy.'),
+        ),
+      );
+    }
+  }
+
+  Widget _buildLanSyncHostSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 12),
+            child: Text(
+              'On your phone or tablet, open PlayTorrio Settings and tap Start hosting. Keep Settings open. '
+              'On the TV, enter the IP, port, and token from the phone. Data stays on your local network.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white.withValues(alpha: 0.5),
+                height: 1.35,
+              ),
+            ),
+          ),
+          if (_lanHosting) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: SelectableText(
+                'http://${_lanHintIp.isEmpty ? "your-phone-ip" : _lanHintIp}:$_lanShownPort\nToken: $_lanShownToken',
+                style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.45),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Stops after 15 minutes or when you leave Settings.',
+                style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.45)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _lanBusy ? null : _stopLanHosting,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('Stop hosting'),
+                ),
+              ),
+            ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _lanBusy ? null : _startLanHosting,
+                  icon: const Icon(Icons.wifi_tethering, size: 20),
+                  label: const Text('Start hosting for TV sync'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.accentColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _startLanHosting() async {
+    setState(() => _lanBusy = true);
+    try {
+      await SettingsLanSyncService.instance.startHosting();
+      final ip = await SettingsLanSyncService.guessLanIPv4() ?? '';
+      if (!mounted) return;
+      setState(() {
+        _lanHosting = true;
+        _lanHintIp = ip;
+        _lanShownPort = SettingsLanSyncService.instance.port;
+        _lanShownToken = SettingsLanSyncService.instance.token ?? '';
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start hosting: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _lanBusy = false);
+    }
+  }
+
+  Future<void> _stopLanHosting() async {
+    setState(() => _lanBusy = true);
+    await SettingsLanSyncService.instance.stopHosting();
+    if (!mounted) return;
+    setState(() {
+      _lanHosting = false;
+      _lanBusy = false;
+    });
+  }
+
+  Widget _buildLanSyncTvSection() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 12),
+            child: Text(
+              'On your phone, open Settings, tap Start hosting for TV sync, then type the address and token shown there.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white.withValues(alpha: 0.5),
+                height: 1.35,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _lanTvHostController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Phone IP address', hint: '192.168.1.20'),
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _lanTvPortController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Port', hint: '${SettingsLanSyncService.defaultPort}'),
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: TextField(
+              controller: _lanTvTokenController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _socksFieldDecoration('Token', hint: '6-digit code from phone'),
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _lanBusy ? null : _importSettingsFromPhone,
+                icon: _lanBusy
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.download_done_outlined, size: 20),
+                label: Text(_lanBusy ? 'Importing...' : 'Import settings from phone'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _importSettingsFromPhone() async {
+    final host = _lanTvHostController.text.trim();
+    final port = int.tryParse(_lanTvPortController.text.trim());
+    final token = _lanTvTokenController.text.trim();
+    if (host.isEmpty || port == null || token.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter your phone IP, port, and token.')),
+        );
+      }
+      return;
+    }
+    if (port < 1 || port > 65535) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter a valid port (1–65535).')),
+        );
+      }
+      return;
+    }
+    setState(() => _lanBusy = true);
+    try {
+      await SettingsLanSyncService.importFromHost(host: host, port: port, token: token);
+      await _loadSettings();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Settings imported. Fully restart the app so players and network clients reload configuration.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _lanBusy = false);
     }
   }
 

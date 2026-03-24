@@ -9,6 +9,7 @@ import '../models/iptv_movie.dart';
 import '../models/iptv_series.dart';
 import 'xtream_api_service.dart';
 import 'm3u_parser_service.dart';
+import '../models/iptv_epg_listing.dart';
 
 /// Unified IPTV service that wraps both Xtream and M3U modes.
 /// Singleton with session state. Supports multiple saved playlists.
@@ -336,5 +337,12 @@ class IptvService {
 
   String getEpisodeUrl(int episodeId, String containerExtension) {
     return _xtreamApi!.getEpisodeUrl(episodeId, containerExtension);
+  }
+
+  /// Xtream short EPG only; empty for M3U playlists.
+  Future<List<IptvEpgListing>> getShortEpgListings(IptvChannel channel, {int limit = 12}) async {
+    if (!isXtream || _xtreamApi == null) return [];
+    if (channel.streamId <= 0) return [];
+    return _xtreamApi!.getShortEpgListings(channel.streamId, limit: limit);
   }
 }

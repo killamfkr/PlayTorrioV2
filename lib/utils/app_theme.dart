@@ -104,10 +104,18 @@ class _FocusableControlState extends State<FocusableControl> with SingleTickerPr
         _updateState(f || _isHovered);
       },
       onKeyEvent: (node, event) {
-        if (widget.onTap != null && event is KeyDownEvent && 
-           (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.select)) {
-             widget.onTap!(); 
-             return KeyEventResult.handled;
+        if (widget.onTap == null || event is! KeyDownEvent) {
+          return KeyEventResult.ignored;
+        }
+        final k = event.logicalKey;
+        final activate = k == LogicalKeyboardKey.enter ||
+            k == LogicalKeyboardKey.numpadEnter ||
+            k == LogicalKeyboardKey.select ||
+            k == LogicalKeyboardKey.space ||
+            k == LogicalKeyboardKey.gameButtonSelect;
+        if (activate) {
+          widget.onTap!();
+          return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
       },

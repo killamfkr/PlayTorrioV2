@@ -395,6 +395,8 @@ class DesktopPlayerScreen extends StatefulWidget {
   final String? stremioAddonBaseUrl;
   final Map<String, dynamic>? providers;
 
+  final bool captionsEnabled;
+
   const DesktopPlayerScreen({
     super.key,
     required this.mediaPath,
@@ -413,6 +415,7 @@ class DesktopPlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.providers,
+    this.captionsEnabled = true,
   });
 
   @override
@@ -716,6 +719,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           await _player.open(Media(source.url, httpHeaders: source.headers ?? widget.headers));
+          _afterOpenRespectCaptionPref();
           _player.setVolume(_volumeNotifier.value);
           setState(() {
             _currentUrl = source.url;
@@ -739,6 +743,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          _afterOpenRespectCaptionPref();
           _player.setVolume(_volumeNotifier.value);
           return;
         } catch (e) {
@@ -754,6 +759,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     } finally {
       _isInitPlaybackRunning = false;
     }
+  }
+
+  void _afterOpenRespectCaptionPref() {
+    if (widget.captionsEnabled) return;
+    Future.delayed(const Duration(milliseconds: 120), () {
+      if (_disposed || !mounted) return;
+      try {
+        _player.setSubtitleTrack(SubtitleTrack.no());
+      } catch (_) {}
+    });
   }
 
   Future<void> _autoFallbackToNextProvider() async {
@@ -830,6 +845,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
         await _player.open(Media(streamUrl, httpHeaders: headers));
+        _afterOpenRespectCaptionPref();
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
         
         setState(() {
@@ -965,7 +981,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     // Disable built-in OSD / subtitle rendering – Flutter renders them.
     await mpv.setProperty('sub-visibility', 'no');
-    await mpv.setProperty('sub-auto', 'all');
+    await mpv.setProperty('sub-auto', widget.captionsEnabled ? 'all' : 'no');
 
     // ── Video Sync & Smoothness ───────────────────────────────────────────
     // display-resample: syncs to the monitor's refresh rate, eliminates judder.
@@ -1482,6 +1498,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                         await _player.open(
                           Media(result.url, httpHeaders: result.headers),
                         );
+                        _afterOpenRespectCaptionPref();
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
                           url: result.url,
@@ -1499,6 +1516,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                         await _player.open(
                           Media(source.url, httpHeaders: source.headers ?? widget.headers),
                         );
+                        _afterOpenRespectCaptionPref();
                         setState(() {
                           _currentUrl = source.url;
                           _currentFallbackSourceIndex = 0;
@@ -1943,6 +1961,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         await _player.open(
           Media(streamUrl, httpHeaders: headers),
         );
+        _afterOpenRespectCaptionPref();
         
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);

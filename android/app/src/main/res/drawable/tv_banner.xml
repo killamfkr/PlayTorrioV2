@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 16:9 style banner for Android TV launcher (recommended ~320×180 dp). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:endColor="#FF0D1B2A"
+                android:startColor="#FF1A0B2E"
+                android:type="linear" />
+        </shape>
+    </item>
+    <item android:gravity="center">
+        <inset
+            android:insetLeft="24dp"
+            android:insetTop="12dp"
+            android:insetRight="24dp"
+            android:insetBottom="12dp">
+            <bitmap
+                android:gravity="center"
+                android:src="@mipmap/ic_launcher" />
+        </inset>
+    </item>
+</layer-list>
