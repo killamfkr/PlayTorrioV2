@@ -212,6 +212,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
     return magnet.toLowerCase();
   }
 
+  /// `all_stremio` when multiple stream addons, else the sole addon baseUrl.
+  String? _stremioDefaultSourceId(List<Map<String, dynamic>> addons) {
+    if (addons.isEmpty) return null;
+    if (addons.length > 1) return 'all_stremio';
+    return addons.first['baseUrl'] as String?;
+  }
+
   Future<void> _sortResults() async {
     if (_allTorrentResults.isEmpty) return;
     final sorted = await TorrentFilter.sortTorrentsAsync(_allTorrentResults, _sortPreference);
@@ -234,10 +241,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
     List<Map<String, dynamic>> streamAddons = [];
     var preferredAddon = '';
     var autoPickStremio = false;
+    var defaultStremioFirst = true;
     try {
       streamAddons = await _stremio.getAddonsForResource('stream');
       preferredAddon = await _settings.getStremioPreferredStreamAddonBaseUrl();
       autoPickStremio = await _settings.getStremioAutoPickFirstStream();
+      defaultStremioFirst = await _settings.getDetailsDefaultStremioFirst();
     } catch (e) {
       debugPrint('[DetailsScreen] Stremio settings load: $e');
     }
@@ -294,6 +303,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
       final Movie fullDetails;
       if (_movie.mediaType == 'tv') {
+        final stremioSid = _stremioDefaultSourceId(streamAddons);
+        if (defaultStremioFirst && stremioSid != null && mounted) {
+          setState(() => _selectedSourceId = stremioSid);
+        }
         fullDetails = await _api.getTvDetails(widget.movie.id);
         await _fetchSeason(widget.initialSeason ?? 1);
       } else {
@@ -306,6 +319,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _isLoading = false;
           _preferredStremioAddonBaseUrl = preferredAddon;
           _stremioAutoPickEnabled = autoPickStremio;
+          final stremioSid = _stremioDefaultSourceId(streamAddons);
+          if (defaultStremioFirst && stremioSid != null) {
+            _selectedSourceId = stremioSid;
+          }
         });
         _autoSearch();
         _fetchAllStremioStreams();

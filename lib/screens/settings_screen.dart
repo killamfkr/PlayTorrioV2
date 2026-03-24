@@ -36,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _streamCapabilityAddons = [];
   String _preferredStremioStreamAddon = '';
   bool _stremioAutoPickFirst = false;
+  bool _detailsDefaultStremioFirst = true;
   bool _isInstalling = false;
   
   bool _useDebrid = false;
@@ -100,6 +101,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _settings.setStremioPreferredStreamAddonBaseUrl('');
     }
     final stremioAutoPick = await _settings.getStremioAutoPickFirstStream();
+    final detailsStremioDefault = await _settings.getDetailsDefaultStremioFirst();
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
@@ -145,6 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _streamCapabilityAddons = streamCaps;
         _preferredStremioStreamAddon = prefStremioAddon;
         _stremioAutoPickFirst = stremioAutoPick;
+        _detailsDefaultStremioFirst = detailsStremioDefault;
         _useDebrid = useDebrid;
         _debridService = service;
         _torboxController.text = torboxKey ?? '';
@@ -690,6 +693,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          _buildFocusableToggle(
+            'Default to Stremio on title details',
+            'When opening a title in torrent/details mode, show Stremio addon streams first instead of torrent sources. Turn off to default to PlayTorrio torrents.',
+            _detailsDefaultStremioFirst,
+            (val) async {
+              await _settings.setDetailsDefaultStremioFirst(val);
+              setState(() => _detailsDefaultStremioFirst = val);
+            },
+          ),
           if (_streamCapabilityAddons.isNotEmpty)
             FocusableControl(
               onTap: () {},

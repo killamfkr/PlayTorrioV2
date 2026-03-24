@@ -34,6 +34,10 @@ class SettingsService {
   static const String _stremioAutoPickFirstStreamKey =
       'stremio_auto_pick_first_stream';
 
+  /// Details (torrent mode): show Stremio streams first instead of torrent sources.
+  static const String _detailsDefaultStremioFirstKey =
+      'details_default_stremio_first';
+
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
   static const String _jackettApiKeyKey = 'jackett_api_key';
@@ -165,6 +169,17 @@ class SettingsService {
   Future<void> setStremioAutoPickFirstStream(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_stremioAutoPickFirstStreamKey, enabled);
+  }
+
+  /// Default `true`: title details open on Stremio addon streams when addons exist.
+  Future<bool> getDetailsDefaultStremioFirst() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_detailsDefaultStremioFirstKey) ?? true;
+  }
+
+  Future<void> setDetailsDefaultStremioFirst(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_detailsDefaultStremioFirstKey, enabled);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
