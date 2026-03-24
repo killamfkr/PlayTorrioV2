@@ -29,8 +29,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   bool _isStreamingMode = false;
   String _externalPlayer = 'Built-in Player';
+  bool _builtinBackgroundPlay = false;
+  bool _builtinPictureInPicture = false;
   String _sortPreference = 'Seeders (High to Low)';
   List<Map<String, dynamic>> _installedAddons = [];
+  List<Map<String, dynamic>> _streamCapabilityAddons = [];
+  String _preferredStremioStreamAddon = '';
+  bool _stremioAutoPickFirst = false;
   bool _isInstalling = false;
   
   bool _useDebrid = false;
@@ -87,6 +92,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final useDebrid = await _settings.useDebridForStreams();
     final service = await _settings.getDebridService();
     final addons = await _settings.getStremioAddons();
+    final streamCaps = await _stremio.getAddonsForResource('stream');
+    var prefStremioAddon = await _settings.getStremioPreferredStreamAddonBaseUrl();
+    if (prefStremioAddon.isNotEmpty &&
+        !streamCaps.any((a) => a['baseUrl'] == prefStremioAddon)) {
+      prefStremioAddon = '';
+      await _settings.setStremioPreferredStreamAddonBaseUrl('');
+    }
+    final stremioAutoPick = await _settings.getStremioAutoPickFirstStream();
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
@@ -109,6 +122,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load torrent cache settings
     final cacheType = await _settings.getTorrentCacheType();
     final ramCacheMb = await _settings.getTorrentRamCacheMb();
+    final builtinBg = await _settings.getBuiltinPlayerBackgroundPlay();
+    final builtinPip = await _settings.getBuiltinPlayerPictureInPicture();
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -127,6 +142,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : 'Built-in Player';
         _sortPreference = sort;
         _installedAddons = addons;
+        _streamCapabilityAddons = streamCaps;
+        _preferredStremioStreamAddon = prefStremioAddon;
+        _stremioAutoPickFirst = stremioAutoPick;
         _useDebrid = useDebrid;
         _debridService = service;
         _torboxController.text = torboxKey ?? '';
@@ -143,6 +161,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _torrentRamCacheMb = ramCacheMb;
         _navbarVisible = navVisible;
         _navbarOrder = navOrder;
+        _builtinBackgroundPlay = builtinBg;
+        _builtinPictureInPicture = builtinPip;
       });
     }
   }
@@ -171,6 +191,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _removeAddon(String baseUrl) async {
+    if (_preferredStremioStreamAddon == baseUrl) {
+      await _settings.setStremioPreferredStreamAddonBaseUrl('');
+    }
     await _settings.removeStremioAddon(baseUrl);
     await _loadSettings();
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Addon removed')));
@@ -281,6 +304,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                     ),
+                    if (_externalPlayer == 'Built-in Player') ...[
+                      _buildFocusableToggle(
+                        'Continue playback in background',
+                        'Do not pause video when leaving the app (audio may keep playing).',
+                        _builtinBackgroundPlay,
+                        (val) async {
+                          await _settings.setBuiltinPlayerBackgroundPlay(val);
+                          setState(() => _builtinBackgroundPlay = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Picture-in-picture',
+                        'Show a PiP button in the built-in player on Android. iOS is not supported yet.',
+                        _builtinPictureInPicture,
+                        (val) async {
+                          await _settings.setBuiltinPlayerPictureInPicture(val);
+                          setState(() => _builtinPictureInPicture = val);
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('Search & Sorting'),
                     _buildFocusableDropdown(
@@ -302,6 +345,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 32),
                     _buildSectionHeader('Stremio Addons'),
                     _buildAddonInput(),
+                    _buildStremioStreamPreferences(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -388,7 +432,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 64),
                     const Center(
                       child: Text(
-                        'PlayTorrio Native v1.0.6',
+                        'PlayTorrio Native v1.0.7',
                         style: TextStyle(color: Colors.white24, fontSize: 12, letterSpacing: 2, fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -625,6 +669,125 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             )),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStremioStreamPreferences() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'STREAM LINKS (DETAILS PAGE)',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (_streamCapabilityAddons.isNotEmpty)
+            FocusableControl(
+              onTap: () {},
+              scaleOnFocus: 1.0,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Preferred addon (list first)',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'When you use “All” Stremio addons on a title, streams from this addon appear at the top.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white.withValues(alpha: 0.54),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Container(
+                      constraints: const BoxConstraints(maxWidth: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          value: _preferredStremioStreamAddon.isEmpty
+                              ? ''
+                              : _streamCapabilityAddons.any(
+                                      (a) => a['baseUrl'] == _preferredStremioStreamAddon)
+                                  ? _preferredStremioStreamAddon
+                                  : '',
+                          dropdownColor: const Color(0xFF1A0B2E),
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            color: AppTheme.primaryColor,
+                          ),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                          items: [
+                            const DropdownMenuItem(
+                              value: '',
+                              child: Text(
+                                'Default order',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ),
+                            ..._streamCapabilityAddons.map(
+                              (a) => DropdownMenuItem<String>(
+                                value: a['baseUrl'] as String,
+                                child: Text(
+                                  a['name']?.toString() ?? a['baseUrl'].toString(),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          ],
+                          onChanged: (v) async {
+                            if (v == null) return;
+                            await _settings.setStremioPreferredStreamAddonBaseUrl(v);
+                            setState(() => _preferredStremioStreamAddon = v);
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          _buildFocusableToggle(
+            'Auto-pick first stream',
+            'When Stremio streams finish loading, start the first playable link (resume match is preferred if you have progress).',
+            _stremioAutoPickFirst,
+            (val) async {
+              await _settings.setStremioAutoPickFirstStream(val);
+              setState(() => _stremioAutoPickFirst = val);
+            },
+          ),
         ],
       ),
     );

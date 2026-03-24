@@ -469,6 +469,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
   // ── Feature State ────────────────────────────────────────────────────────
   _HwDecMode _hwDecMode = _HwDecMode.autoSafe;
+  bool _builtinBackgroundPlay = false;
   bool _loopEnabled = false;
   double _subtitleDelay = 0.0;
   double _subtitleSize = 44.0;
@@ -494,6 +495,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     
     windowManager.addListener(this);
     WidgetsBinding.instance.addObserver(this);
+
+    SettingsService().getBuiltinPlayerBackgroundPlay().then((v) {
+      if (mounted) setState(() => _builtinBackgroundPlay = v);
+    });
 
     // ── Create player with minimal overhead config ────────────────────────
     _player = Player(
@@ -2108,6 +2113,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                   controls: NoVideoControls,
                   fit: _videoFit,
                   fill: Colors.black,
+                  pauseUponEnteringBackgroundMode: !_builtinBackgroundPlay,
+                  resumeUponEnteringForegroundMode: _builtinBackgroundPlay,
                   subtitleViewConfiguration: SubtitleViewConfiguration(
                     style: TextStyle(
                       height: 1.4,

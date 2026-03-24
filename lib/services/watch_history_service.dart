@@ -80,8 +80,26 @@ class WatchHistoryService {
       final String? jsonString = prefs.getString(_key);
       List<dynamic> list = jsonString != null ? json.decode(jsonString) : [];
 
-      // Remove existing entry with same uniqueId
-      list.removeWhere((item) => item['uniqueId'] == uniqueId);
+      // TV: one Continue Watching row per series — drop other episodes for this tmdbId.
+      if (season != null && episode != null) {
+        list.removeWhere((item) {
+          final dynamic rawId = item['tmdbId'];
+          final int? itemTmdb = rawId is int
+              ? rawId
+              : rawId is num
+                  ? rawId.toInt()
+                  : null;
+          if (itemTmdb != tmdbId) return false;
+          final dynamic s = item['season'];
+          final dynamic e = item['episode'];
+          if (s != null && e != null) return true;
+          final uid = item['uniqueId']?.toString() ?? '';
+          return uid.startsWith('${tmdbId}_S');
+        });
+      } else {
+        // Movies (or non-episode rows): replace same uniqueId only
+        list.removeWhere((item) => item['uniqueId'] == uniqueId);
+      }
 
       // Add new entry to the beginning
       list.insert(0, entry);

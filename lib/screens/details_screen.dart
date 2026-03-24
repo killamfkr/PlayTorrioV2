@@ -66,6 +66,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
   /// Tracks which addon baseUrls have returned results (for dynamic chip display).
   final Set<String> _loadedAddonBaseUrls = {};
 
+  /// Lists streams from this addon first when "All" Stremio addons is selected.
+  String _preferredStremioAddonBaseUrl = '';
+
+  /// Auto-start first playable Stremio stream when loading completes.
+  bool _stremioAutoPickEnabled = false;
+
+  /// Prevents duplicate auto-play for the same title/episode session.
+  String? _stremioAutoplayDoneKey;
+
   int _selectedSeason = 1;
   int _selectedEpisode = 1;
   Map<String, dynamic>? _seasonData;
@@ -222,8 +231,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final bool isCustomId = stremioItem != null &&
         !(stremioItem['id']?.toString().startsWith('tt') ?? true);
 
+    List<Map<String, dynamic>> streamAddons = [];
+    var preferredAddon = '';
+    var autoPickStremio = false;
     try {
-      final streamAddons = await _stremio.getAddonsForResource('stream');
+      streamAddons = await _stremio.getAddonsForResource('stream');
+      preferredAddon = await _settings.getStremioPreferredStreamAddonBaseUrl();
+      autoPickStremio = await _settings.getStremioAutoPickFirstStream();
+    } catch (e) {
+      debugPrint('[DetailsScreen] Stremio settings load: $e');
+    }
+
+    try {
 
       // If this is a custom-ID Stremio item, skip TMDB fetch — we already
       // have all the info we need from the search result.
@@ -258,6 +277,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           setState(() {
             _streamAddons = streamAddons;
             _isLoading = false;
+            _preferredStremioAddonBaseUrl = preferredAddon;
+            _stremioAutoPickEnabled = autoPickStremio;
             // Auto-select the addon that owns this item
             final addonBaseUrl = stremioItem['_addonBaseUrl']?.toString() ?? '';
             if (addonBaseUrl.isNotEmpty) {
@@ -283,6 +304,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _movie = fullDetails;
           _streamAddons = streamAddons;
           _isLoading = false;
+          _preferredStremioAddonBaseUrl = preferredAddon;
+          _stremioAutoPickEnabled = autoPickStremio;
         });
         _autoSearch();
         _fetchAllStremioStreams();
@@ -519,6 +542,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 _errorMessage = 'No streams found from any addon';
               }
             });
+            _scheduleMaybeAutoplayStremio();
           }
         });
       }
@@ -596,6 +620,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 _isStremioFetching = false;
                 if (streams.isEmpty) _errorMessage = 'No streams found';
               });
+              _scheduleMaybeAutoplayStremio();
             }
             return;
           }
@@ -620,6 +645,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _isStremioFetching = false;
           if (streams.isEmpty) _errorMessage = 'No streams found';
         });
+        _scheduleMaybeAutoplayStremio();
       }
     } catch (e) {
       if (mounted) setState(() { _errorMessage = 'Error: $e'; _isStremioFetching = false; _loadedAddonBaseUrls.add(addonBaseUrl); });
@@ -718,7 +744,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (_allCombinedStremioStreams.isEmpty) {
         return _fetchAllStremioStreams();
       }
-      setState(() { _stremioStreams = _allCombinedStremioStreams; _errorMessage = null; });
+      setState(() {
+        _applyStremioFilter();
+        _errorMessage = null;
+      });
+      _scheduleMaybeAutoplayStremio();
       return;
     }
     final addon = _streamAddons.firstWhere(
@@ -732,27 +762,66 @@ class _DetailsScreenState extends State<DetailsScreen> {
       final type = _movie.mediaType == 'tv' ? 'series' : 'movie';
       final streams = await _stremio.getStreams(baseUrl: addon['baseUrl'], type: type, id: stremioId);
       if (mounted) {
+        final tagged = streams.map((s) {
+          if (s is Map<String, dynamic>) {
+            return <String, dynamic>{
+              ...s,
+              '_addonName': addon['name'] ?? 'Unknown',
+              '_addonBaseUrl': addon['baseUrl'],
+            };
+          }
+          return <String, dynamic>{
+            '_addonName': addon['name'],
+            '_addonBaseUrl': addon['baseUrl'],
+          };
+        }).toList();
         setState(() {
-          _stremioStreams = streams;
+          _stremioStreams = tagged;
           if (streams.isEmpty) _errorMessage = 'No streams found in ${addon['name']}';
         });
       }
     } catch (e) {
       if (mounted) setState(() => _errorMessage = 'Error: $e');
     } finally {
-      if (mounted) setState(() => _isStremioFetching = false);
+      if (mounted) {
+        setState(() => _isStremioFetching = false);
+        _scheduleMaybeAutoplayStremio();
+      }
     }
   }
 
   /// Applies the current addon filter chip to _allCombinedStremioStreams.
   void _applyStremioFilter() {
+    final combined = _allCombinedStremioStreams
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
     if (_selectedSourceId == 'all_stremio' || _isTorrentSource) {
-      _stremioStreams = _allCombinedStremioStreams;
+      if (_selectedSourceId == 'all_stremio') {
+        _stremioStreams = _orderedStremioStreamsPreferredFirst(combined);
+      } else {
+        _stremioStreams = combined;
+      }
     } else {
-      _stremioStreams = _allCombinedStremioStreams
+      _stremioStreams = combined
           .where((s) => s['_addonBaseUrl'] == _selectedSourceId)
           .toList();
     }
+  }
+
+  List<Map<String, dynamic>> _orderedStremioStreamsPreferredFirst(
+      List<Map<String, dynamic>> raw) {
+    final pref = _preferredStremioAddonBaseUrl.trim();
+    if (pref.isEmpty) return raw;
+    final first = <Map<String, dynamic>>[];
+    final rest = <Map<String, dynamic>>[];
+    for (final s in raw) {
+      if (s['_addonBaseUrl']?.toString() == pref) {
+        first.add(s);
+      } else {
+        rest.add(s);
+      }
+    }
+    return [...first, ...rest];
   }
 
   Future<void> _searchTvTorrents(String seasonQuery, String episodeQuery) async {
@@ -945,6 +1014,58 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   // ─── play methods ─────────────────────────────────────────────────────────
+
+  String _stremioAutoplayContentKey() =>
+      '${_movie.id}|${_movie.mediaType}|$_selectedSeason|$_selectedEpisode|${widget.stremioItem?['id'] ?? ''}';
+
+  bool _stremioStreamIsDirectPlayable(Map<String, dynamic> s) {
+    final ext = s['externalUrl']?.toString();
+    if (ext != null && ext.isNotEmpty) return false;
+    return s['url'] != null || s['infoHash'] != null;
+  }
+
+  bool _stremioStreamMatchesProgress(Map<String, dynamic> s) {
+    if (_lastProgress == null) return false;
+    if (_lastProgress!['method'] != 'stremio_direct') return false;
+    final hs = _lastProgress!['sourceId'] as String?;
+    if (hs == null) return false;
+    if (s['infoHash'] != null) {
+      final ih = s['infoHash'].toString();
+      return _getHash(hs) == _getHash('magnet:?xt=urn:btih:$ih');
+    }
+    final url = s['url']?.toString();
+    return url != null && url == hs;
+  }
+
+  Map<String, dynamic>? _selectStremioStreamForAutoplay(
+      List<Map<String, dynamic>> list) {
+    for (final s in list) {
+      if (!_stremioStreamIsDirectPlayable(s)) continue;
+      if (_stremioStreamMatchesProgress(s)) return s;
+    }
+    for (final s in list) {
+      if (_stremioStreamIsDirectPlayable(s)) return s;
+    }
+    return null;
+  }
+
+  void _scheduleMaybeAutoplayStremio() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _maybeAutoplayStremioAfterFetch();
+    });
+  }
+
+  void _maybeAutoplayStremioAfterFetch() {
+    if (!mounted || _isTorrentSource || !_stremioAutoPickEnabled) return;
+    final key = _stremioAutoplayContentKey();
+    if (_stremioAutoplayDoneKey == key) return;
+    final list = _stremioStreams.whereType<Map<String, dynamic>>().toList();
+    final pick = _selectStremioStreamForAutoplay(list);
+    if (pick == null) return;
+    _stremioAutoplayDoneKey = key;
+    _playStremioStream(pick);
+  }
 
   void _playStremioStream(Map<String, dynamic> stream, {Duration? startPosition}) async {
     // Handle externalUrl streams (e.g. "More Like This" addon)

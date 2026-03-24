@@ -20,6 +20,20 @@ class SettingsService {
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
+  /// Built-in (media_kit) player: keep playing when app is in background.
+  static const String _builtinPlayerBackgroundPlayKey =
+      'builtin_player_background_play';
+
+  /// Built-in player: show Picture-in-Picture control (Android).
+  static const String _builtinPlayerPictureInPictureKey =
+      'builtin_player_picture_in_picture';
+
+  static const String _stremioPreferredStreamAddonKey =
+      'stremio_preferred_stream_addon_base_url';
+
+  static const String _stremioAutoPickFirstStreamKey =
+      'stremio_auto_pick_first_stream';
+
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
   static const String _jackettApiKeyKey = 'jackett_api_key';
@@ -108,6 +122,49 @@ class SettingsService {
   Future<void> setExternalPlayer(String player) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_externalPlayerKey, player);
+  }
+
+  /// When true, the integrated player does not auto-pause on background.
+  Future<bool> getBuiltinPlayerBackgroundPlay() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_builtinPlayerBackgroundPlayKey) ?? false;
+  }
+
+  Future<void> setBuiltinPlayerBackgroundPlay(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_builtinPlayerBackgroundPlayKey, enabled);
+  }
+
+  /// When true, the mobile player shows PiP (Android). iOS/desktop ignore.
+  Future<bool> getBuiltinPlayerPictureInPicture() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_builtinPlayerPictureInPictureKey) ?? false;
+  }
+
+  Future<void> setBuiltinPlayerPictureInPicture(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_builtinPlayerPictureInPictureKey, enabled);
+  }
+
+  /// Empty string = no preference (keep arrival order from addons).
+  Future<String> getStremioPreferredStreamAddonBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_stremioPreferredStreamAddonKey) ?? '';
+  }
+
+  Future<void> setStremioPreferredStreamAddonBaseUrl(String baseUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_stremioPreferredStreamAddonKey, baseUrl.trim());
+  }
+
+  Future<bool> getStremioAutoPickFirstStream() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_stremioAutoPickFirstStreamKey) ?? false;
+  }
+
+  Future<void> setStremioAutoPickFirstStream(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_stremioAutoPickFirstStreamKey, enabled);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

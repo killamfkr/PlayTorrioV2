@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
 import '../../api/settings_service.dart';
+import '../../services/builtin_player_platform.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
@@ -477,6 +479,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   // ── Feature State ─────────────────────────────────────────────────────────
   _HwDecMode _hwDecMode = _HwDecMode.autoSafe;
+  bool _builtinBackgroundPlay = false;
+  bool _builtinPipEnabled = false;
   bool _loopEnabled = false;
   double _subtitleDelay = 0.0;
   double _subtitleSize = 24.0;
@@ -501,6 +505,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // ── Lifecycle Observer ───────────────────────────────────────────────
     WidgetsBinding.instance.addObserver(this);
+
+    SettingsService().getBuiltinPlayerBackgroundPlay().then((v) {
+      if (mounted) setState(() => _builtinBackgroundPlay = v);
+    });
+    SettingsService().getBuiltinPlayerPictureInPicture().then((v) {
+      if (mounted) setState(() => _builtinPipEnabled = v);
+    });
 
     // ── System UI ────────────────────────────────────────────────────────
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -621,6 +632,19 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     ]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _enterPictureInPicture() async {
+    _startHideTimer();
+    final ok = await BuiltinPlayerPlatform.enterPictureInPicture();
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is not available on this device.'),
+        ),
+      );
+    }
   }
 
   @override
@@ -2186,6 +2210,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 controls: NoVideoControls,
                 fit: _videoFit,
                 fill: Colors.black,
+                pauseUponEnteringBackgroundMode: !_builtinBackgroundPlay,
+                resumeUponEnteringForegroundMode: _builtinBackgroundPlay,
                 subtitleViewConfiguration: SubtitleViewConfiguration(
                   style: TextStyle(
                     height: 1.4,
@@ -2487,6 +2513,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 onPressed: _showSubtitlesMenu,
                 size: btnSize, iconSize: iconSz,
               ),
+              if (_builtinPipEnabled && Platform.isAndroid) ...[
+                SizedBox(width: gap),
+                _GlassIconButton(
+                  icon: Icons.picture_in_picture_alt_outlined,
+                  onPressed: _enterPictureInPicture,
+                  size: btnSize, iconSize: iconSz,
+                ),
+              ],
               // Show sources button for providers with multiple sources
               if ((_currentProvider == 'amri' || _currentProvider == 'webstreamr' || _currentProvider == 'arabic') && _currentSources != null && _currentSources!.isNotEmpty) ...[
                 SizedBox(width: gap),
