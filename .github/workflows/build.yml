@@ -397,8 +397,8 @@ jobs:
           draft: true
           generate_release_notes: true
           target_commitish: ${{ github.sha }}
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('ci-{0}', github.run_number) }}
-          name: ${{ github.ref_type == 'tag' && format('PlayTorrio {0}', github.ref_name) || format('PlayTorrio CI build #{0}', github.run_number) }}
+          tag_name: "${{ github.ref_type == 'tag' && github.ref_name || format('ci-{0}', github.run_number) }}"
+          name: "${{ github.ref_type == 'tag' && format('PlayTorrio {0}', github.ref_name) || format('PlayTorrio CI build {0}', github.run_number) }}"
           files: |
             PlayTorrio-Android-APK/*.apk
             PlayTorrio-Windows-Installer/*.exe
