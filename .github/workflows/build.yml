@@ -380,10 +380,12 @@ jobs:
           path: PlayTorrio-iOS.ipa
 
   # ─── Create GitHub Release ───────────────────────────────────────────────
+  # Runs after all platform jobs succeed — on any push/workflow_dispatch, not only tags.
+  # Version tags (v*) use the tag name; branch builds get a unique ci-<run_number> tag.
   release:
     name:  Create Release
     needs: [android, windows, macos-arm64, macos-intel, ios]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: success()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -394,6 +396,9 @@ jobs:
         with:
           draft: true
           generate_release_notes: true
+          target_commitish: ${{ github.sha }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('ci-{0}', github.run_number) }}
+          name: ${{ github.ref_type == 'tag' && format('PlayTorrio {0}', github.ref_name) || format('PlayTorrio CI build #{0}', github.run_number) }}
           files: |
             PlayTorrio-Android-APK/*.apk
             PlayTorrio-Windows-Installer/*.exe
