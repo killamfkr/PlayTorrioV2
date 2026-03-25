@@ -46,14 +46,19 @@ jobs:
       # Optional: same release key every CI build so users can update in-app (OTA) without uninstalling.
       # Repo secrets: ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore), ANDROID_KEYSTORE_PASSWORD,
       # ANDROID_KEY_PASSWORD, optional ANDROID_KEY_ALIAS (default playtorrio). See README → Android release signing.
+      # secrets.* is not allowed in step-level `if:` on GitHub; skip inside the script when unset.
       - name: Android release signing (optional)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — skipping release signing (debug-signed APK)."
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 -d > android/release.keystore
           python3 << 'SCRIPT'
           import os
           props = {
