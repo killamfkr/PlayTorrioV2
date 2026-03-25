@@ -1,0 +1,16 @@
+# Release signing for PlayTorrio Android APKs.
+#
+# 1. Copy this file to: android/key.properties  (same folder as this example)
+# 2. Create a keystore once (example — adjust CN/org as you like):
+#
+#    keytool -genkeypair -v -keystore android/release.keystore -alias playtorrio \
+#      -keyalg RSA -keysize 2048 -validity 10000
+#
+# 3. Fill in the four values below. Never commit key.properties or *.keystore.
+#
+# storeFile is relative to the android/ directory.
+
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=playtorrio
+storeFile=release.keystore

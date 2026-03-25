@@ -14,6 +14,12 @@ class AudiobookPlayerService {
 
   final Player _player = Player();
   PlayTorrioAudioHandler? _handler;
+
+  /// Exposed for [PlayTorrioAudioHandler] when detaching built-in video notification.
+  Player get mediaPlayer => _player;
+
+  /// Push current audiobook state to the system media notification / Android Auto.
+  void refreshPlaybackStateOnHandler() => _updateSystemState();
   
   // State
   final ValueNotifier<Audiobook?> currentBook = ValueNotifier<Audiobook?>(null);

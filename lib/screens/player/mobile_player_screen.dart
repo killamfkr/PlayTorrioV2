@@ -20,6 +20,7 @@ import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
 import '../../api/settings_service.dart';
+import '../../api/music_player_service.dart';
 import '../../services/builtin_player_platform.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
@@ -485,6 +486,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   _HwDecMode _hwDecMode = _HwDecMode.autoSafe;
   bool _builtinBackgroundPlay = false;
   bool _builtinPipEnabled = false;
+  bool _playbackEverOpened = false;
+  bool _videoNotificationAttached = false;
   bool _loopEnabled = false;
   double _subtitleDelay = 0.0;
   double _subtitleSize = 24.0;
@@ -513,7 +516,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     WidgetsBinding.instance.addObserver(this);
 
     SettingsService().getBuiltinPlayerBackgroundPlay().then((v) {
-      if (mounted) setState(() => _builtinBackgroundPlay = v);
+      if (!mounted) return;
+      setState(() => _builtinBackgroundPlay = v);
+      _syncBuiltInVideoMediaNotification();
     });
     SettingsService().getBuiltinPlayerPictureInPicture().then((v) {
       if (mounted) setState(() => _builtinPipEnabled = v);
@@ -614,6 +619,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _bufferedNotifier.dispose();
     _isPlayingNotifier.dispose();
     _isBufferingNotifier.dispose();
+
+    if (_videoNotificationAttached) {
+      MusicPlayerService().detachBuiltInVideoFromNotifications();
+      _videoNotificationAttached = false;
+    }
 
     _player.dispose();
 
@@ -751,6 +761,29 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  //  MEDIA NOTIFICATION (built-in video + background play)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _syncBuiltInVideoMediaNotification() {
+    if (_disposed || !mounted) return;
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!_playbackEverOpened) return;
+    if (_builtinBackgroundPlay) {
+      MusicPlayerService().attachBuiltInVideoForNotifications(_player, widget.title);
+      _videoNotificationAttached = true;
+    } else if (_videoNotificationAttached) {
+      MusicPlayerService().detachBuiltInVideoFromNotifications();
+      _videoNotificationAttached = false;
+    }
+  }
+
+  void _markPlaybackOpenedAndSyncMediaNotification() {
+    if (_disposed || !mounted) return;
+    _playbackEverOpened = true;
+    _syncBuiltInVideoMediaNotification();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   //  PLAYBACK INITIALIZATION
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -805,6 +838,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           setState(() {
             _currentUrl = source.url;
           });
+          _markPlaybackOpenedAndSyncMediaNotification();
           return; // Opened successfully (might still error out during buffering)
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -826,6 +860,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
           _afterOpenRespectCaptionPref();
           _player.setVolume(_volume);
+          _markPlaybackOpenedAndSyncMediaNotification();
           return;
         } catch (e) {
           retryCount++;
@@ -946,6 +981,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
+        _markPlaybackOpenedAndSyncMediaNotification();
         return true;
       }
     } catch (e) {
@@ -1727,6 +1763,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           _hasError = false;
                           _errorMessage = '';
                         });
+                        _markPlaybackOpenedAndSyncMediaNotification();
                       } else {
                         // Normal direct switch — use per-source headers if available
                         final srcHeaders = source.headers ?? widget.headers;
@@ -1744,6 +1781,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           _hasError = false;
                           _errorMessage = '';
                         });
+                        _markPlaybackOpenedAndSyncMediaNotification();
                       }
                       
                       // Seek to saved position
@@ -1904,6 +1942,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
+        _markPlaybackOpenedAndSyncMediaNotification();
         
         if (mounted) {
           messenger.showSnackBar(SnackBar(

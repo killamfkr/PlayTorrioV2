@@ -281,6 +281,15 @@ class MusicPlayerService {
     playTrack(playlist.value[_currentIndex]);
   }
 
+  /// Built-in video (background playback): lock screen / shade controls via [AudioService].
+  void attachBuiltInVideoForNotifications(Player player, String title) {
+    _handler?.attachBuiltInVideoPlayer(player, title);
+  }
+
+  void detachBuiltInVideoFromNotifications() {
+    _handler?.detachBuiltInVideoPlayer();
+  }
+
   void dispose() {
     _player.dispose();
     _musicService.dispose();

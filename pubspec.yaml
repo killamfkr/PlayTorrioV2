@@ -2,7 +2,7 @@ name: play_torrio_native
 description: "PlayTorrio - Your cinema universe, Stream anything, anywhere."
 publish_to: 'none'
 
-version: 1.0.8+9
+version: 1.0.9+10
 
 environment:
   sdk: ^3.11.0

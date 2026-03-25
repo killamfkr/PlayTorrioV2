@@ -1,9 +1,29 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// android/key.properties (see key.properties.example) or -P PLAYTORRIO_KEYSTORE_* for CI.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+val storeFileFromKeyProps = keystoreProperties.getProperty("storeFile")
+val useKeyPropertiesSigning =
+    keystorePropertiesFile.exists() &&
+        !storeFileFromKeyProps.isNullOrBlank() &&
+        rootProject.file(storeFileFromKeyProps).isFile
+
+val keystorePathGradleProp = project.findProperty("PLAYTORRIO_KEYSTORE_PATH") as String?
+val useGradlePropertySigning =
+    !keystorePathGradleProp.isNullOrBlank() &&
+        file(keystorePathGradleProp).isFile
 
 android {
     namespace = "com.example.play_torrio_native"
@@ -39,23 +59,35 @@ android {
             // Enable minification and resource shrinking
             isMinifyEnabled = true
             isShrinkResources = true
-            
-            // Use release signing config if available, otherwise fall back to debug
-            signingConfig = if (project.hasProperty("PLAYTORRIO_KEYSTORE_PATH")) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+
+            // Same signing key every release → OTA / in-app updates can install over the old APK.
+            signingConfig =
+                signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
-    
-    // Release signing configuration (uses environment variables or gradle.properties)
+
+    // In-place updates: every APK must use the SAME keystore as the build already on the device.
     signingConfigs {
-        create("release") {
-            storeFile = file(project.findProperty("PLAYTORRIO_KEYSTORE_PATH") as String? ?: "release.keystore")
-            storePassword = project.findProperty("PLAYTORRIO_KEYSTORE_PASSWORD") as String? ?: ""
-            keyAlias = project.findProperty("PLAYTORRIO_KEY_ALIAS") as String? ?: "playtorrio"
-            keyPassword = project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
+        if (useKeyPropertiesSigning || useGradlePropertySigning) {
+            create("release") {
+                if (useKeyPropertiesSigning) {
+                    storeFile = rootProject.file(storeFileFromKeyProps!!)
+                    storePassword = keystoreProperties.getProperty("storePassword") ?: ""
+                    keyAlias = keystoreProperties.getProperty("keyAlias") ?: "playtorrio"
+                    keyPassword = keystoreProperties.getProperty("keyPassword") ?: ""
+                } else {
+                    storeFile = file(keystorePathGradleProp!!)
+                    storePassword =
+                        project.findProperty("PLAYTORRIO_KEYSTORE_PASSWORD") as String? ?: ""
+                    keyAlias = project.findProperty("PLAYTORRIO_KEY_ALIAS") as String? ?: "playtorrio"
+                    keyPassword =
+                        project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
+                }
+            }
         }
     }
 }

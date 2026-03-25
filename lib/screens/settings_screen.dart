@@ -623,29 +623,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildAndroidAutoDisclaimer() {
+    final style = TextStyle(
+      fontSize: 13,
+      color: Colors.white.withValues(alpha: 0.55),
+      height: 1.45,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.directions_car_filled_outlined,
-            color: AppTheme.primaryColor.withValues(alpha: 0.85),
-            size: 24,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'PlayTorrio appears in Android Auto for media. When you play music or audiobooks, '
-              'you can control them from your car display. Video is not shown on the Android Auto screen. '
-              'If you watch video on your phone in a vehicle, only do so when parked safely (vehicle in Park or equivalent) and follow local laws. '
-              'Never watch video while driving.',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.white.withValues(alpha: 0.55),
-                height: 1.4,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.directions_car_filled_outlined,
+                color: AppTheme.primaryColor.withValues(alpha: 0.85),
+                size: 24,
               ),
-            ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'PlayTorrio is registered for Android Auto media. When you play music or audiobooks, '
+                  'you can control them from the car display. Video does not appear on the Android Auto screen. '
+                  'If you watch video on your phone in a vehicle, only when parked safely and legally. Never watch video while driving.',
+                  style: style,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                color: Colors.white.withValues(alpha: 0.45),
+                size: 22,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Apps installed outside the Play Store are often hidden from Android Auto until you allow them: '
+                  'open the Android Auto app, find About, then tap Version repeatedly (about 10 times) until developer mode is enabled. '
+                  'Open the menu, choose Developer settings, and turn on the option to show apps from unknown or non-Play sources (wording varies). '
+                  'Reconnect to the car. Open PlayTorrio once and start Music or an audiobook so the media service runs.',
+                  style: style,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.system_update_outlined,
+                color: Colors.white.withValues(alpha: 0.45),
+                size: 22,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Updating without uninstalling only works if the new APK is signed with the same key as the one already installed '
+                  '(same release keystore every time, or both builds debug from the same PC). '
+                  'A release build cannot replace a debug install, and two different release keys cannot replace each other.',
+                  style: style,
+                ),
+              ),
+            ],
           ),
         ],
       ),

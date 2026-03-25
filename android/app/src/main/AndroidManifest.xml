@@ -27,11 +27,6 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:extractNativeLibs="true">
 
-        <!-- Android Auto: expose music/audiobook controls via AudioService (MediaBrowserService). -->
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -94,6 +89,11 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Android Auto: media via AudioService (MediaBrowserService). Keep with other app meta-data. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
     </application>
     <queries>
         <intent>

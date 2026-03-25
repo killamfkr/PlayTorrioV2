@@ -43,6 +43,30 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
+      # Optional: same release key every CI build so users can update in-app (OTA) without uninstalling.
+      # Repo secrets: ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore), ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_PASSWORD, optional ANDROID_KEY_ALIAS (default playtorrio). See README → Android release signing.
+      - name: Android release signing (optional)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
+          python3 << 'SCRIPT'
+          import os
+          props = {
+              "storePassword": os.environ["KEYSTORE_PASSWORD"],
+              "keyPassword": os.environ["KEY_PASSWORD"],
+              "keyAlias": (os.environ.get("KEY_ALIAS") or "").strip() or "playtorrio",
+              "storeFile": "release.keystore",
+          }
+          with open("android/key.properties", "w", encoding="utf-8", newline="\n") as f:
+              for k, v in props.items():
+                  f.write(f"{k}={v}\n")
+          SCRIPT
+
       # One release APK: phones, tablets, and Android TV (LEANBACK_LAUNCHER + leanback feature in manifest).
       - run: flutter build apk --release
 
