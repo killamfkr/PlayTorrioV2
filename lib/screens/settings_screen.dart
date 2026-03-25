@@ -673,26 +673,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.system_update_outlined,
-                color: Colors.white.withValues(alpha: 0.45),
-                size: 22,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Updating without uninstalling only works if the new APK is signed with the same key as the one already installed '
-                  '(same release keystore every time, or both builds debug from the same PC). '
-                  'A release build cannot replace a debug install, and two different release keys cannot replace each other.',
-                  style: style,
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
