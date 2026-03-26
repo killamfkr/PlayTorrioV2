@@ -135,6 +135,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     setState(() => _selectedIndex = index);
   }
 
+  /// Avoids NavigationRail / IndexedStack asserting when nav config changes mid-frame.
+  int get _safeNavIndex {
+    final n = _visibleIds.length;
+    if (n <= 0) return 0;
+    if (_selectedIndex < 0) return 0;
+    if (_selectedIndex >= n) return n - 1;
+    return _selectedIndex;
+  }
+
   void searchComics(String query) {
     final idx = _visibleIds.indexOf('comics');
     if (idx != -1) setState(() => _selectedIndex = idx);
@@ -223,54 +232,53 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
           // Content layer
           Row(
+            // Stretch rail to full height so the scroll view gets bounded constraints.
+            // IntrinsicHeight inside SingleChildScrollView + unbounded height caused
+            // layout crashes on Android TV when moving focus through the rail.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (useNavRail)
-              SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: MediaQuery.of(context).size.height),
-                  child: IntrinsicHeight(
-                    child: NavigationRail(
-                          backgroundColor: Colors.transparent,
-                          selectedIndex: _selectedIndex,
-                          onDestinationSelected: _onItemTapped,
-                          labelType: NavigationRailLabelType.all,
-                          indicatorColor: AppTheme.primaryColor,
-                          selectedLabelTextStyle: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          unselectedLabelTextStyle: const TextStyle(
-                            color: Colors.white54,
-                          ),
-                          leading: const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 24.0),
-                            child: Icon(
-                              Icons.play_circle_fill,
-                              color: AppTheme.primaryColor,
-                              size: 48,
-                            ),
-                          ),
-                          destinations: _visibleIds.map((id) {
-                            final meta = _navMeta[id]!;
-                            return NavigationRailDestination(
-                              icon: Icon(meta['icon'] as IconData, color: Colors.white54),
-                              selectedIcon: Icon(meta['active'] as IconData, color: Colors.white),
-                              label: Text(meta['label'] as String),
-                            );
-                          }).toList(),
-                        ),
+                SingleChildScrollView(
+                  clipBehavior: Clip.hardEdge,
+                  child: NavigationRail(
+                    backgroundColor: Colors.transparent,
+                    selectedIndex: _safeNavIndex,
+                    onDestinationSelected: _onItemTapped,
+                    labelType: NavigationRailLabelType.all,
+                    indicatorColor: AppTheme.primaryColor,
+                    selectedLabelTextStyle: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    unselectedLabelTextStyle: const TextStyle(
+                      color: Colors.white54,
+                    ),
+                    leading: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24.0),
+                      child: Icon(
+                        Icons.play_circle_fill,
+                        color: AppTheme.primaryColor,
+                        size: 48,
                       ),
                     ),
+                    destinations: _visibleIds.map((id) {
+                      final meta = _navMeta[id]!;
+                      return NavigationRailDestination(
+                        icon: Icon(meta['icon'] as IconData, color: Colors.white54),
+                        selectedIcon: Icon(meta['active'] as IconData, color: Colors.white),
+                        label: Text(meta['label'] as String),
+                      );
+                    }).toList(),
                   ),
-                
-            Expanded(
-              child: IndexedStack(
-                index: _selectedIndex,
-                children: _visibleIds.map((id) => _allScreens[id]!).toList(),
+                ),
+              Expanded(
+                child: IndexedStack(
+                  index: _safeNavIndex,
+                  children: _visibleIds.map((id) => _allScreens[id]!).toList(),
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
         ],
       ),
       bottomNavigationBar: useNavRail
@@ -299,7 +307,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 final int idx = entry.key;
                 final String id = entry.value;
                 final meta = _navMeta[id]!;
-                final bool isSelected = _selectedIndex == idx;
+                final bool isSelected = _safeNavIndex == idx;
 
                 return InkWell(
                   onTap: () => _onItemTapped(idx),

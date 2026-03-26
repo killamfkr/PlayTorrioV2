@@ -170,7 +170,9 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      TraktService().refreshFromTraktOnResume();
+      TraktService().refreshFromTraktOnResume().catchError((Object e, StackTrace st) {
+        debugPrint('[Trakt] refreshFromTraktOnResume failed: $e');
+      });
     }
     if (state == AppLifecycleState.detached) {
       PlayerPoolService().dispose();
