@@ -55,7 +55,10 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           REF_NAME: ${{ github.ref }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
+          # GitHub may set an "empty" secret to a lone newline — [ -z ] is false, then base64 fails.
+          # Strip all whitespace so only real base64 content remains.
+          STRIPPED=$(printf '%s' "${KEYSTORE_B64:-}" | tr -d ' \n\r\t')
+          if [ -z "$STRIPPED" ]; then
             case "$REF_NAME" in
               refs/tags/v*)
                 echo "::error::Version tags must use release signing so users can update without reinstalling."
@@ -66,7 +69,16 @@ jobs:
             echo "::notice::No ANDROID_KEYSTORE_BASE64 — APK will be debug-signed. Add secrets for OTA-safe CI builds (README → Android release signing)."
             exit 0
           fi
-          printf '%s' "$KEYSTORE_B64" | base64 -d > android/release.keystore
+          if ! printf '%s' "$STRIPPED" | base64 -d > android/release.keystore 2>/dev/null; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is set but is not valid base64 (or decodes to empty)."
+            echo "::error::Re-create: Linux/macOS: base64 -w0 android/release.keystore | gh secret set ANDROID_KEYSTORE_BASE64"
+            echo "::error::PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes(\"path\\to.keystore\")) — one line, no spaces."
+            exit 1
+          fi
+          if [ ! -s android/release.keystore ]; then
+            echo "::error::Keystore file is empty after base64 decode. Check ANDROID_KEYSTORE_BASE64."
+            exit 1
+          fi
           python3 << 'SCRIPT'
           import os
           props = {
