@@ -1501,16 +1501,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isTraktSyncing = true);
 
     try {
-      final watchlistCount = await _trakt.importWatchlistToMyList();
-      final playbackCount = await _trakt.importPlaybackToWatchHistory();
+      final pulled = await _trakt.fullSync(force: true);
       final exportedCount = await _trakt.exportMyListToWatchlist();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Trakt sync done! Imported $watchlistCount to My List, '
-              '$playbackCount to Continue Watching, '
+              'Trakt sync done! Imported ${pulled.watchlist} to My List, '
+              '${pulled.playback} to Continue Watching, '
               'exported $exportedCount to Trakt',
             ),
             duration: const Duration(seconds: 4),

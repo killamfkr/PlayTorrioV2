@@ -16,6 +16,7 @@ import 'api/torrent_stream_service.dart';
 import 'api/tmdb_api.dart';
 import 'api/local_server_service.dart';
 import 'api/music_player_service.dart';
+import 'api/trakt_service.dart';
 import 'models/movie.dart';
 import 'services/player_pool_service.dart';
 import 'services/app_updater_service.dart';
@@ -168,6 +169,9 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      TraktService().refreshFromTraktOnResume();
+    }
     if (state == AppLifecycleState.detached) {
       PlayerPoolService().dispose();
       TorrentStreamService().cleanup();

@@ -37,6 +37,9 @@ class TraktService {
   // Track whether we've already done an initial sync this session
   bool _initialSyncDone = false;
 
+  /// Throttles background pulls (e.g. app resume) so we do not hammer the API.
+  static DateTime? _lastResumePull;
+
   // ═══════════════════════════════════════════════════════════════════════
   //  A U T H   —   D E V I C E   C O D E   F L O W
   // ═══════════════════════════════════════════════════════════════════════
@@ -493,7 +496,10 @@ class TraktService {
       // Movies in progress
       final moviesResp = await http.get(
         Uri.parse('$_baseUrl/sync/playback/movies'),
-        headers: _authHeaders(token),
+        headers: {
+          ..._authHeaders(token),
+          'Cache-Control': 'no-cache',
+        },
       );
       if (moviesResp.statusCode == 200) {
         final List items = json.decode(moviesResp.body);
@@ -505,7 +511,10 @@ class TraktService {
       // Episodes in progress
       final episodesResp = await http.get(
         Uri.parse('$_baseUrl/sync/playback/episodes'),
-        headers: _authHeaders(token),
+        headers: {
+          ..._authHeaders(token),
+          'Cache-Control': 'no-cache',
+        },
       );
       if (episodesResp.statusCode == 200) {
         final List items = json.decode(episodesResp.body);
@@ -575,35 +584,71 @@ class TraktService {
           continue;
         }
 
-        // Fetch poster from TMDB
-        posterPath = await _fetchTmdbPoster(tmdbId, mediaType);
-
-        // Check if already in local history
         final existing = await WatchHistoryService().getProgress(
           tmdbId,
           season: season,
           episode: episode,
         );
-        if (existing != null) continue;
 
-        // Estimate position/duration from progress percentage.
-        // We don't have real duration from Trakt playback, use 100min default.
-        // The actual position matters less — what matters is having the entry.
-        const estimatedDurationMs = 6000000; // 100 minutes
-        final estimatedPositionMs = (progress / 100 * estimatedDurationMs).round();
+        DateTime? traktPausedAt;
+        final pausedRaw = item['paused_at']?.toString();
+        if (pausedRaw != null) {
+          traktPausedAt = DateTime.tryParse(pausedRaw);
+        }
+
+        if (existing != null) {
+          final rawUpdated = existing['updatedAt'];
+          final localUpdated = rawUpdated is int
+              ? DateTime.fromMillisecondsSinceEpoch(rawUpdated)
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          if (traktPausedAt != null && localUpdated.isAfter(traktPausedAt)) {
+            debugPrint(
+              '[Trakt] Keeping local progress (updated after Trakt paused_at) for $uniqueId',
+            );
+            continue;
+          }
+        }
+
+        // Fetch poster from TMDB (only when we will write)
+        posterPath = await _fetchTmdbPoster(tmdbId, mediaType);
+        final posterFinal = posterPath.isNotEmpty
+            ? posterPath
+            : (existing?['posterPath']?.toString() ?? '');
+
+        const estimatedDurationMs = 6000000; // 100 minutes fallback
+        final baseDuration = (existing?['duration'] as num?)?.toInt() ??
+            estimatedDurationMs;
+        final safeDuration = baseDuration > 0 ? baseDuration : estimatedDurationMs;
+        final estimatedPositionMs =
+            (progress / 100 * safeDuration).round().clamp(0, safeDuration);
+
+        final localMethod = existing?['method']?.toString();
+        final localSource = existing?['sourceId']?.toString();
+        final useLocalSource = localMethod != null &&
+            localMethod.isNotEmpty &&
+            localMethod != 'trakt_import' &&
+            localSource != null &&
+            localSource.isNotEmpty &&
+            localSource != 'trakt';
 
         await WatchHistoryService().saveProgress(
           tmdbId: tmdbId,
-          imdbId: imdbId,
+          imdbId: imdbId ?? existing?['imdbId']?.toString(),
           title: title,
-          posterPath: posterPath,
-          method: 'trakt_import',
-          sourceId: 'trakt',
+          posterPath: posterFinal,
+          method: useLocalSource ? localMethod : 'trakt_import',
+          sourceId: useLocalSource ? localSource : 'trakt',
           position: estimatedPositionMs,
-          duration: estimatedDurationMs,
+          duration: safeDuration,
           season: season,
           episode: episode,
-          episodeTitle: episodeTitle,
+          episodeTitle: episodeTitle ?? existing?['episodeTitle']?.toString(),
+          magnetLink: existing?['magnetLink'] as String?,
+          fileIndex: existing?['fileIndex'] as int?,
+          streamUrl: existing?['streamUrl'] as String?,
+          stremioId: existing?['stremioId'] as String?,
+          stremioAddonBaseUrl: existing?['stremioAddonBaseUrl'] as String?,
+          stremioType: existing?['stremioType'] as String?,
           mediaType: mediaType,
         );
         imported++;
@@ -622,16 +667,38 @@ class TraktService {
 
   /// Run a full import from Trakt to local data.
   /// Safe to call multiple times — only runs once per session unless forced.
-  Future<void> fullSync({bool force = false}) async {
-    if (!force && _initialSyncDone) return;
+  /// Returns imported counts (zeros when skipped or not logged in).
+  Future<({int watchlist, int playback})> fullSync({bool force = false}) async {
+    if (!force && _initialSyncDone) {
+      return (watchlist: 0, playback: 0);
+    }
     final loggedIn = await isLoggedIn();
-    if (!loggedIn) return;
+    if (!loggedIn) {
+      return (watchlist: 0, playback: 0);
+    }
 
     debugPrint('[Trakt] Starting full sync...');
     final watchlistCount = await importWatchlistToMyList();
     final playbackCount = await importPlaybackToWatchHistory();
     _initialSyncDone = true;
     debugPrint('[Trakt] Full sync done — watchlist: $watchlistCount, playback: $playbackCount');
+    return (watchlist: watchlistCount, playback: playbackCount);
+  }
+
+  /// Pull watchlist + playback from Trakt when the app returns to foreground.
+  /// Throttled to avoid excessive API use.
+  Future<void> refreshFromTraktOnResume({
+    Duration minInterval = const Duration(minutes: 3),
+  }) async {
+    final loggedIn = await isLoggedIn();
+    if (!loggedIn) return;
+    final now = DateTime.now();
+    if (_lastResumePull != null && now.difference(_lastResumePull!) < minInterval) {
+      return;
+    }
+    _lastResumePull = now;
+    debugPrint('[Trakt] Resume pull (throttled)...');
+    await fullSync(force: true);
   }
 
   /// Push the entire local My List to Trakt watchlist (bulk export).
