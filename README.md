@@ -140,7 +140,7 @@ Required secret names (exact spelling):
 
 | Secret | Value |
 |--------|--------|
-| `ANDROID_KEYSTORE_BASE64` | Base64 of your entire `.keystore` or `.jks` file (one line, no line breaks). |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of your entire `.keystore` or `.jks` file (one line, no line breaks). Prefer setting via `gh secret set` or a file redirect — pasting into the GitHub website can add invisible characters and break CI. |
 | `ANDROID_KEYSTORE_PASSWORD` | Keystore password (`storePassword`). |
 | `ANDROID_KEY_PASSWORD` | Key password (`keyPassword`). |
 | `ANDROID_KEY_ALIAS` | *(Optional.)* Key alias; if omitted, CI defaults to **`playtorrio`** (must match the alias you used in `keytool`). |
@@ -155,8 +155,10 @@ Encode the keystore file:
 **GitHub CLI** (logged in: `gh auth login`), from the repo root:
 
 ```bash
-# Linux / macOS — pipe file as base64
+# Linux / macOS — pipe file as base64 (most reliable)
 base64 -w0 android/release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+# Or from a file (avoids clipboard encoding issues):
+base64 -w0 android/release.keystore > keystore.b64.txt && gh secret set ANDROID_KEYSTORE_BASE64 < keystore.b64.txt
 gh secret set ANDROID_KEYSTORE_PASSWORD
 gh secret set ANDROID_KEY_PASSWORD
 gh secret set ANDROID_KEY_ALIAS   # optional; type playtorrio or your alias when prompted
