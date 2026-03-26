@@ -47,6 +47,12 @@ class MusicPlayerService {
   final Set<String> _shufflePlayedIds = {};
   final Random _random = Random();
 
+  /// Prefetched YouTube audio URL for a track (URLs expire; keep TTL short).
+  static const Duration _streamCacheTtl = Duration(minutes: 45);
+  final Map<String, _CachedStreamUrl> _streamUrlCache = {};
+  /// Avoid hammering prefetch when position updates fire often.
+  String? _earlyPrefetchIssuedForTrackId;
+
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
@@ -85,7 +91,7 @@ class MusicPlayerService {
       }
     });
     _player.stream.buffering.listen((b) => isBuffering.value = b);
-    _player.stream.position.listen((p) => position.value = p);
+    _player.stream.position.listen(_onPositionUpdate);
     _player.stream.duration.listen((d) => duration.value = d);
     _player.stream.playlistMode.listen((m) => loopMode.value = m);
 
@@ -96,16 +102,32 @@ class MusicPlayerService {
     });
   }
 
+  void _onPositionUpdate(Duration p) {
+    position.value = p;
+    if (_isLoadingTrack || isShuffleEnabled.value) return;
+    if (playlist.value.isEmpty || _currentIndex < 0) return;
+    final d = _player.state.duration;
+    if (d <= Duration.zero) return;
+    final left = d - p;
+    if (left > const Duration(seconds: 14) || left <= Duration.zero) return;
+    final cur = currentTrack.value;
+    if (cur == null) return;
+    if (_earlyPrefetchIssuedForTrackId == cur.id) return;
+    _earlyPrefetchIssuedForTrackId = cur.id;
+    _prefetchNext();
+  }
+
   Future<void> playTrack(MusicTrack track, {List<MusicTrack>? newPlaylist}) async {
     debugPrint('MusicPlayerService: Preparing to play: ${track.title} by ${track.artist}');
     
     _isLoadingTrack = true;
+    _earlyPrefetchIssuedForTrackId = null;
     try {
       // 0. Set session active immediately
       final session = await AudioSession.instance;
       await session.setActive(true);
 
-      await _player.stop();
+      // [open] replaces the current source — skipping [stop] avoids a long audible gap.
 
       if (newPlaylist != null) {
         playlist.value = newPlaylist;
@@ -152,23 +174,34 @@ class MusicPlayerService {
         }
       }
 
-      // 2. YouTube Match
+      // 2. Cached stream URL (from prefetch of upcoming track)
+      final cached = _takeCachedStreamUrl(track.id);
+      if (cached != null) {
+        debugPrint('MusicPlayerService: Playing from prefetch cache');
+        await _player.open(Media(cached));
+        _prefetchNext();
+        return;
+      }
+
+      // 3. YouTube Match + manifest
       final videoId = await _musicService.getYoutubeVideoId(track.title, track.artist);
       if (videoId == null) {
         debugPrint('MusicPlayerService: No YouTube match');
         return;
       }
 
-      // 3. Manifest
       final manifest = await _musicService.getYoutubeManifest(videoId);
       if (manifest == null) {
         debugPrint('MusicPlayerService: Failed manifest');
         return;
       }
 
-      // SELECT HIGHEST BITRATE MANUALLY
       final audioStreams = manifest.audioOnly.toList();
       audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if (audioStreams.isEmpty) {
+        debugPrint('MusicPlayerService: No audio-only streams');
+        return;
+      }
       final streamUri = audioStreams.first.url;
 
       await _player.open(Media(streamUri.toString()));
@@ -177,10 +210,15 @@ class MusicPlayerService {
     } catch (e) {
       debugPrint('MusicPlayerService: Error playing track: $e');
     } finally {
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        _isLoadingTrack = false;
-      });
+      _isLoadingTrack = false;
     }
+  }
+
+  String? _takeCachedStreamUrl(String trackId) {
+    final entry = _streamUrlCache.remove(trackId);
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.at) > _streamCacheTtl) return null;
+    return entry.url;
   }
 
   void _fetchLyricsForTrack(MusicTrack track) async {
@@ -211,9 +249,36 @@ class MusicPlayerService {
 
   void _prefetchNext() async {
     if (playlist.value.isEmpty || _currentIndex == -1) return;
+    if (isShuffleEnabled.value) return;
+
     final nextIndex = (_currentIndex + 1) % playlist.value.length;
     final nextTrack = playlist.value[nextIndex];
-    await _musicService.getYoutubeVideoId(nextTrack.title, nextTrack.artist);
+    if (_streamUrlCache.containsKey(nextTrack.id)) return;
+
+    try {
+      if (nextTrack.localPath != null) {
+        final f = File(nextTrack.localPath!);
+        if (await f.exists()) {
+          _streamUrlCache[nextTrack.id] = _CachedStreamUrl(nextTrack.localPath!, DateTime.now());
+          return;
+        }
+      }
+
+      final videoId = await _musicService.getYoutubeVideoId(nextTrack.title, nextTrack.artist);
+      if (videoId == null) return;
+
+      final manifest = await _musicService.getYoutubeManifest(videoId);
+      if (manifest == null) return;
+
+      final audioStreams = manifest.audioOnly.toList();
+      audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if (audioStreams.isEmpty) return;
+
+      _streamUrlCache[nextTrack.id] =
+          _CachedStreamUrl(audioStreams.first.url.toString(), DateTime.now());
+    } catch (e) {
+      debugPrint('MusicPlayerService: Prefetch next error: $e');
+    }
   }
 
   void play() => _player.play();
@@ -226,6 +291,8 @@ class MusicPlayerService {
     playlist.value = [];
     _currentIndex = -1;
     isPlaying.value = false;
+    _streamUrlCache.clear();
+    _earlyPrefetchIssuedForTrackId = null;
     _handler?.stop();
   }
 
@@ -294,4 +361,10 @@ class MusicPlayerService {
     _player.dispose();
     _musicService.dispose();
   }
+}
+
+class _CachedStreamUrl {
+  final String url;
+  final DateTime at;
+  _CachedStreamUrl(this.url, this.at);
 }
