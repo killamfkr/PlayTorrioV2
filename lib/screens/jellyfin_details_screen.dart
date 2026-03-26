@@ -324,7 +324,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen>
             : null);
 
     return SliverAppBar(
-      expandedHeight: 420,
+      expandedHeight: MediaQuery.of(context).orientation == Orientation.landscape ? 260 : 420,
       pinned: true,
       backgroundColor: AppTheme.bgDark,
       leading: IconButton(

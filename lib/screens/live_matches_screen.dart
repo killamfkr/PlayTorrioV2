@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
+import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import '../utils/app_theme.dart';
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -1339,15 +1340,21 @@ class _PpvPlayerScreenState extends State<_PpvPlayerScreen> {
   void _enterFullscreen() {
     setState(() => _isFullscreen = true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.landscapeAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   }
 
   void _exitFullscreen() {
     setState(() => _isFullscreen = false);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
   }
 
   @override
   void dispose() {
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     super.dispose();
   }
@@ -1522,15 +1529,21 @@ class _LivePlayerScreenState extends State<_LivePlayerScreen> {
   void _enterFullscreen() {
     setState(() => _isFullscreen = true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.landscapeAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   }
 
   void _exitFullscreen() {
     setState(() => _isFullscreen = false);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
   }
 
   @override
   void dispose() {
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     super.dispose();
   }
@@ -1919,15 +1932,21 @@ class _CdnPlayerScreenState extends State<_CdnPlayerScreen> {
   void _enterFullscreen() {
     setState(() => _isFullscreen = true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.landscapeAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   }
 
   void _exitFullscreen() {
     setState(() => _isFullscreen = false);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
   }
 
   @override
   void dispose() {
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     super.dispose();
   }

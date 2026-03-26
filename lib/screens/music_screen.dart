@@ -53,7 +53,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     return 'Late Night Vibes';
   }
 
-  bool get _isDesktop => MediaQuery.of(context).size.width > 900;
+  bool get _isDesktop => (Platform.isWindows || Platform.isLinux || Platform.isMacOS) && MediaQuery.of(context).size.width > 900;
 
   @override
   void initState() {

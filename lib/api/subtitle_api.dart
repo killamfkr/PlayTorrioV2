@@ -111,7 +111,8 @@ class SubtitleApi {
 
   static Future<List<Map<String, dynamic>>> _fetchWyzie(int tmdbId, int? season, int? episode) async {
     try {
-      String url = 'https://sub.wyzie.ru/search?id=$tmdbId';
+      const wyzieKey = 'wyzie-0d7ef784cd5aa6b812766fb07931accb';
+      String url = 'https://sub.wyzie.ru/search?id=$tmdbId&key=$wyzieKey';
       if (season != null && episode != null) {
         url += '&season=$season&episode=$episode';
       }
@@ -136,6 +137,13 @@ class SubtitleApi {
           final n = seen[name]!;
           entry['display'] = totals[name]! > 1 ? '$name $n - wyzie' : '$name 1 - wyzie';
           entry['sourceName'] = 'wyzie';
+          // Append API key to download URLs as well
+          if (entry['url'] != null) {
+            final dlUrl = entry['url'].toString();
+            if (dlUrl.contains('wyzie.io') || dlUrl.contains('wyzie.ru')) {
+              entry['url'] = dlUrl + (dlUrl.contains('?') ? '&' : '?') + 'key=$wyzieKey';
+            }
+          }
           return entry;
         }).toList();
       }

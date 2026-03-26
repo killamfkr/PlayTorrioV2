@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsService {
@@ -230,6 +231,133 @@ class SettingsService {
   Future<void> setNavbarConfig(List<String> visibleIds) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_navbarConfigKey, visibleIds);
+    navbarChangeNotifier.value++;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Export / Import All Settings
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  static const List<String> _secureKeys = [
+    'rd_access_token',
+    'rd_refresh_token',
+    'rd_token_expiry',
+    'rd_client_id',
+    'rd_client_secret',
+    'torbox_api_key',
+    'trakt_access_token',
+    'trakt_refresh_token',
+    'trakt_expires_at',
+  ];
+
+  /// Collects every setting (SharedPreferences + FlutterSecureStorage) into a
+  /// single JSON-encodable map.
+  Future<Map<String, dynamic>> exportAllSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final secure = const FlutterSecureStorage();
+
+    final Map<String, dynamic> data = {};
+
+    // --- SharedPreferences ---
+    final prefsMap = <String, dynamic>{};
+    // Bool keys
+    for (final key in [_streamingModeKey, _useDebridKey]) {
+      final v = prefs.getBool(key);
+      if (v != null) prefsMap[key] = v;
+    }
+    // String keys
+    for (final key in [
+      _sortPreferenceKey,
+      _debridServiceKey,
+      _externalPlayerKey,
+      _jackettBaseUrlKey,
+      _jackettApiKeyKey,
+      _prowlarrBaseUrlKey,
+      _prowlarrApiKeyKey,
+      _torrentCacheTypeKey,
+    ]) {
+      final v = prefs.getString(key);
+      if (v != null) prefsMap[key] = v;
+    }
+    // Int keys
+    for (final key in [_torrentRamCacheMbKey]) {
+      final v = prefs.getInt(key);
+      if (v != null) prefsMap[key] = v;
+    }
+    // StringList keys
+    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+      final v = prefs.getStringList(key);
+      if (v != null) prefsMap[key] = v;
+    }
+    data['shared_preferences'] = prefsMap;
+
+    // --- FlutterSecureStorage ---
+    final secureMap = <String, String>{};
+    for (final key in _secureKeys) {
+      final v = await secure.read(key: key);
+      if (v != null) secureMap[key] = v;
+    }
+    data['secure_storage'] = secureMap;
+
+    data['export_version'] = 1;
+    data['exported_at'] = DateTime.now().toIso8601String();
+
+    return data;
+  }
+
+  /// Restores every setting from a previously-exported JSON map.
+  Future<void> importAllSettings(Map<String, dynamic> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final secure = const FlutterSecureStorage();
+
+    // --- SharedPreferences ---
+    final prefsMap = data['shared_preferences'] as Map<String, dynamic>? ?? {};
+
+    // Bool keys
+    for (final key in [_streamingModeKey, _useDebridKey]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setBool(key, prefsMap[key] as bool);
+      }
+    }
+    // String keys
+    for (final key in [
+      _sortPreferenceKey,
+      _debridServiceKey,
+      _externalPlayerKey,
+      _jackettBaseUrlKey,
+      _jackettApiKeyKey,
+      _prowlarrBaseUrlKey,
+      _prowlarrApiKeyKey,
+      _torrentCacheTypeKey,
+    ]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setString(key, prefsMap[key] as String);
+      }
+    }
+    // Int keys
+    for (final key in [_torrentRamCacheMbKey]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setInt(key, prefsMap[key] as int);
+      }
+    }
+    // StringList keys
+    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setStringList(
+            key, (prefsMap[key] as List).cast<String>());
+      }
+    }
+
+    // --- FlutterSecureStorage ---
+    final secureMap = data['secure_storage'] as Map<String, dynamic>? ?? {};
+    for (final key in _secureKeys) {
+      if (secureMap.containsKey(key)) {
+        await secure.write(key: key, value: secureMap[key] as String);
+      }
+    }
+
+    // Notify listeners so UI refreshes
+    addonChangeNotifier.value++;
     navbarChangeNotifier.value++;
   }
 }

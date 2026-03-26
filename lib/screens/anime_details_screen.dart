@@ -201,8 +201,9 @@ class _AnimeDetailsScreenState extends State<AnimeDetailsScreen> {
 
   Widget _buildSliverAppBar() {
     final bannerUrl = widget.anime.bannerImage ?? widget.anime.coverUrl;
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
     return SliverAppBar(
-      expandedHeight: 320,
+      expandedHeight: isLandscape ? 200 : 320,
       pinned: true,
       backgroundColor: AppTheme.bgDark,
       iconTheme: const IconThemeData(color: Colors.white),

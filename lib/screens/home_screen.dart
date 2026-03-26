@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
-import 'package:shimmer/shimmer.dart';
 import '../api/tmdb_api.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
@@ -307,18 +306,16 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
 
 
   Widget _buildHeroShimmer() {
-    return Shimmer.fromColors(
-      baseColor: AppTheme.bgCard,
-      highlightColor: Colors.white10,
-      child: Container(
-        height: MediaQuery.of(context).size.height * 0.72,
-        color: AppTheme.bgCard,
-      ),
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    return Container(
+      height: isLandscape ? MediaQuery.of(context).size.height * 0.55 : MediaQuery.of(context).size.height * 0.72,
+      color: AppTheme.bgCard,
     );
   }
 
   Widget _buildHeroCarousel(List<Movie> movies) {
-    final height = MediaQuery.of(context).size.height * 0.72;
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    final height = isLandscape ? MediaQuery.of(context).size.height * 0.55 : MediaQuery.of(context).size.height * 0.72;
     final heroMovie = movies[_heroIndex];
     
     return SizedBox(
@@ -599,11 +596,7 @@ class _MovieSectionState extends State<_MovieSection> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Shimmer.fromColors(
-                      baseColor: AppTheme.bgCard,
-                      highlightColor: Colors.white10,
-                      child: Container(height: 20, width: 140, decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(6))),
-                    ),
+                    child: Container(height: 20, width: 140, decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(6))),
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
@@ -613,13 +606,9 @@ class _MovieSectionState extends State<_MovieSection> {
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       itemCount: 5,
                       separatorBuilder: (_, _) => const SizedBox(width: 14),
-                      itemBuilder: (_, _) => Shimmer.fromColors(
-                        baseColor: AppTheme.bgCard,
-                        highlightColor: Colors.white10,
-                        child: Container(
-                          width: widget.isPortrait ? 150 : 280,
-                          decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(14)),
-                        ),
+                      itemBuilder: (_, _) => Container(
+                        width: widget.isPortrait ? 150 : 280,
+                        decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(14)),
                       ),
                     ),
                   ),
@@ -768,11 +757,7 @@ class _MovieCard extends StatelessWidget {
                   CachedNetworkImage(
                     imageUrl: imageUrl,
                     fit: BoxFit.cover,
-                    placeholder: (c, u) => Shimmer.fromColors(
-                      baseColor: AppTheme.bgCard,
-                      highlightColor: Colors.white10,
-                      child: Container(color: AppTheme.bgCard),
-                    ),
+                    placeholder: (c, u) => Container(color: AppTheme.bgCard),
                     errorWidget: (c, u, e) => Container(
                       color: AppTheme.bgCard,
                       child: Center(child: Text(movie.title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, color: Colors.white24))),
@@ -1382,7 +1367,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               ),
             ),
             SizedBox(
-              height: 175,
+              height: MediaQuery.of(context).orientation == Orientation.landscape ? 140 : 175,
               child: ListView.separated(
                 controller: _scrollController,
                 scrollDirection: Axis.horizontal,
@@ -1816,11 +1801,7 @@ class _StremioCatalogCard extends StatelessWidget {
               CachedNetworkImage(
                 imageUrl: poster,
                 fit: BoxFit.cover,
-                placeholder: (_, _) => Shimmer.fromColors(
-                  baseColor: AppTheme.bgCard,
-                  highlightColor: Colors.white10,
-                  child: Container(color: AppTheme.bgCard),
-                ),
+                placeholder: (_, _) => Container(color: AppTheme.bgCard),
                 errorWidget: (_, _, _) => Container(
                   color: AppTheme.bgCard,
                   child: Center(child: Text(name, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, color: Colors.white38))),

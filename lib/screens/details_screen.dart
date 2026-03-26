@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1226,7 +1227,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     final w = MediaQuery.of(context).size.width;
-    final isMobile = w < 800;
+    final isMobile = (Platform.isAndroid || Platform.isIOS) || w < 800;
 
     return KeyboardListener(
       focusNode: _keyboardFocusNode,
@@ -1374,8 +1375,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Widget _buildMobileHero() {
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
     return SizedBox(
-      height: 260,
+      height: isLandscape ? 200 : 260,
       child: Stack(
         children: [
           Positioned.fill(

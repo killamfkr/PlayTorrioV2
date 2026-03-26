@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import 'home_screen.dart';
 import 'discover_screen.dart';
 import 'search_screen.dart';
@@ -121,6 +122,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
         }
       });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed && Platform.isAndroid) {
+      AutoOrientation.fullAutoMode(forceSensor: true);
+      SystemChrome.setPreferredOrientations([]);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
   }
 

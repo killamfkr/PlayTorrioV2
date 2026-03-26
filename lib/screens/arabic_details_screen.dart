@@ -111,7 +111,7 @@ class _ArabicDetailsScreenState extends State<ArabicDetailsScreen> {
   Widget _buildAppBar() {
     final poster = _detail?.poster ?? widget.show.poster;
     return SliverAppBar(
-      expandedHeight: 300,
+      expandedHeight: MediaQuery.of(context).orientation == Orientation.landscape ? 200 : 300,
       pinned: true,
       backgroundColor: AppTheme.bgDark,
       iconTheme: const IconThemeData(color: Colors.white),

@@ -7,6 +7,7 @@ import 'package:logging/logging.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 
 import 'api/audio_handler.dart';
 import 'api/audiobook_player_service.dart';
@@ -51,11 +52,8 @@ void main() async {
   
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
   }
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {

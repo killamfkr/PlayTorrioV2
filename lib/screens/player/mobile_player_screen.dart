@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 
 import '../../api/subtitle_api.dart';
 import '../../services/watch_history_service.dart';
@@ -504,11 +505,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // ── System UI ────────────────────────────────────────────────────────
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
     WakelockPlus.enable();
 
     // ── Player ───────────────────────────────────────────────────────────
@@ -570,12 +568,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   void dispose() {
     _saveWatchHistory();
 
-    // Restore orientation when disposed.
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // Restore free rotation when leaving the player.
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _disposed = true;
@@ -614,11 +609,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   /// so the details page never sees stale landscape dimensions.
   Future<void> _exitPlayer() async {
     _saveWatchHistory();
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    AutoOrientation.fullAutoMode(forceSensor: true);
+    await SystemChrome.setPreferredOrientations([]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     if (mounted) Navigator.of(context).pop();
   }
