@@ -147,10 +147,11 @@ Required secret names (exact spelling):
 
 Encode the keystore file:
 
+- **Windows PowerShell:** `base64 -w0` is not available — use `[Convert]::ToBase64String` and pipe to `gh` (see the PowerShell block below), or run the `base64` command from **Git Bash** or **WSL**.
 - **Linux / macOS / Git Bash:** `base64 -w0 android/release.keystore` (copy the output into the secret).
-- **PowerShell:**  
+- **PowerShell (clipboard only):**  
   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("android\release.keystore")) | Set-Clipboard`  
-  then paste into the secret, or pipe straight to the CLI below.
+  then paste into the secret (prefer piping to `gh` to avoid paste corruption).
 
 **GitHub CLI** (logged in: `gh auth login`), from the repo root:
 
