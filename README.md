@@ -134,18 +134,43 @@ The built-in updater installs a new APK over the old one. **Android only allows 
 
 **GitHub Actions**
 
-Add repository **secrets** (Settings → Secrets and variables → Actions):
+These values **cannot** live in the git repo (they would be public). Add them only under **GitHub → your repo → Settings → Secrets and variables → Actions → New repository secret**.
 
-| Secret | Purpose |
-|--------|---------|
-| `ANDROID_KEYSTORE_BASE64` | Base64-encoded contents of your `.keystore` / `.jks` file |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
-| `ANDROID_KEY_PASSWORD` | Key password |
-| `ANDROID_KEY_ALIAS` | Optional; default `playtorrio` |
+Required secret names (exact spelling):
 
-Encode the keystore: `base64 -w0 android/release.keystore` (Linux) or `[Convert]::ToBase64String([IO.File]::ReadAllBytes("android\release.keystore"))` (PowerShell).
+| Secret | Value |
+|--------|--------|
+| `ANDROID_KEYSTORE_BASE64` | Base64 of your entire `.keystore` or `.jks` file (one line, no line breaks). |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password (`storePassword`). |
+| `ANDROID_KEY_PASSWORD` | Key password (`keyPassword`). |
+| `ANDROID_KEY_ALIAS` | *(Optional.)* Key alias; if omitted, CI defaults to **`playtorrio`** (must match the alias you used in `keytool`). |
 
-If `ANDROID_KEYSTORE_BASE64` is **not** set, CI still produces an APK signed with the **debug** key (fine for testing; users cannot upgrade from a future release-signed build without reinstalling).
+Encode the keystore file:
+
+- **Linux / macOS / Git Bash:** `base64 -w0 android/release.keystore` (copy the output into the secret).
+- **PowerShell:**  
+  `[Convert]::ToBase64String([IO.File]::ReadAllBytes("android\release.keystore")) | Set-Clipboard`  
+  then paste into the secret, or pipe straight to the CLI below.
+
+**GitHub CLI** (logged in: `gh auth login`), from the repo root:
+
+```bash
+# Linux / macOS — pipe file as base64
+base64 -w0 android/release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_PASSWORD
+gh secret set ANDROID_KEY_ALIAS   # optional; type playtorrio or your alias when prompted
+```
+
+```powershell
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\android\release.keystore")) | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_PASSWORD
+gh secret set ANDROID_KEY_ALIAS
+```
+
+If `ANDROID_KEYSTORE_BASE64` is **not** set: pushes to `main` still build a **debug-signed** APK. **Version tags** `v*` **fail** the Android job until these secrets exist, so release APKs stay OTA-updatable.
 
 ## License
 
