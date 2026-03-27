@@ -21,6 +21,16 @@ import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
+import '../platform/android_tv_platform.dart';
+
+/// On Android TV, avoid TMDB [original] (very large) for home thumbnails.
+String _homeTmdbThumb(String path, {required bool wideBackdrop}) {
+  if (path.isEmpty) return '';
+  if (path.startsWith('http')) return path;
+  if (!AndroidTvPlatform.isTv) return TmdbApi.getImageUrl(path);
+  final size = wideBackdrop ? 'w1280' : 'w500';
+  return TmdbApi.getImageUrl(path, size: size);
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -41,6 +51,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   
   Timer? _heroTimer;
   int _heroIndex = 0;
+  /// Synced from [_buildHeroCarousel] so the periodic hero timer matches [PageView] length.
+  int _heroItemCount = 1;
 
   // Stremio catalog data
   List<Map<String, dynamic>> _stremioCatalogs = [];
@@ -70,15 +82,16 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
 
   void _startHeroTimer() {
     _heroTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
-      if (_heroController.hasClients) {
-        final next = (_heroIndex + 1) % 5;
-        _heroController.animateToPage(
-          next,
-          duration: const Duration(milliseconds: 1000),
-          curve: Curves.easeInOutCubic,
-        );
-        setState(() => _heroIndex = next);
-      }
+      if (!mounted || !_heroController.hasClients) return;
+      final n = _heroItemCount;
+      if (n <= 1) return;
+      final next = (_heroIndex + 1) % n;
+      _heroController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 1000),
+        curve: Curves.easeInOutCubic,
+      );
+      if (mounted) setState(() => _heroIndex = next);
     });
   }
 
@@ -300,11 +313,6 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       ),
     );
   }
-// ... (rest of file is same until _ContinueWatchingSection) ...
-
-// I need to update _ContinueWatchingSection separately or I can try to replace the whole file? No, replace partial.
-// The above block replaces _HomeScreenState entirely. I will use it.
-
 
   Widget _buildHeroShimmer() {
     return Shimmer.fromColors(
@@ -318,9 +326,14 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   }
 
   Widget _buildHeroCarousel(List<Movie> movies) {
+    _heroItemCount = movies.length;
     final height = MediaQuery.of(context).size.height * 0.72;
-    final heroMovie = movies[_heroIndex];
-    
+    final heroMovie = movies[_heroIndex.clamp(0, movies.length - 1)];
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final heroMemW = AndroidTvPlatform.isTv
+        ? (MediaQuery.sizeOf(context).width * dpr).round()
+        : null;
+
     return SizedBox(
       height: height,
       child: Stack(
@@ -329,18 +342,21 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           PageView.builder(
             controller: _heroController,
             itemCount: movies.length,
-            onPageChanged: (i) => setState(() => _heroIndex = i),
+            onPageChanged: (i) {
+              if (mounted) setState(() => _heroIndex = i);
+            },
             itemBuilder: (context, index) {
               final movie = movies[index];
               return Stack(
                 fit: StackFit.expand,
                 children: [
                   CachedNetworkImage(
-                    imageUrl: movie.backdropPath.isNotEmpty 
-                        ? TmdbApi.getImageUrl(movie.backdropPath) 
-                        : TmdbApi.getImageUrl(movie.posterPath),
+                    imageUrl: movie.backdropPath.isNotEmpty
+                        ? _homeTmdbThumb(movie.backdropPath, wideBackdrop: true)
+                        : _homeTmdbThumb(movie.posterPath, wideBackdrop: false),
                     fit: BoxFit.cover,
                     alignment: Alignment.topCenter,
+                    memCacheWidth: heroMemW,
                     placeholder: (c, u) => Container(color: AppTheme.bgCard),
                   ),
                   // Multi-layer gradient for depth
@@ -729,8 +745,14 @@ class _MovieCard extends StatelessWidget {
         : (isDesktop ? 320.0 : 270.0);
         
     final image = isPortrait ? movie.posterPath : movie.backdropPath;
-    final imageUrl = image.isNotEmpty ? TmdbApi.getImageUrl(image) : '';
+    final imageUrl = image.isNotEmpty
+        ? _homeTmdbThumb(image, wideBackdrop: !isPortrait)
+        : '';
     final hasRank = rank != null;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final memW = AndroidTvPlatform.isTv ? (cardWidth * dpr).round() : null;
+    final cardPixelH = (isPortrait ? 260.0 : 190.0) * dpr;
+    final memH = AndroidTvPlatform.isTv ? cardPixelH.round() : null;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -768,6 +790,8 @@ class _MovieCard extends StatelessWidget {
                   CachedNetworkImage(
                     imageUrl: imageUrl,
                     fit: BoxFit.cover,
+                    memCacheWidth: memW,
+                    memCacheHeight: memH,
                     placeholder: (c, u) => Shimmer.fromColors(
                       baseColor: AppTheme.bgCard,
                       highlightColor: Colors.white10,
@@ -1438,18 +1462,25 @@ class _HistoryCard extends StatelessWidget {
     final remaining = duration > 0 ? Duration(milliseconds: duration - position) : Duration.zero;
     final remainingText = remaining.inMinutes > 0 ? '${remaining.inMinutes}m left' : '';
     final imageUrl = posterPath.isNotEmpty
-        ? (posterPath.startsWith('http') ? posterPath : TmdbApi.getImageUrl(posterPath))
+        ? (posterPath.startsWith('http')
+            ? posterPath
+            : _homeTmdbThumb(posterPath, wideBackdrop: false))
         : '';
     
     final subtitle = season != null 
         ? 'S$season E$episode${episodeTitle != null && episodeTitle.isNotEmpty ? ' • $episodeTitle' : ''}'
         : '';
 
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    const w = 280.0;
+    final memW = AndroidTvPlatform.isTv ? (w * dpr).round() : null;
+    final memH = AndroidTvPlatform.isTv ? (175 * dpr).round() : null;
+
     return FocusableControl(
       onTap: isLoading ? () {} : onTap,
       borderRadius: 14,
       child: Container(
-        width: 280,
+        width: w,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: AppTheme.bgCard,
@@ -1464,6 +1495,8 @@ class _HistoryCard extends StatelessWidget {
               CachedNetworkImage(
                 imageUrl: imageUrl,
                 fit: BoxFit.cover,
+                memCacheWidth: memW,
+                memCacheHeight: memH,
                 placeholder: (c, u) => Container(color: AppTheme.bgCard),
               )
             else
@@ -1797,6 +1830,10 @@ class _StremioCatalogCard extends StatelessWidget {
       width = height * (2 / 3);
     }
 
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final memW = AndroidTvPlatform.isTv ? (width * dpr).round() : null;
+    final memH = AndroidTvPlatform.isTv ? (height * dpr).round() : null;
+
     return FocusableControl(
       onTap: onTap,
       borderRadius: 14,
@@ -1816,6 +1853,8 @@ class _StremioCatalogCard extends StatelessWidget {
               CachedNetworkImage(
                 imageUrl: poster,
                 fit: BoxFit.cover,
+                memCacheWidth: memW,
+                memCacheHeight: memH,
                 placeholder: (_, _) => Shimmer.fromColors(
                   baseColor: AppTheme.bgCard,
                   highlightColor: Colors.white10,

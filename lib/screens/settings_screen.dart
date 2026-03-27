@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../services/external_player_service.dart';
@@ -106,6 +107,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       TextEditingController(text: '${SettingsLanSyncService.defaultPort}');
   final TextEditingController _lanTvTokenController = TextEditingController();
 
+  String _appVersionLabel = 'PlayTorrio Native';
+
   @override
   void initState() {
     super.initState();
@@ -128,6 +131,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
+    String? versionLabel;
+    if (!kIsWeb) {
+      try {
+        final p = await PackageInfo.fromPlatform();
+        versionLabel = 'PlayTorrio Native v${p.version} (${p.buildNumber})';
+      } catch (_) {}
+    }
+
     final streaming = await _settings.isStreamingModeEnabled();
     final externalPlayer = await _settings.getExternalPlayer();
     final sort = await _settings.getSortPreference();
@@ -185,6 +196,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (mounted) {
       setState(() {
+        if (versionLabel != null) _appVersionLabel = versionLabel;
         _isStreamingMode = streaming;
         // Ensure saved value is in the current platform's player list
         final validNames = ExternalPlayerService.playerNames;
@@ -302,20 +314,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final success = await _debrid.pollRDCredentials(data['device_code']);
         if (success) {
           timer.cancel();
+          if (!mounted) return;
           setState(() {
             _rdUserCode = null;
             _isRDLoggedIn = true;
           });
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Real-Debrid Login Successful!')));
-          }
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Real-Debrid Login Successful!')));
         }
       });
 
       Future.delayed(Duration(seconds: data['expires_in']), () {
         if (_rdPollTimer?.isActive ?? false) {
           _rdPollTimer?.cancel();
-          setState(() => _rdUserCode = null);
+          if (mounted) setState(() => _rdUserCode = null);
         }
       });
     }
@@ -548,10 +559,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('Navigation Bar'),
                     _buildNavbarConfig(),
                     const SizedBox(height: 64),
-                    const Center(
+                    Center(
                       child: Text(
-                        'PlayTorrio Native v1.0.7',
-                        style: TextStyle(color: Colors.white24, fontSize: 12, letterSpacing: 2, fontWeight: FontWeight.bold),
+                        _appVersionLabel,
+                        style: const TextStyle(color: Colors.white24, fontSize: 12, letterSpacing: 2, fontWeight: FontWeight.bold),
                       ),
                     ),
                     const SizedBox(height: 100),

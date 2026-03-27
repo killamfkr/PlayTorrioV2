@@ -274,7 +274,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               Expanded(
                 child: IndexedStack(
                   index: _safeNavIndex,
-                  children: _visibleIds.map((id) => _allScreens[id]!).toList(),
+                  children: _visibleIds.asMap().entries.map((e) {
+                    final i = e.key;
+                    final selected = i == _safeNavIndex;
+                    // TV / D-pad: inactive tabs stay in the tree but must not steal focus or
+                    // tick animations — fixes jank, OOM pressure, and focus-related crashes.
+                    return ExcludeFocus(
+                      excluding: !selected,
+                      child: TickerMode(
+                        enabled: selected,
+                        child: _allScreens[e.value]!,
+                      ),
+                    );
+                  }).toList(),
                 ),
               ),
             ],

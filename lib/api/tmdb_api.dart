@@ -5,7 +5,7 @@ import '../models/movie.dart';
 class TmdbApi {
   static const String _apiKey = 'c3515fdc674ea2bd7b514f4bc3616a4a';
   static const String _baseUrl = 'https://api.themoviedb.org/3';
-  static const String _imageBaseUrl = 'https://image.tmdb.org/t/p/original';
+  static const String _imageCdn = 'https://image.tmdb.org/t/p';
 
   Future<List<Movie>> getTrending() async {
     final response = await http.get(Uri.parse('$_baseUrl/trending/movie/day?api_key=$_apiKey'));
@@ -291,8 +291,11 @@ class TmdbApi {
     return null;
   }
 
-  static String getImageUrl(String path) {
-    return '$_imageBaseUrl$path';
+  /// [size] examples: w342, w500, w780, w1280, original (default).
+  static String getImageUrl(String path, {String size = 'original'}) {
+    if (path.isEmpty) return '';
+    if (path.startsWith('http')) return path;
+    return '$_imageCdn/$size$path';
   }
 
   /// Fetches ordered cast list for a movie or TV show.
