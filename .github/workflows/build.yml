@@ -24,6 +24,9 @@ jobs:
   android:
     name: Android (APK)
     runs-on: ubuntu-latest
+    # Optional escape hatch if keystore secrets are not in GitHub yet (debug-signed APK on tags).
+    env:
+      ALLOW_DEBUG_TAG_BUILD: ${{ vars.CI_ALLOW_DEBUG_TAG_BUILD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,11 +105,20 @@ jobs:
           raw = os.environ.get("KEYSTORE_B64") or ""
           stripped = normalize(raw)
           ref = os.environ.get("REF_NAME", "")
+          allow_debug_tag = (os.environ.get("ALLOW_DEBUG_TAG_BUILD") or "").strip().lower() in ("true", "1", "yes")
 
           if not stripped:
               if ref.startswith("refs/tags/v"):
-                  print("::error::Version tags must use release signing so users can update without reinstalling.")
-                  print("::error::Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_PASSWORD.")
+                  if allow_debug_tag:
+                      print("::warning::CI_ALLOW_DEBUG_TAG_BUILD is true — building a DEBUG-signed APK on a version tag.")
+                      print("::warning::Users with a release-signed install cannot OTA-update to this APK.")
+                      sys.exit(0)
+                  print("::error::Version tags require release signing secrets (empty ANDROID_KEYSTORE_BASE64).")
+                  print("::error::GitHub → repo → Settings → Secrets and variables → Actions → add:")
+                  print("::error::  ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_PASSWORD")
+                  print("::error::  (optional) ANDROID_KEY_ALIAS — must match your key alias, default playtorrio")
+                  print("::error::PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('path\\to.keystore')) | gh secret set ANDROID_KEYSTORE_BASE64")
+                  print("::error::Or set repo Variable CI_ALLOW_DEBUG_TAG_BUILD=true to allow debug-signed tag builds only while testing.")
                   sys.exit(1)
               print("::notice::No ANDROID_KEYSTORE_BASE64 — APK will be debug-signed.")
               sys.exit(0)
