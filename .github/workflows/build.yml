@@ -38,8 +38,8 @@ jobs:
 
       # Optional: add repo secrets ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore),
       # PLAYTORRIO_KEYSTORE_PASSWORD, PLAYTORRIO_KEY_PASSWORD, and optionally PLAYTORRIO_KEY_ALIAS.
+      # (Cannot use secrets.* in step `if:` — GitHub rejects it at parse time; use shell guard.)
       - name: Configure release signing (optional)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         working-directory: android
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -47,6 +47,10 @@ jobs:
           PLAYTORRIO_KEY_PASSWORD: ${{ secrets.PLAYTORRIO_KEY_PASSWORD }}
           PLAYTORRIO_KEY_ALIAS: ${{ secrets.PLAYTORRIO_KEY_ALIAS }}
         run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 — release build will use debug keystore."
+            exit 0
+          fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/ci-release.jks
           {
             echo ""
