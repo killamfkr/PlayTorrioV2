@@ -1,6 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 #  PlayTorrio — Multi-Platform CI/CD
-#  Builds: Android (split APK), Windows (installer), Linux x64 (AppImage),
+#  Builds: Android (split APK, CI), Windows (installer), Linux x64 (AppImage),
 #          macOS ARM64 (Apple Silicon), iOS (IPA — sideload)
 # ──────────────────────────────────────────────────────────────────────────────
 name: Build PlayTorrio
@@ -17,7 +17,57 @@ env:
 jobs:
 
   # ─── Android ──────────────────────────────────────────────────────────────
-  # Android builds are done manually and uploaded to releases
+  android:
+    name:  Android (split APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - run: flutter pub get
+
+      # Optional: add repo secrets ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore),
+      # PLAYTORRIO_KEYSTORE_PASSWORD, PLAYTORRIO_KEY_PASSWORD, and optionally PLAYTORRIO_KEY_ALIAS.
+      - name: Configure release signing (optional)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PLAYTORRIO_KEYSTORE_PASSWORD: ${{ secrets.PLAYTORRIO_KEYSTORE_PASSWORD }}
+          PLAYTORRIO_KEY_PASSWORD: ${{ secrets.PLAYTORRIO_KEY_PASSWORD }}
+          PLAYTORRIO_KEY_ALIAS: ${{ secrets.PLAYTORRIO_KEY_ALIAS }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/ci-release.jks
+          {
+            echo ""
+            echo "PLAYTORRIO_KEYSTORE_PATH=${GITHUB_WORKSPACE}/android/app/ci-release.jks"
+            echo "PLAYTORRIO_KEYSTORE_PASSWORD=${PLAYTORRIO_KEYSTORE_PASSWORD}"
+            echo "PLAYTORRIO_KEY_PASSWORD=${PLAYTORRIO_KEY_PASSWORD}"
+            echo "PLAYTORRIO_KEY_ALIAS=${PLAYTORRIO_KEY_ALIAS:-playtorrio}"
+          } >> gradle.properties
+
+      - name: Build APKs (per-ABI)
+        run: >
+          flutter build apk --release --split-per-abi
+          --dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}
+          --dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}
+          --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
+          --dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlayTorrio-Android
+          path: build/app/outputs/flutter-apk/*.apk
 
   # ─── Windows ──────────────────────────────────────────────────────────────
   windows:
@@ -364,7 +414,7 @@ jobs:
   # ─── Create GitHub Release ───────────────────────────────────────────────
   release:
     name:  Create Release
-    needs: [windows, macos-arm64, macos-intel, ios]
+    needs: [android, windows, macos-arm64, macos-intel, ios]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -377,6 +427,7 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
+            PlayTorrio-Android/*.apk
             PlayTorrio-Windows-Installer/*.exe
             PlayTorrio-macOS-arm64/*.dmg
             PlayTorrio-macOS-arm64/*.zip
