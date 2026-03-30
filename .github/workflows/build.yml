@@ -9,6 +9,12 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      create_draft_release:
+        description: 'Create a draft GitHub release and attach all build artifacts (tag pushes always do this)'
+        required: false
+        default: true
+        type: boolean
 
 env:
   FLUTTER_CHANNEL: stable
@@ -419,7 +425,9 @@ jobs:
   release:
     name:  Create Release
     needs: [android, windows, macos-arm64, macos-intel, ios]
-    if: startsWith(github.ref, 'refs/tags/')
+    # Runs on version tags, or when you manually run the workflow and leave
+    # "Create a draft GitHub release" enabled (default: on).
+    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.create_draft_release)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -429,6 +437,10 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          prerelease: ${{ github.ref_type != 'tag' }}
+          # Tag push: use the pushed tag (e.g. v1.2.0). Manual run: synthetic ci-<run> tag on current commit.
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('ci-{0}', github.run_number) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('CI build {0}', github.run_number) }}
           generate_release_notes: true
           files: |
             PlayTorrio-Android/*.apk
