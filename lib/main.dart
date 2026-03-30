@@ -90,7 +90,7 @@ void main() async {
     builder: () => PlayTorrioAudioHandler(MusicPlayerService().player),
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.playtorrio.native.channel.audio',
-      androidNotificationChannelName: 'Music Playback',
+      androidNotificationChannelName: 'Media playback',
       androidNotificationOngoing: false,
       androidStopForegroundOnPause: false,
       androidResumeOnClick: true,
@@ -103,6 +103,7 @@ void main() async {
   
   // Hydrate light mode setting before first frame
   await SettingsService().initLightMode();
+  await SettingsService().getBuiltinPlayerSubtitlesEnabled();
   
   PlayerPoolService().warmUp();
   debugPrint('[Boot] All init complete — launching app');

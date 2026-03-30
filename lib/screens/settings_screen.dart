@@ -105,6 +105,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipButton = true;
   bool _autoEnterPipAndroid = false;
+  bool _builtinPlayerSubtitlesEnabled = true;
 
   @override
   void initState() {
@@ -168,6 +169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final bgPlay = await _settings.continuePlaybackInBackground();
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
+    final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -228,6 +230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _continuePlaybackInBackground = bgPlay;
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
+        _builtinPlayerSubtitlesEnabled = builtinSubs;
       });
     }
   }
@@ -419,6 +422,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         (val) async {
                           await _settings.setContinuePlaybackInBackground(val);
                           setState(() => _continuePlaybackInBackground = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Show subtitles',
+                        'Off: hides on-screen subtitles and clears the active subtitle track in the built-in player.',
+                        _builtinPlayerSubtitlesEnabled,
+                        (val) async {
+                          await _settings.setBuiltinPlayerSubtitlesEnabled(val);
+                          setState(() => _builtinPlayerSubtitlesEnabled = val);
                         },
                       ),
                       if (Platform.isAndroid) ...[

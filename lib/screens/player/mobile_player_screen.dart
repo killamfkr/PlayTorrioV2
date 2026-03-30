@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:android_pip/android_pip.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -24,6 +25,7 @@ import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
 import '../../api/settings_service.dart';
+import '../../services/built_in_video_media_session.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
@@ -562,10 +564,15 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
     });
 
+    SettingsService.builtinPlayerSubtitlesEnabledNotifier
+        .addListener(_onBuiltinSubtitlesSettingChanged);
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      await SettingsService().getBuiltinPlayerSubtitlesEnabled();
       _continuePlaybackInBackground =
           await SettingsService().continuePlaybackInBackground();
+      await _configureVideoAudioSession();
       if (Platform.isAndroid) {
         _showAndroidPipInToolbar =
             await SettingsService().showAndroidPipButton();
@@ -621,6 +628,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _disposed = true;
+    SettingsService.builtinPlayerSubtitlesEnabledNotifier
+        .removeListener(_onBuiltinSubtitlesSettingChanged);
+    detachBuiltInVideoMediaSession();
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
@@ -652,6 +662,59 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     super.dispose();
   }
 
+  void _onBuiltinSubtitlesSettingChanged() {
+    if (!mounted || _disposed) return;
+    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
+      _player.setSubtitleTrack(SubtitleTrack.no());
+    }
+    setState(() {});
+  }
+
+  Future<void> _afterVideoSourceOpened() async {
+    if (_disposed) return;
+    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+    }
+    attachBuiltInVideoMediaSession(
+      _player,
+      title: widget.title,
+      posterPath: widget.movie?.posterPath,
+    );
+    await _activateVideoAudioSession();
+  }
+
+  /// Movie-style session + focus so audio keeps running when the screen locks
+  /// (works with [Video.pauseUponEnteringBackgroundMode] when background play is on).
+  Future<void> _configureVideoAudioSession() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(
+        const AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playback,
+          avAudioSessionMode: AVAudioSessionMode.moviePlayback,
+          androidAudioAttributes: AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.movie,
+            usage: AndroidAudioUsage.media,
+          ),
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        ),
+      );
+    } catch (e) {
+      debugPrint('[Player] Audio session configure: $e');
+    }
+  }
+
+  Future<void> _activateVideoAudioSession() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[Player] Audio session activate: $e');
+    }
+  }
+
   /// Rotate back to portrait & restore system UI BEFORE popping,
   /// so the details page never sees stale landscape dimensions.
   Future<void> _exitPlayer() async {
@@ -674,6 +737,19 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         !_continuePlaybackInBackground &&
         !_disposed) {
       _player.pause();
+    }
+    // Re-assert audio focus when locking the screen while background play is on.
+    if (state == AppLifecycleState.paused &&
+        _continuePlaybackInBackground &&
+        !_disposed &&
+        _isPlayingNotifier.value) {
+      _activateVideoAudioSession();
+    }
+    if (state == AppLifecycleState.resumed &&
+        _continuePlaybackInBackground &&
+        !_disposed &&
+        _isPlayingNotifier.value) {
+      _activateVideoAudioSession();
     }
   }
 
@@ -852,6 +928,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           setState(() {
             _currentUrl = source.url;
           });
+          await _afterVideoSourceOpened();
           return; // Opened successfully (might still error out during buffering)
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -872,6 +949,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await _configureMpvProperties();
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
           _player.setVolume(_volume);
+          await _afterVideoSourceOpened();
           return;
         } catch (e) {
           retryCount++;
@@ -972,6 +1050,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
+        await _afterVideoSourceOpened();
         return true;
       }
     } catch (e) {
@@ -1039,6 +1118,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (_disposed) return;
       _isPlayingNotifier.value = playing;
       if (playing) {
+        attachBuiltInVideoMediaSession(
+          _player,
+          title: widget.title,
+          posterPath: widget.movie?.posterPath,
+        );
+        _activateVideoAudioSession();
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
@@ -2299,31 +2384,40 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             fit: StackFit.expand,
             children: [
               // ── 1. Video ─────────────────────────────────────────────────
-              Video(
-                controller: _controller,
-                controls: NoVideoControls,
-                fit: _videoFit,
-                fill: Colors.black,
-                subtitleViewConfiguration: SubtitleViewConfiguration(
-                  style: TextStyle(
-                    height: 1.4,
-                    fontSize: _subtitleSize,
-                    letterSpacing: 0.0,
-                    wordSpacing: 0.0,
-                    color: Colors.white,
-                    fontWeight: FontWeight.normal,
-                    backgroundColor: const Color(0xAA000000),
-                    shadows: const [
-                      Shadow(
-                          blurRadius: 10,
-                          color: Colors.black,
-                          offset: Offset.zero)
-                    ],
-                  ),
-                  textAlign: TextAlign.center,
-                  padding: EdgeInsets.fromLTRB(
-                      24, 0, 24, _subtitleBottomPadding),
-                ),
+              ValueListenableBuilder<bool>(
+                valueListenable:
+                    SettingsService.builtinPlayerSubtitlesEnabledNotifier,
+                builder: (context, subsOn, _) {
+                  return Video(
+                    controller: _controller,
+                    controls: NoVideoControls,
+                    fit: _videoFit,
+                    fill: Colors.black,
+                    pauseUponEnteringBackgroundMode:
+                        !_continuePlaybackInBackground,
+                    subtitleViewConfiguration: SubtitleViewConfiguration(
+                      visible: subsOn,
+                      style: TextStyle(
+                        height: 1.4,
+                        fontSize: _subtitleSize,
+                        letterSpacing: 0.0,
+                        wordSpacing: 0.0,
+                        color: Colors.white,
+                        fontWeight: FontWeight.normal,
+                        backgroundColor: const Color(0xAA000000),
+                        shadows: const [
+                          Shadow(
+                              blurRadius: 10,
+                              color: Colors.black,
+                              offset: Offset.zero)
+                        ],
+                      ),
+                      textAlign: TextAlign.center,
+                      padding: EdgeInsets.fromLTRB(
+                          24, 0, 24, _subtitleBottomPadding),
+                    ),
+                  );
+                },
               ),
 
               // ── 2. Gesture layer ─────────────────────────────────────────

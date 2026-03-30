@@ -25,6 +25,7 @@ import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
 import '../../api/settings_service.dart';
+import '../../services/built_in_video_media_session.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
@@ -516,10 +517,14 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       ),
     );
 
+    SettingsService.builtinPlayerSubtitlesEnabledNotifier
+        .addListener(_onBuiltinSubtitlesSettingChanged);
+
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      await SettingsService().getBuiltinPlayerSubtitlesEnabled();
       _continuePlaybackInBackground =
           await SettingsService().continuePlaybackInBackground();
       if (!mounted) return;
@@ -552,6 +557,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _saveWatchHistory();
 
     _disposed = true;
+    SettingsService.builtinPlayerSubtitlesEnabledNotifier
+        .removeListener(_onBuiltinSubtitlesSettingChanged);
+    detachBuiltInVideoMediaSession();
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     windowManager.removeListener(this);
     WidgetsBinding.instance.removeObserver(this);
@@ -583,6 +591,26 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     TorrentStreamService().removeTorrent(torrentId);
 
     super.dispose();
+  }
+
+  void _onBuiltinSubtitlesSettingChanged() {
+    if (!mounted || _disposed) return;
+    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
+      _player.setSubtitleTrack(SubtitleTrack.no());
+    }
+    setState(() {});
+  }
+
+  Future<void> _afterVideoSourceOpened() async {
+    if (_disposed) return;
+    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+    }
+    attachBuiltInVideoMediaSession(
+      _player,
+      title: widget.title,
+      posterPath: widget.movie?.posterPath,
+    );
   }
 
   @override
@@ -738,6 +766,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           setState(() {
             _currentUrl = source.url;
           });
+          await _afterVideoSourceOpened();
           return; // Opened successfully
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -758,6 +787,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           await _configureMpvProperties();
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
           _player.setVolume(_volumeNotifier.value);
+          await _afterVideoSourceOpened();
           return;
         } catch (e) {
           retryCount++;
@@ -858,6 +888,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
+        await _afterVideoSourceOpened();
         return true;
       }
     } catch (e) {
@@ -914,6 +945,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       if (_disposed) return;
       _isPlayingNotifier.value = playing;
       if (playing) {
+        attachBuiltInVideoMediaSession(
+          _player,
+          title: widget.title,
+          posterPath: widget.movie?.posterPath,
+        );
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
@@ -2167,31 +2203,40 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
               fit: StackFit.expand,
               children: [
                 // ── Video ────────────────────────────────────────────────
-                Video(
-                  controller: _controller,
-                  controls: NoVideoControls,
-                  fit: _videoFit,
-                  fill: Colors.black,
-                  subtitleViewConfiguration: SubtitleViewConfiguration(
-                    style: TextStyle(
-                      height: 1.4,
-                      fontSize: _subtitleSize,
-                      letterSpacing: 0.0,
-                      wordSpacing: 0.0,
-                      color: Colors.white,
-                      fontWeight: FontWeight.normal,
-                      backgroundColor: const Color(0xAA000000),
-                      shadows: const [
-                        Shadow(
-                            blurRadius: 10,
-                            color: Colors.black,
-                            offset: Offset.zero)
-                      ],
-                    ),
-                    textAlign: TextAlign.center,
-                    padding: EdgeInsets.fromLTRB(
-                        24, 0, 24, _subtitleBottomPadding),
-                  ),
+                ValueListenableBuilder<bool>(
+                  valueListenable:
+                      SettingsService.builtinPlayerSubtitlesEnabledNotifier,
+                  builder: (context, subsOn, _) {
+                    return Video(
+                      controller: _controller,
+                      controls: NoVideoControls,
+                      fit: _videoFit,
+                      fill: Colors.black,
+                      pauseUponEnteringBackgroundMode:
+                          !_continuePlaybackInBackground,
+                      subtitleViewConfiguration: SubtitleViewConfiguration(
+                        visible: subsOn,
+                        style: TextStyle(
+                          height: 1.4,
+                          fontSize: _subtitleSize,
+                          letterSpacing: 0.0,
+                          wordSpacing: 0.0,
+                          color: Colors.white,
+                          fontWeight: FontWeight.normal,
+                          backgroundColor: const Color(0xAA000000),
+                          shadows: const [
+                            Shadow(
+                                blurRadius: 10,
+                                color: Colors.black,
+                                offset: Offset.zero)
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                        padding: EdgeInsets.fromLTRB(
+                            24, 0, 24, _subtitleBottomPadding),
+                      ),
+                    );
+                  },
                 ),
 
                 // ── Controls Overlay ─────────────────────────────────────

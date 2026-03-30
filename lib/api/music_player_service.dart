@@ -27,6 +27,9 @@ class MusicPlayerService {
     _handler = handler as PlayTorrioAudioHandler;
   }
 
+  /// Same handler used for music, audiobooks, and built-in video media session.
+  PlayTorrioAudioHandler? get playTorrioAudioHandler => _handler;
+
   void _useMusicForNotifications() {
     _handler?.setPlayerType(AudioPlayerType.music, _player);
   }

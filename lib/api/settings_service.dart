@@ -29,7 +29,14 @@ class SettingsService {
   static const String _showAndroidPipButtonKey = 'playback_show_android_pip_button';
   /// Android 12+: enter PiP automatically when user leaves the app while playing.
   static const String _autoEnterPipAndroidKey = 'playback_auto_pip_android';
-  
+  /// Built-in player: show embedded / external subtitles (Flutter overlay + mpv track).
+  static const String _builtinPlayerSubtitlesEnabledKey =
+      'playback_builtin_subtitles_enabled';
+
+  /// Keeps the built-in player UI in sync when the user toggles subtitles in Settings.
+  static final ValueNotifier<bool> builtinPlayerSubtitlesEnabledNotifier =
+      ValueNotifier<bool>(true);
+
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
@@ -146,6 +153,21 @@ class SettingsService {
   Future<void> setAutoEnterPipAndroid(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_autoEnterPipAndroidKey, value);
+  }
+
+  Future<bool> getBuiltinPlayerSubtitlesEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_builtinPlayerSubtitlesEnabledKey) ?? true;
+    if (builtinPlayerSubtitlesEnabledNotifier.value != v) {
+      builtinPlayerSubtitlesEnabledNotifier.value = v;
+    }
+    return v;
+  }
+
+  Future<void> setBuiltinPlayerSubtitlesEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_builtinPlayerSubtitlesEnabledKey, value);
+    builtinPlayerSubtitlesEnabledNotifier.value = value;
   }
 
   Future<bool> isStreamingModeEnabled() async {
@@ -379,6 +401,7 @@ class SettingsService {
       _continuePlaybackInBackgroundKey,
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
+      _builtinPlayerSubtitlesEnabledKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -440,6 +463,7 @@ class SettingsService {
       _continuePlaybackInBackgroundKey,
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
+      _builtinPlayerSubtitlesEnabledKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
