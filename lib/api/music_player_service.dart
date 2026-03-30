@@ -27,6 +27,10 @@ class MusicPlayerService {
     _handler = handler as PlayTorrioAudioHandler;
   }
 
+  void _useMusicForNotifications() {
+    _handler?.setPlayerType(AudioPlayerType.music, _player);
+  }
+
   final ValueNotifier<MusicTrack?> currentTrack = ValueNotifier<MusicTrack?>(null);
   final ValueNotifier<List<MusicTrack>> playlist = ValueNotifier<List<MusicTrack>>([]);
   final ValueNotifier<bool> isPlaying = ValueNotifier<bool>(false);
@@ -99,7 +103,8 @@ class MusicPlayerService {
 
   Future<void> playTrack(MusicTrack track, {List<MusicTrack>? newPlaylist}) async {
     debugPrint('MusicPlayerService: Preparing to play: ${track.title} by ${track.artist}');
-    
+
+    _useMusicForNotifications();
     _isLoadingTrack = true;
     final generation = ++_playGeneration; // Cancel any in-flight extraction
     try {
@@ -225,9 +230,20 @@ class MusicPlayerService {
     }
   }
 
-  void play() => _player.play();
-  void pause() => _player.pause();
-  void togglePlay() => _player.playOrPause();
+  void play() {
+    _useMusicForNotifications();
+    _player.play();
+  }
+
+  void pause() {
+    _useMusicForNotifications();
+    _player.pause();
+  }
+
+  void togglePlay() {
+    _useMusicForNotifications();
+    _player.playOrPause();
+  }
 
   Future<void> stop() async {
     await _player.stop();
@@ -257,6 +273,7 @@ class MusicPlayerService {
 
   void next() {
     if (playlist.value.isEmpty) return;
+    _useMusicForNotifications();
 
     if (isShuffleEnabled.value) {
       // Build list of unplayed indices, excluding the current track
@@ -285,6 +302,7 @@ class MusicPlayerService {
 
   void previous() {
     if (playlist.value.isEmpty) return;
+    _useMusicForNotifications();
     _currentIndex = (_currentIndex - 1) % playlist.value.length;
     if (_currentIndex < 0) _currentIndex = playlist.value.length - 1;
     playTrack(playlist.value[_currentIndex]);

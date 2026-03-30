@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:media_kit/media_kit.dart' as mk;
+import 'audiobook_player_service.dart';
 import 'music_player_service.dart';
 
 enum AudioPlayerType { music, audiobook }
@@ -84,6 +85,8 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> skipToNext() async {
     if (_currentType == AudioPlayerType.music) {
       MusicPlayerService().next();
+    } else {
+      AudiobookPlayerService().skipToNextChapter();
     }
   }
 
@@ -91,6 +94,8 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> skipToPrevious() async {
     if (_currentType == AudioPlayerType.music) {
       MusicPlayerService().previous();
+    } else {
+      AudiobookPlayerService().skipToPreviousChapter();
     }
   }
 

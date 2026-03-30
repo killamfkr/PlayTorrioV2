@@ -79,6 +79,10 @@ class AudiobookPlayerService {
         MediaAction.seek,
         MediaAction.seekForward,
         MediaAction.seekBackward,
+        MediaAction.playPause,
+        MediaAction.stop,
+        MediaAction.skipToNext,
+        MediaAction.skipToPrevious,
       },
       androidCompactActionIndices: const [0, 1, 3],
       processingState: isBuffering.value ? AudioProcessingState.buffering : AudioProcessingState.ready,
@@ -154,6 +158,20 @@ class AudiobookPlayerService {
   void playOrPause() => _player.playOrPause();
   void seek(Duration p) => _player.seek(p);
   void setRate(double r) => _player.setRate(r);
+
+  void skipToNextChapter() {
+    final nextIdx = currentChapterIndex.value + 1;
+    if (nextIdx < _currentChapters.length) {
+      changeChapter(nextIdx);
+    }
+  }
+
+  void skipToPreviousChapter() {
+    final prevIdx = currentChapterIndex.value - 1;
+    if (prevIdx >= 0) {
+      changeChapter(prevIdx);
+    }
+  }
 
   Future<void> stop() async {
     await _player.stop();

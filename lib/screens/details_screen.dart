@@ -326,13 +326,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         streamAddons.any((a) => a['baseUrl'] == forceAddonBaseUrl)) {
       return forceAddonBaseUrl;
     }
-    final def = await _settings.getDefaultStremioAddonBaseUrl();
-    if (def != null &&
-        def.isNotEmpty &&
-        streamAddons.any((a) => a['baseUrl'] == def)) {
-      return def;
-    }
-    return 'playtorrio';
+    return _settings.resolveDefaultStreamSourceId(streamAddons);
   }
 
   Future<void> _fetchCastMembers() async {

@@ -20,6 +20,9 @@ class SettingsService {
   /// When set, Streaming / Details screens pre-select this addon (baseUrl) for streams.
   static const String _defaultStremioAddonBaseUrlKey = 'stremio_default_addon_base_url';
 
+  /// Stored when the user explicitly chooses built-in PlayTorrio over Stremio addons.
+  static const String streamSourceForcePlayTorrio = '__pref_playtorrio__';
+
   /// Built-in player: keep playing when app goes to background (e.g. home gesture).
   static const String _continuePlaybackInBackgroundKey = 'playback_continue_in_background';
   /// Show Picture-in-Picture control in the mobile player (Android).
@@ -72,7 +75,8 @@ class SettingsService {
     addonChangeNotifier.value++;
   }
 
-  /// `null` or empty → default stream source is PlayTorrio (built-in), not a Stremio addon.
+  /// Raw preference: `null` = auto (prefer first Stremio addon when installed),
+  /// [streamSourceForcePlayTorrio] = always PlayTorrio, else a specific addon baseUrl.
   Future<String?> getDefaultStremioAddonBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
     final v = prefs.getString(_defaultStremioAddonBaseUrlKey);
@@ -80,10 +84,35 @@ class SettingsService {
     return v;
   }
 
+  /// Resolves which source id to use on streaming UI: `'playtorrio'` or an addon baseUrl.
+  /// With no saved preference, prefers the first installed stream addon over built-in scrapers.
+  Future<String> resolveDefaultStreamSourceId(
+    List<Map<String, dynamic>> streamAddons,
+  ) async {
+    final raw = await getDefaultStremioAddonBaseUrl();
+    if (raw == streamSourceForcePlayTorrio) return 'playtorrio';
+    if (raw != null &&
+        raw.isNotEmpty &&
+        streamAddons.any((a) => a['baseUrl'] == raw)) {
+      return raw;
+    }
+    if (streamAddons.isNotEmpty) {
+      return streamAddons.first['baseUrl'] as String;
+    }
+    return 'playtorrio';
+  }
+
+  /// Pass `null` or `'__auto__'` to clear preference (auto: first addon).
+  /// Pass `'__playtorrio__'` to force built-in PlayTorrio when addons exist.
   Future<void> setDefaultStremioAddonBaseUrl(String? baseUrl) async {
     final prefs = await SharedPreferences.getInstance();
-    if (baseUrl == null || baseUrl.isEmpty) {
+    if (baseUrl == null || baseUrl.isEmpty || baseUrl == '__auto__') {
       await prefs.remove(_defaultStremioAddonBaseUrlKey);
+    } else if (baseUrl == '__playtorrio__') {
+      await prefs.setString(
+        _defaultStremioAddonBaseUrlKey,
+        streamSourceForcePlayTorrio,
+      );
     } else {
       await prefs.setString(_defaultStremioAddonBaseUrlKey, baseUrl);
     }

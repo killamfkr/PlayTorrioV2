@@ -159,11 +159,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<String> _preferredStreamSourceId(List<Map<String, dynamic>> addons) async {
-    final def = await _settings.getDefaultStremioAddonBaseUrl();
-    if (def != null && def.isNotEmpty && addons.any((a) => a['baseUrl'] == def)) {
-      return def;
-    }
-    return 'playtorrio';
+    return _settings.resolveDefaultStreamSourceId(addons);
   }
 
   Future<void> _startExtraction() async {
