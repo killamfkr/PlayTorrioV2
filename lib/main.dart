@@ -20,6 +20,7 @@ import 'models/movie.dart';
 import 'services/player_pool_service.dart';
 import 'utils/webview_cleanup.dart';
 import 'utils/app_theme.dart';
+import 'utils/device_profile.dart';
 
 import 'screens/main_screen.dart';
 import 'screens/search_screen.dart';
@@ -28,6 +29,7 @@ import 'screens/discover_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('[Boot] Flutter binding initialized');
+  await DeviceProfile.initAndroidProfile();
 
   // Configure InAppWebView (Android only — not supported on iOS)
   if (Platform.isAndroid) {
@@ -51,8 +53,15 @@ void main() async {
   
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    AutoOrientation.fullAutoMode(forceSensor: true);
-    SystemChrome.setPreferredOrientations([]);
+    if (DeviceProfile.isAndroidTv) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      AutoOrientation.fullAutoMode(forceSensor: true);
+      await SystemChrome.setPreferredOrientations([]);
+    }
   }
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -178,8 +187,13 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
-    )..repeat(reverse: true);
-    
+    );
+    if (DeviceProfile.isAndroidTv) {
+      _fadeController.value = 1.0;
+    } else {
+      _fadeController.repeat(reverse: true);
+    }
+
     _fadeAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
       CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut),
     );

@@ -1,9 +1,33 @@
 package com.example.play_torrio_native
 
+import android.app.UiModeManager
+import android.content.Context
+import android.content.res.Configuration
 import android.os.Bundle
 import com.ryanheise.audioservice.AudioServiceActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.play_torrio_native/device",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isAndroidTv" -> {
+                    val uiModeManager =
+                        getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
+                    val isTv =
+                        uiModeManager.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+                    result.success(isTv)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

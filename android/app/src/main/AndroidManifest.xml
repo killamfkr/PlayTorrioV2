@@ -23,7 +23,12 @@
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:extractNativeLibs="true">
+        android:extractNativeLibs="true"
+        android:largeHeap="true">
+        <!-- Skia tends to be more predictable than Impeller on Android TV / low-end GPU drivers. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

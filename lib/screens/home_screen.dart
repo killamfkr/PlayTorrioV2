@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shimmer/shimmer.dart';
@@ -18,6 +17,7 @@ import '../services/watch_history_service.dart';
 import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
@@ -1046,12 +1046,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       ),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(28),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: inner,
-      ),
+      sigma: 12,
+      child: inner,
     );
   }
 
@@ -1065,12 +1063,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       child: child,
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: inner,
-      ),
+      sigma: 12,
+      child: inner,
     );
   }
 
@@ -1085,12 +1081,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.7), size: 18),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: inner,
-      ),
+      sigma: 10,
+      child: inner,
     );
   }
 }
@@ -1156,12 +1150,10 @@ class _MovieSectionState extends State<_MovieSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-        child: inner,
-      ),
+      sigma: 6,
+      child: inner,
     );
   }
 
@@ -1340,12 +1332,10 @@ class _StaticMovieSectionState extends State<_StaticMovieSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-        child: inner,
-      ),
+      sigma: 6,
+      child: inner,
     );
   }
 
@@ -1599,12 +1589,10 @@ Widget _buildRatingBadge(double voteAverage) {
     ),
   );
   if (AppTheme.isLightMode) return inner;
-  return ClipRRect(
+  return DeviceProfile.backdropBlurOrPlain(
     borderRadius: BorderRadius.circular(8),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-      child: inner,
-    ),
+    sigma: 8,
+    child: inner,
   );
 }
 
@@ -1627,12 +1615,10 @@ Widget _buildRatingBadgeText(String rating) {
     ),
   );
   if (AppTheme.isLightMode) return content;
-  return ClipRRect(
+  return DeviceProfile.backdropBlurOrPlain(
     borderRadius: BorderRadius.circular(6),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-      child: content,
-    ),
+    sigma: 8,
+    child: content,
   );
 }
 
@@ -1680,12 +1666,10 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-        child: inner,
-      ),
+      sigma: 6,
+      child: inner,
     );
   }
 
@@ -2210,12 +2194,10 @@ Widget _buildCWPlayButton() {
     child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
   );
   if (AppTheme.isLightMode) return inner;
-  return ClipRRect(
+  return DeviceProfile.backdropBlurOrPlain(
     borderRadius: BorderRadius.circular(30),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-      child: inner,
-    ),
+    sigma: 6,
+    child: inner,
   );
 }
 
@@ -2459,12 +2441,10 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
 
   Widget _wrapFrosted({required double borderRadius, required Widget child}) {
     if (AppTheme.isLightMode) return child;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(borderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-        child: child,
-      ),
+      sigma: 6,
+      child: child,
     );
   }
 
@@ -2479,12 +2459,10 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return ClipRRect(
+    return DeviceProfile.backdropBlurOrPlain(
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-        child: inner,
-      ),
+      sigma: 6,
+      child: inner,
     );
   }
 

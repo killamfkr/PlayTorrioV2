@@ -20,6 +20,7 @@ import 'live_matches_screen.dart';
 import 'magnet_player_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
 import '../api/settings_service.dart';
 import '../services/app_updater_service.dart';
 import '../widgets/update_dialog.dart';
@@ -162,8 +163,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed && Platform.isAndroid) {
-      AutoOrientation.fullAutoMode(forceSensor: true);
-      SystemChrome.setPreferredOrientations([]);
+      if (!DeviceProfile.isAndroidTv) {
+        AutoOrientation.fullAutoMode(forceSensor: true);
+        SystemChrome.setPreferredOrientations([]);
+      }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
   }
@@ -404,7 +407,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
-    if (lightMode) {
+    if (lightMode || DeviceProfile.isAndroidTv) {
       return ClipRect(child: navContent);
     }
 
