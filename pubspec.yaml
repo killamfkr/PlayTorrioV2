@@ -51,6 +51,7 @@ dependencies:
   libtorrent_flutter: 1.7.4
   auto_orientation_v2: ^2.3.7
   file_picker: ^8.0.0+1
+  android_pip: ^2.0.2
 
 dev_dependencies:
   flutter_test:

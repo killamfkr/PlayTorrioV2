@@ -480,6 +480,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   bool _isLoadingNextEp = false;
   bool _nearEndOfEpisode = false;
 
+  bool _continuePlaybackInBackground = true;
+
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
   // ─────────────────────────────────────────────────────────────────────────
@@ -516,8 +518,12 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      _continuePlaybackInBackground =
+          await SettingsService().continuePlaybackInBackground();
+      if (!mounted) return;
+      setState(() {});
       _initPlayback();
       _startHideTimer();
       _fetchSubtitles();
@@ -582,11 +588,15 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // Save progress when app goes to background or is paused
-    if (state == AppLifecycleState.paused || 
+    if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _saveWatchHistory();
+    }
+    if (state == AppLifecycleState.paused &&
+        !_continuePlaybackInBackground &&
+        !_disposed) {
+      _player.pause();
     }
   }
 

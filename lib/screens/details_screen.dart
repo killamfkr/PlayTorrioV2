@@ -299,10 +299,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
         fullDetails = await _api.getMovieDetails(widget.movie.id);
       }
       if (mounted) {
+        final preferred = await _preferredStremioSourceId(streamAddons);
+        if (!mounted) return;
         setState(() {
           _movie = fullDetails;
           _streamAddons = streamAddons;
           _isLoading = false;
+          _selectedSourceId = preferred;
         });
         _autoSearch();
         _fetchAllStremioStreams();
@@ -312,6 +315,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<String> _preferredStremioSourceId(
+    List<Map<String, dynamic>> streamAddons, {
+    String? forceAddonBaseUrl,
+  }) async {
+    if (forceAddonBaseUrl != null &&
+        forceAddonBaseUrl.isNotEmpty &&
+        streamAddons.any((a) => a['baseUrl'] == forceAddonBaseUrl)) {
+      return forceAddonBaseUrl;
+    }
+    final def = await _settings.getDefaultStremioAddonBaseUrl();
+    if (def != null &&
+        def.isNotEmpty &&
+        streamAddons.any((a) => a['baseUrl'] == def)) {
+      return def;
+    }
+    return 'playtorrio';
   }
 
   Future<void> _fetchCastMembers() async {

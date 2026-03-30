@@ -8,6 +8,9 @@ import '../api/stream_extractor.dart';
 import '../api/stremio_service.dart';
 import '../api/stream_providers.dart';
 import '../api/webstreamr_service.dart';
+import '../api/settings_service.dart';
+import '../api/debrid_api.dart';
+import '../api/torrent_stream_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../services/episode_watched_service.dart';
 import 'player_screen.dart';
@@ -37,6 +40,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   final StreamExtractor _extractor = StreamExtractor();
   final StremioService _stremio = StremioService();
   final WebStreamrService _webStreamr = WebStreamrService();
+  final SettingsService _settings = SettingsService();
   final TmdbApi _api = TmdbApi();
   late Movie _movie;
   bool _isLoading = true;
@@ -44,8 +48,10 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   List<Movie> _similarContent = [];
 
   // Source Selection
-  final String _selectedSourceId = 'playtorrio';
+  String _selectedSourceId = 'playtorrio';
   List<Map<String, dynamic>> _streamAddons = [];
+  List<dynamic> _stremioStreams = [];
+  bool _isStremioFetching = false;
 
   // TV State
   int _selectedSeason = 1;
@@ -84,7 +90,8 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
       }
 
       final streamAddons = await _stremio.getAddonsForResource('stream');
-      
+      final preferredSource = await _preferredStreamSourceId(streamAddons);
+
       // Fetch similar content
       final similar = _movie.mediaType == 'tv' 
           ? await _api.getSimilarTvShows(_movie.id)
@@ -94,6 +101,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
         setState(() {
           _movie = fullDetails;
           _streamAddons = streamAddons;
+          _selectedSourceId = preferredSource;
           _similarContent = similar;
           _isLoading = false;
         });
@@ -101,6 +109,8 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
         // Auto-start extraction when opened with a start position (e.g. from Continue Watching / Trakt)
         if (widget.startPosition != null) {
           _startExtraction();
+        } else if (_selectedSourceId != 'playtorrio') {
+          _startStremioExtraction();
         }
       }
     } catch (e) {
@@ -148,6 +158,14 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   // EXTRACTION LOGIC - PRESERVED FROM ORIGINAL
   // ═══════════════════════════════════════════════════════════════════════════
 
+  Future<String> _preferredStreamSourceId(List<Map<String, dynamic>> addons) async {
+    final def = await _settings.getDefaultStremioAddonBaseUrl();
+    if (def != null && def.isNotEmpty && addons.any((a) => a['baseUrl'] == def)) {
+      return def;
+    }
+    return 'playtorrio';
+  }
+
   Future<void> _startExtraction() async {
     if (_selectedSourceId == 'playtorrio') {
       _startPlayTorrioExtraction();
@@ -157,10 +175,23 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   }
 
   Future<void> _startStremioExtraction() async {
-    final addon = _streamAddons.firstWhere((a) => a['baseUrl'] == _selectedSourceId);
-    final baseUrl = addon['baseUrl'];
-    
+    if (_streamAddons.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Install a Stremio addon in Settings first.')),
+        );
+      }
+      return;
+    }
+    final addon = _streamAddons.firstWhere(
+      (a) => a['baseUrl'] == _selectedSourceId,
+      orElse: () => _streamAddons.first,
+    );
+    final baseUrl = addon['baseUrl'] as String;
+
     setState(() {
+      _isStremioFetching = true;
+      _stremioStreams = [];
       _statusMessage = 'Fetching from ${addon['name']}...';
     });
 
@@ -175,18 +206,143 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
 
       if (mounted) {
         setState(() {
+          _stremioStreams = streams;
           if (streams.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No streams found for this content.')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No streams found for this content.')),
+            );
           }
         });
       }
-
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
-      if (mounted) setState(() => _statusMessage = null);
+      if (mounted) {
+        setState(() {
+          _isStremioFetching = false;
+          _statusMessage = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _playStremioStream(Map<String, dynamic> stream) async {
+    final useDebrid = await _settings.useDebridForStreams();
+    final debridService = await _settings.getDebridService();
+
+    if (stream['url'] != null) {
+      if (!mounted) return;
+      final headers = stream['behaviorHints'] is Map
+          ? Map<String, String>.from(
+              (stream['behaviorHints'] as Map)['proxyHeaders']?['request'] as Map? ?? {},
+            )
+          : <String, String>{};
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PlayerScreen(
+            streamUrl: stream['url'] as String,
+            title: _movie.mediaType == 'tv'
+                ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                : _movie.title,
+            headers: headers.isEmpty ? null : headers,
+            movie: _movie,
+            activeProvider: 'stremio_direct',
+            selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
+            selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+            stremioId: _movie.mediaType == 'tv'
+                ? '${_movie.imdbId ?? ''}:$_selectedSeason:$_selectedEpisode'
+                : (_movie.imdbId ?? ''),
+            stremioAddonBaseUrl: _selectedSourceId != 'playtorrio' ? _selectedSourceId : null,
+          ),
+        ),
+      );
+    } else if (stream['infoHash'] != null) {
+      final hash = stream['infoHash'] as String;
+      final magnet = 'magnet:?xt=urn:btih:$hash';
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black,
+        builder: (context) => LoadingOverlay(
+          movie: _movie,
+          message: useDebrid && debridService != 'None'
+              ? 'Resolving with $debridService...'
+              : 'Starting torrent engine...',
+        ),
+      );
+
+      String? finalStreamUrl;
+
+      try {
+        if (useDebrid && debridService != 'None') {
+          final debrid = DebridApi();
+          List<DebridFile> files;
+          if (debridService == 'Real-Debrid') {
+            files = await debrid.resolveRealDebrid(magnet);
+          } else {
+            files = await debrid.resolveTorBox(magnet);
+          }
+
+          if (files.isNotEmpty) {
+            if (_movie.mediaType == 'tv') {
+              final seasonStr = 'S${_selectedSeason.toString().padLeft(2, '0')}';
+              final episodeStr = 'E${_selectedEpisode.toString().padLeft(2, '0')}';
+              final match = files
+                  .where((f) =>
+                      f.filename.toUpperCase().contains(seasonStr) &&
+                      f.filename.toUpperCase().contains(episodeStr))
+                  .toList();
+
+              if (match.isNotEmpty) {
+                finalStreamUrl = match.first.downloadUrl;
+              } else {
+                files.sort((a, b) => b.filesize.compareTo(a.filesize));
+                finalStreamUrl = files.first.downloadUrl;
+              }
+            } else {
+              files.sort((a, b) => b.filesize.compareTo(a.filesize));
+              finalStreamUrl = files.first.downloadUrl;
+            }
+          }
+        } else {
+          finalStreamUrl = await TorrentStreamService().streamTorrent(
+            magnet,
+            season: _movie.mediaType == 'tv' ? _selectedSeason : null,
+            episode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+          );
+        }
+      } catch (e) {
+        debugPrint('Stremio torrent resolve error: $e');
+      }
+
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+
+      if (mounted && finalStreamUrl != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PlayerScreen(
+              streamUrl: finalStreamUrl!,
+              title: _movie.mediaType == 'tv'
+                  ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                  : _movie.title,
+              magnetLink: magnet,
+              movie: _movie,
+              selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
+              selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+            ),
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to resolve Stremio torrent.')),
+        );
+      }
     }
   }
 
@@ -602,65 +758,224 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
     );
   }
 
+  Widget _buildStreamSourceSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'STREAM SOURCE',
+          style: GoogleFonts.montserrat(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+            color: Colors.white54,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedSourceId == 'playtorrio' ||
+                      _streamAddons.any((a) => a['baseUrl'] == _selectedSourceId)
+                  ? _selectedSourceId
+                  : 'playtorrio',
+              isExpanded: true,
+              dropdownColor: const Color(0xFF12121A),
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Color(0xFF1565C0)),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              items: [
+                const DropdownMenuItem(
+                  value: 'playtorrio',
+                  child: Row(
+                    children: [
+                      Icon(Icons.play_circle_filled, color: Color(0xFF1565C0), size: 20),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('PlayTorrio (built-in)')),
+                    ],
+                  ),
+                ),
+                ..._streamAddons.map(
+                  (addon) => DropdownMenuItem(
+                    value: addon['baseUrl'] as String,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.extension, color: Colors.lightBlueAccent, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            addon['name']?.toString() ?? 'Addon',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              onChanged: (val) async {
+                if (val == null) return;
+                setState(() {
+                  _selectedSourceId = val;
+                  _stremioStreams = [];
+                });
+                if (val != 'playtorrio') {
+                  await _startStremioExtraction();
+                }
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStremioStreamList() {
+    if (_stremioStreams.isEmpty) return const SizedBox.shrink();
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _stremioStreams.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final s = _stremioStreams[index] as Map<String, dynamic>;
+        final title = s['title'] ?? s['name'] ?? 'Stream';
+        final description = s['description'] ?? '';
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _playStremioStream(s),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.play_circle_outline, color: Color(0xFF1565C0), size: 28),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title.toString(),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            height: 1.25,
+                          ),
+                        ),
+                        if (description.toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              description.toString(),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12, color: Colors.white38),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildActionButtons() {
     final screenWidth = MediaQuery.of(context).size.width;
     final isDesktop = screenWidth >= 600;
-    
+
     return Padding(
       padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_isExtracting)
-            Column(
-              children: [
-                const CircularProgressIndicator(color: Color(0xFF1565C0)),
-                const SizedBox(height: 16),
-                Text(
-                  _statusMessage ?? 'Processing...',
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              ],
-            )
-          else
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: _startExtraction,
-                child: Container(
-                  width: isDesktop ? 300 : double.infinity,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF1565C0), Color(0xFF0D47A1)],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF1565C0).withValues(alpha: 0.4),
-                        blurRadius: 20,
-                        spreadRadius: 2,
-                      ),
-                    ],
+          _buildStreamSourceSelector(),
+          const SizedBox(height: 20),
+          if (_selectedSourceId == 'playtorrio') ...[
+            if (_isExtracting)
+              Column(
+                children: [
+                  const CircularProgressIndicator(color: Color(0xFF1565C0)),
+                  const SizedBox(height: 16),
+                  Text(
+                    _statusMessage ?? 'Processing...',
+                    style: const TextStyle(color: Colors.white70),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.play_arrow, color: Colors.white, size: 28),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Play Now',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+                ],
+              )
+            else
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: _startExtraction,
+                  child: Container(
+                    width: isDesktop ? 300 : double.infinity,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1565C0), Color(0xFF0D47A1)],
                       ),
-                    ],
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF1565C0).withValues(alpha: 0.4),
+                          blurRadius: 20,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.play_arrow, color: Colors.white, size: 28),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Play Now',
+                          style: GoogleFonts.montserrat(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+          ] else ...[
+            if (_isStremioFetching)
+              const Column(
+                children: [
+                  CircularProgressIndicator(color: Color(0xFF1565C0)),
+                  SizedBox(height: 16),
+                  Text('Loading streams…', style: TextStyle(color: Colors.white70)),
+                ],
+              )
+            else if (_stremioStreams.isEmpty)
+              TextButton.icon(
+                onPressed: _startStremioExtraction,
+                icon: const Icon(Icons.cloud_download_outlined, color: Colors.white70),
+                label: const Text('Load streams', style: TextStyle(color: Colors.white70)),
+              )
+            else
+              _buildStremioStreamList(),
+          ],
         ],
       ),
     );

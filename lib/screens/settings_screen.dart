@@ -100,6 +100,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _navbarVisible = [];
   List<String> _navbarOrder = [];
 
+  /// `__playtorrio__` or a Stremio addon [baseUrl].
+  String _defaultStremioStreamKey = '__playtorrio__';
+  bool _continuePlaybackInBackground = true;
+  bool _showAndroidPipButton = true;
+  bool _autoEnterPipAndroid = false;
+
   @override
   void initState() {
     super.initState();
@@ -158,12 +164,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load light mode
     final lightMode = await _settings.isLightModeEnabled();
 
+    final defaultAddonUrl = await _settings.getDefaultStremioAddonBaseUrl();
+    final bgPlay = await _settings.continuePlaybackInBackground();
+    final pipBtn = await _settings.showAndroidPipButton();
+    final autoPip = await _settings.autoEnterPipAndroid();
+
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
     // Full order: visible items first, then hidden items
     final allIds = SettingsService.allNavIds;
     final hidden = allIds.where((id) => !navVisible.contains(id)).toList();
     final navOrder = [...navVisible, ...hidden];
+
+    var streamKey =
+        (defaultAddonUrl != null && defaultAddonUrl.isNotEmpty) ? defaultAddonUrl! : '__playtorrio__';
+    if (streamKey != '__playtorrio__' &&
+        !addons.any((a) => a['baseUrl'] == streamKey)) {
+      streamKey = '__playtorrio__';
+      await _settings.setDefaultStremioAddonBaseUrl(null);
+    }
 
     if (mounted) {
       setState(() {
@@ -198,6 +217,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isLightMode = lightMode;
         _navbarVisible = navVisible;
         _navbarOrder = navOrder;
+        _defaultStremioStreamKey = streamKey;
+        _continuePlaybackInBackground = bgPlay;
+        _showAndroidPipButton = pipBtn;
+        _autoEnterPipAndroid = autoPip;
       });
     }
   }
@@ -373,6 +396,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 32),
                     _buildSectionHeader('Stremio Addons'),
                     _buildAddonInput(),
+                    _buildDefaultStremioStreamSource(),
+                    const SizedBox(height: 32),
+                    _buildSectionHeader('Built-in Player'),
+                    if (Platform.isAndroid) ...[
+                      _buildFocusableToggle(
+                        'Continue playback in background',
+                        'When off, video pauses if you leave the app (home, app switcher).',
+                        _continuePlaybackInBackground,
+                        (val) async {
+                          await _settings.setContinuePlaybackInBackground(val);
+                          setState(() => _continuePlaybackInBackground = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Picture-in-picture button',
+                        'Show PiP in the player toolbar (Android 8+).',
+                        _showAndroidPipButton,
+                        (val) async {
+                          await _settings.setShowAndroidPipButton(val);
+                          setState(() => _showAndroidPipButton = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Auto-enter PiP when leaving app',
+                        'Android 12+: small overlay when you go home while playing. Requires PiP enabled in system settings.',
+                        _autoEnterPipAndroid,
+                        (val) async {
+                          await _settings.setAutoEnterPipAndroid(val);
+                          setState(() => _autoEnterPipAndroid = val);
+                        },
+                      ),
+                    ] else ...[
+                      _buildFocusableToggle(
+                        'Continue playback in background',
+                        'When off, video pauses if the window loses focus.',
+                        _continuePlaybackInBackground,
+                        (val) async {
+                          await _settings.setContinuePlaybackInBackground(val);
+                          setState(() => _continuePlaybackInBackground = val);
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -818,6 +883,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDefaultStremioStreamSource() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Default stream source',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Used when opening the streaming details screen or movie details (Stremio section).',
+            style: TextStyle(fontSize: 12, color: Colors.white38),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _installedAddons.any((a) => a['baseUrl'] == _defaultStremioStreamKey) ||
+                        _defaultStremioStreamKey == '__playtorrio__'
+                    ? _defaultStremioStreamKey
+                    : '__playtorrio__',
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1A0B2E),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                items: [
+                  const DropdownMenuItem(
+                    value: '__playtorrio__',
+                    child: Text('PlayTorrio (built-in scrapers)'),
+                  ),
+                  ..._installedAddons.map(
+                    (a) => DropdownMenuItem(
+                      value: a['baseUrl'] as String,
+                      child: Text(
+                        a['name']?.toString() ?? 'Addon',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await _settings.setDefaultStremioAddonBaseUrl(v == '__playtorrio__' ? null : v);
+                  if (mounted) setState(() => _defaultStremioStreamKey = v);
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

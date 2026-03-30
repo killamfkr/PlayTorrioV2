@@ -5,12 +5,16 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
 import com.ryanheise.audioservice.AudioServiceActivity
+import com.thesparks.android_pip.PipCallbackHelper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
 
+    private val pipCallbackHelper = PipCallbackHelper()
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        pipCallbackHelper.configureFlutterEngine(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -27,6 +31,14 @@ class MainActivity : AudioServiceActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        pipCallbackHelper.onPictureInPictureModeChanged(isInPictureInPictureMode, this)
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

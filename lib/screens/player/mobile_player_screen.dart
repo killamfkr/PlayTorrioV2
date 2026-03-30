@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
+import 'package:android_pip/android_pip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -489,6 +491,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   bool _isLoadingNextEp = false;
   bool _nearEndOfEpisode = false;
 
+  bool _continuePlaybackInBackground = true;
+  bool _showAndroidPipInToolbar = false;
+
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
   // ─────────────────────────────────────────────────────────────────────────
@@ -557,8 +562,22 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
     });
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      _continuePlaybackInBackground =
+          await SettingsService().continuePlaybackInBackground();
+      if (Platform.isAndroid) {
+        _showAndroidPipInToolbar =
+            await SettingsService().showAndroidPipButton();
+        final autoPip = await SettingsService().autoEnterPipAndroid();
+        if (autoPip && await AndroidPIP.isAutoPipAvailable) {
+          try {
+            await AndroidPIP().setAutoPipMode();
+          } catch (_) {}
+        }
+      }
+      if (!mounted) return;
+      setState(() {});
       _initPlayback();
       _startHideTimer();
       _fetchSubtitles();
@@ -646,11 +665,44 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // Save progress when app goes to background or is paused
-    if (state == AppLifecycleState.paused || 
+    if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _saveWatchHistory();
+    }
+    if (state == AppLifecycleState.paused &&
+        !_continuePlaybackInBackground &&
+        !_disposed) {
+      _player.pause();
+    }
+  }
+
+  Future<void> _enterPictureInPicture() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (!await AndroidPIP.isPipAvailable) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Picture-in-picture is not available here.')),
+          );
+        }
+        return;
+      }
+      final ok = await AndroidPIP().enterPipMode();
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Could not enter PiP. Try starting playback first, or enable PiP for this app in system settings.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PiP error: $e')),
+        );
+      }
     }
   }
 
@@ -2553,6 +2605,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 onPressed: _showSubtitlesMenu,
                 size: btnSize, iconSize: iconSz,
               ),
+              if (Platform.isAndroid && _showAndroidPipInToolbar) ...[
+                SizedBox(width: gap),
+                _GlassIconButton(
+                  icon: Icons.picture_in_picture_alt_outlined,
+                  onPressed: _enterPictureInPicture,
+                  size: btnSize, iconSize: iconSz,
+                ),
+              ],
               // Show sources button for providers with multiple sources
               if ((_currentProvider == 'amri' || _currentProvider == 'webstreamr' || _currentProvider == 'arabic') && _currentSources != null && _currentSources!.isNotEmpty) ...[
                 SizedBox(width: gap),

@@ -17,6 +17,15 @@ class SettingsService {
   static const String _useDebridKey = 'use_debrid_for_streams';
   static const String _debridServiceKey = 'debrid_service';
   static const String _stremioAddonsKey = 'stremio_addons';
+  /// When set, Streaming / Details screens pre-select this addon (baseUrl) for streams.
+  static const String _defaultStremioAddonBaseUrlKey = 'stremio_default_addon_base_url';
+
+  /// Built-in player: keep playing when app goes to background (e.g. home gesture).
+  static const String _continuePlaybackInBackgroundKey = 'playback_continue_in_background';
+  /// Show Picture-in-Picture control in the mobile player (Android).
+  static const String _showAndroidPipButtonKey = 'playback_show_android_pip_button';
+  /// Android 12+: enter PiP automatically when user leaves the app while playing.
+  static const String _autoEnterPipAndroidKey = 'playback_auto_pip_android';
   
   // External player setting
   static const String _externalPlayerKey = 'external_player';
@@ -61,6 +70,53 @@ class SettingsService {
     current.removeWhere((a) => a['baseUrl'] == baseUrl);
     await prefs.setStringList(_stremioAddonsKey, current.map((e) => json.encode(e)).toList().cast<String>());
     addonChangeNotifier.value++;
+  }
+
+  /// `null` or empty → default stream source is PlayTorrio (built-in), not a Stremio addon.
+  Future<String?> getDefaultStremioAddonBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_defaultStremioAddonBaseUrlKey);
+    if (v == null || v.isEmpty) return null;
+    return v;
+  }
+
+  Future<void> setDefaultStremioAddonBaseUrl(String? baseUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (baseUrl == null || baseUrl.isEmpty) {
+      await prefs.remove(_defaultStremioAddonBaseUrlKey);
+    } else {
+      await prefs.setString(_defaultStremioAddonBaseUrlKey, baseUrl);
+    }
+  }
+
+  Future<bool> continuePlaybackInBackground() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_continuePlaybackInBackgroundKey) ?? true;
+  }
+
+  Future<void> setContinuePlaybackInBackground(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_continuePlaybackInBackgroundKey, value);
+  }
+
+  Future<bool> showAndroidPipButton() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_showAndroidPipButtonKey) ?? true;
+  }
+
+  Future<void> setShowAndroidPipButton(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_showAndroidPipButtonKey, value);
+  }
+
+  Future<bool> autoEnterPipAndroid() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_autoEnterPipAndroidKey) ?? false;
+  }
+
+  Future<void> setAutoEnterPipAndroid(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoEnterPipAndroidKey, value);
   }
 
   Future<bool> isStreamingModeEnabled() async {
@@ -287,7 +343,14 @@ class SettingsService {
     // --- SharedPreferences ---
     final prefsMap = <String, dynamic>{};
     // Bool keys
-    for (final key in [_streamingModeKey, _useDebridKey, _lightModeKey]) {
+    for (final key in [
+      _streamingModeKey,
+      _useDebridKey,
+      _lightModeKey,
+      _continuePlaybackInBackgroundKey,
+      _showAndroidPipButtonKey,
+      _autoEnterPipAndroidKey,
+    ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
     }
@@ -301,6 +364,7 @@ class SettingsService {
       _prowlarrBaseUrlKey,
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
+      _defaultStremioAddonBaseUrlKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -340,7 +404,14 @@ class SettingsService {
     final prefsMap = data['shared_preferences'] as Map<String, dynamic>? ?? {};
 
     // Bool keys
-    for (final key in [_streamingModeKey, _useDebridKey, _lightModeKey]) {
+    for (final key in [
+      _streamingModeKey,
+      _useDebridKey,
+      _lightModeKey,
+      _continuePlaybackInBackgroundKey,
+      _showAndroidPipButtonKey,
+      _autoEnterPipAndroidKey,
+    ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
       }
@@ -355,6 +426,7 @@ class SettingsService {
       _prowlarrBaseUrlKey,
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
+      _defaultStremioAddonBaseUrlKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);
