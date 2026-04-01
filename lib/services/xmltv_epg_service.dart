@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert' show gzip, utf8;
 
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';

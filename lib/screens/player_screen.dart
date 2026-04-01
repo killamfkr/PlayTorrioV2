@@ -6,6 +6,7 @@ import '../services/external_player_service.dart';
 import '../api/settings_service.dart';
 import 'player/mobile_player_screen.dart';
 import 'player/desktop_player_screen.dart';
+import '../api/stremio_service.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String streamUrl;
@@ -24,6 +25,8 @@ class PlayerScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? externalSubtitles;
   final String? stremioId;
   final String? stremioAddonBaseUrl;
+  /// Segment for `/stream/{type}/...` (e.g. `tv` for live addons, `series` for shows).
+  final String? stremioStreamType;
 
   const PlayerScreen({
     super.key,
@@ -43,6 +46,7 @@ class PlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
+    this.stremioStreamType,
   });
 
   @override
@@ -160,6 +164,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         externalSubtitles: widget.externalSubtitles,
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+        stremioStreamType: widget.stremioStreamType ??
+            StremioService.streamTypeForStremioMetaType(null, fallbackMediaType: widget.movie?.mediaType),
         providers: widget.providers,
       );
     } else {
@@ -179,6 +185,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         externalSubtitles: widget.externalSubtitles,
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+        stremioStreamType: widget.stremioStreamType ??
+            StremioService.streamTypeForStremioMetaType(null, fallbackMediaType: widget.movie?.mediaType),
         providers: widget.providers,
       );
     }

@@ -391,6 +391,8 @@ class MobilePlayerScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? externalSubtitles;
   final String? stremioId;
   final String? stremioAddonBaseUrl;
+  /// Stremio `/stream/{type}/...` segment (e.g. `tv` for live channel addons).
+  final String stremioStreamType;
   final Map<String, dynamic>? providers;
 
   const MobilePlayerScreen({
@@ -410,6 +412,7 @@ class MobilePlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
+    this.stremioStreamType = 'series',
     this.providers,
   });
 
@@ -834,7 +837,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         streamUrl: isStremioDirect ? widget.mediaPath : null,
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
-        stremioType: widget.movie!.mediaType == 'tv' ? 'series' : 'movie',
+        stremioType: widget.stremioStreamType == 'tv'
+            ? 'tv'
+            : (widget.movie!.mediaType == 'tv' ? 'series' : 'movie'),
         mediaType: widget.movie!.mediaType,
       );
 
@@ -2156,10 +2161,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         final stremioId = widget.stremioId ?? widget.movie!.imdbId;
         if (stremioId == null) throw Exception('No Stremio ID available');
 
+        if (widget.stremioStreamType == 'tv') {
+          throw Exception('Live channel has no next episode');
+        }
+
         final epId = '$stremioId:$nextSeason:$nextEpisode';
         final streams = await stremio.getStreams(
           baseUrl: widget.stremioAddonBaseUrl!,
-          type: 'series',
+          type: widget.stremioStreamType,
           id: epId,
         );
 
@@ -2349,6 +2358,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             activeProvider: activeProvider,
             stremioId: widget.stremioId,
             stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+            stremioStreamType: widget.stremioStreamType,
             providers: widget.providers,
           ),
         ),

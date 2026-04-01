@@ -395,6 +395,7 @@ class DesktopPlayerScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? externalSubtitles;
   final String? stremioId;
   final String? stremioAddonBaseUrl;
+  final String stremioStreamType;
   final Map<String, dynamic>? providers;
 
   const DesktopPlayerScreen({
@@ -414,6 +415,7 @@ class DesktopPlayerScreen extends StatefulWidget {
     this.externalSubtitles,
     this.stremioId,
     this.stremioAddonBaseUrl,
+    this.stremioStreamType = 'series',
     this.providers,
   });
 
@@ -680,7 +682,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         streamUrl: isStremioDirect ? widget.mediaPath : null,
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
-        stremioType: widget.movie!.mediaType == 'tv' ? 'series' : 'movie',
+        stremioType: widget.stremioStreamType == 'tv'
+            ? 'tv'
+            : (widget.movie!.mediaType == 'tv' ? 'series' : 'movie'),
         mediaType: widget.movie!.mediaType,
       );
 
@@ -1708,10 +1712,14 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         final stremioId = widget.stremioId ?? widget.movie!.imdbId;
         if (stremioId == null) throw Exception('No Stremio ID available');
 
+        if (widget.stremioStreamType == 'tv') {
+          throw Exception('Live channel has no next episode');
+        }
+
         final epId = '$stremioId:$nextSeason:$nextEpisode';
         final streams = await stremio.getStreams(
           baseUrl: widget.stremioAddonBaseUrl!,
-          type: 'series',
+          type: widget.stremioStreamType,
           id: epId,
         );
 
