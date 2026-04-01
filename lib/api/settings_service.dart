@@ -363,14 +363,14 @@ class SettingsService {
   static final ValueNotifier<int> navbarChangeNotifier = ValueNotifier<int>(0);
 
   /// All available nav items in default order. 'settings' is always last and locked.
-  /// Search and My List are intentionally last (before Settings in the UI).
+  /// Search, My List, and Magnet are intentionally last (before Settings in the UI).
   static const List<String> allNavIds = [
-    'home', 'discover', 'magnet', 'live_matches',
+    'home', 'discover', 'live_matches',
     'iptv', 'audiobooks', 'books', 'music', 'comics', 'manga',
-    'jellyfin', 'anime', 'search', 'mylist',
+    'jellyfin', 'anime', 'search', 'mylist', 'magnet',
   ];
 
-  static const List<String> _navTailIds = ['search', 'mylist'];
+  static const List<String> _navTailIds = ['search', 'mylist', 'magnet'];
 
   /// Returns the ordered list of visible nav item IDs.
   /// Settings is NOT stored — it's always appended by the consumer.
@@ -379,7 +379,7 @@ class SettingsService {
     final raw = prefs.getStringList(_navbarConfigKey);
     if (raw == null) return List.from(allNavIds);
 
-    // Drop stale / removed ids; keep user order except search + mylist always last.
+    // Drop stale / removed ids; keep user order except tail ids always last.
     final filtered = raw.where((id) => allNavIds.contains(id)).toList();
     final middle = <String>[];
     for (final id in filtered) {
