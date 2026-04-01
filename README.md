@@ -46,7 +46,6 @@ IPTV:
 
 Other stuff:
 - Torrent search with Prowlarr/Jackett integration
-- Auto-updates (checks on launch)
 - Cross-platform (Windows, Linux, macOS, Android)
 - Dark theme because obviously
 

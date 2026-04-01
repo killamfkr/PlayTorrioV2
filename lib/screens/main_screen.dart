@@ -22,8 +22,6 @@ import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../api/settings_service.dart';
-import '../services/app_updater_service.dart';
-import '../widgets/update_dialog.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -96,23 +94,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     };
 
     _loadNavbarConfig();
-    _checkForUpdates();
-  }
-
-  Future<void> _checkForUpdates() async {
-    try {
-      final updater = AppUpdaterService();
-      final updateInfo = await updater.checkForUpdates();
-      if (updateInfo != null && mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => UpdateDialog(updateInfo: updateInfo),
-        );
-      }
-    } catch (e) {
-      debugPrint('[MainScreen] Update check failed: $e');
-    }
   }
 
   Future<void> _loadNavbarConfig() async {
