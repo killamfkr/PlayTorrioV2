@@ -36,6 +36,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   final PageController _heroController = PageController();
   
   late Future<List<Movie>> _trendingFuture;
+  late Future<List<Movie>> _trendingTvFuture;
+  late Future<List<Movie>> _streamingMoviesFuture;
+  late Future<List<Movie>> _streamingTvFuture;
   late Future<List<Movie>> _popularFuture;
   late Future<List<Movie>> _topRatedFuture;
   late Future<List<Movie>> _nowPlayingFuture;
@@ -66,6 +69,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       _fetchHeroLogos(movies.take(5).toList());
       return movies;
     });
+    _trendingTvFuture = _api.getTrendingTv();
+    _streamingMoviesFuture = _api.discoverMoviesOnStreaming();
+    _streamingTvFuture = _api.discoverTvOnStreaming();
     _popularFuture = _api.getPopular();
     _topRatedFuture = _api.getTopRated();
     _nowPlayingFuture = _api.getNowPlaying();
@@ -545,7 +551,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     // Custom ID, collection, or all lookups failed
     if (mounted) {
       // Override type to 'collections' if it's a collection ID
-      final actualType = isCollection ? 'collections' : (type == 'series' ? 'tv' : 'movie');
+      final actualType = isCollection
+          ? 'collections'
+          : ((type == 'series' || type == 'channel' || type == 'tv') ? 'tv' : 'movie');
       
       final movie = Movie(
         id: id.hashCode,
@@ -631,8 +639,11 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           ),
           // Continue Watching
           const SliverToBoxAdapter(child: RepaintBoundary(child: _ContinueWatchingSection())),
-          // Trending
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Now', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
+          // Trending movies → trending TV → multi-platform streaming (TMDB watch providers)
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Movies', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Series', icon: Icons.whatshot_rounded, future: _trendingTvFuture, onMovieTap: _openDetails))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Movies on Streaming', icon: Icons.movie_outlined, future: _streamingMoviesFuture, onMovieTap: _openDetails))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Series on Streaming', icon: Icons.tv_outlined, future: _streamingTvFuture, onMovieTap: _openDetails))),
           // Popular
           SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
           // Stremio Addon Catalogs

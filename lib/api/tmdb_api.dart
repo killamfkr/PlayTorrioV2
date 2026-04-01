@@ -29,6 +29,65 @@ class TmdbApi {
     }
   }
 
+  /// Trending TV for the day (same window as [getTrending] for movies).
+  Future<List<Movie>> getTrendingTv() async {
+    final response = await http.get(Uri.parse('$_baseUrl/trending/tv/day?api_key=$_apiKey'));
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to load trending TV');
+    }
+  }
+
+  /// TMDB watch provider IDs (OR = `|`). Major US streaming apps; adjust [watchRegion] for catalog.
+  static const String streamingWatchProvidersOr =
+      '8|9|337|350|15|384|531|387'; // Netflix, Prime, Disney+, Apple TV+, Hulu, Max, Paramount+, Peacock
+
+  /// Movies available on at least one of [streamingWatchProvidersOr] in [watchRegion].
+  Future<List<Movie>> discoverMoviesOnStreaming({
+    String watchProvidersOr = streamingWatchProvidersOr,
+    String watchRegion = 'US',
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/discover/movie').replace(queryParameters: {
+      'api_key': _apiKey,
+      'page': '$page',
+      'watch_region': watchRegion,
+      'with_watch_providers': watchProvidersOr,
+      'sort_by': 'popularity.desc',
+    });
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'movie')).toList();
+    } else {
+      throw Exception('Failed to discover movies on streaming');
+    }
+  }
+
+  /// TV series available on at least one of [streamingWatchProvidersOr] in [watchRegion].
+  Future<List<Movie>> discoverTvOnStreaming({
+    String watchProvidersOr = streamingWatchProvidersOr,
+    String watchRegion = 'US',
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/discover/tv').replace(queryParameters: {
+      'api_key': _apiKey,
+      'page': '$page',
+      'watch_region': watchRegion,
+      'with_watch_providers': watchProvidersOr,
+      'sort_by': 'popularity.desc',
+    });
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to discover TV on streaming');
+    }
+  }
+
   Future<List<Movie>> getPopular() async {
     final response = await http.get(Uri.parse('$_baseUrl/movie/popular?api_key=$_apiKey'));
     if (response.statusCode == 200) {
