@@ -37,9 +37,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   
   late Future<List<Movie>> _trendingFuture;
   late Future<List<Movie>> _trendingTvFuture;
-  late Future<List<Movie>> _streamingMoviesFuture;
-  late Future<List<Movie>> _streamingTvFuture;
   late Future<List<Movie>> _popularFuture;
+  late Future<List<Movie>> _popularTvFuture;
   late Future<List<Movie>> _topRatedFuture;
   late Future<List<Movie>> _nowPlayingFuture;
   
@@ -70,9 +69,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       return movies;
     });
     _trendingTvFuture = _api.getTrendingTv();
-    _streamingMoviesFuture = _api.discoverMoviesOnStreaming();
-    _streamingTvFuture = _api.discoverTvOnStreaming();
     _popularFuture = _api.getPopular();
+    _popularTvFuture = _api.getPopularTv();
     _topRatedFuture = _api.getTopRated();
     _nowPlayingFuture = _api.getNowPlaying();
     
@@ -445,24 +443,49 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     }
   }
 
+  /// Hosted Streaming Catalogs addon (Netflix, Disney+, Prime, etc.) — load every catalog row on Home.
+  static bool _isStreamingCatalogsAddon(Map<String, dynamic> cat) {
+    final u = (cat['addonBaseUrl'] as String? ?? '').toLowerCase();
+    return u.contains('stremio-netflix-catalog-addon.baby-beamup.club');
+  }
+
   Future<void> _loadStremioCatalogs() async {
     try {
       final catalogs = await _stremio.getAllCatalogs();
       if (!mounted || catalogs.isEmpty) return;
 
-      // Group non-search-required catalogs by addon, preserving order.
-      final Map<String, List<Map<String, dynamic>>> byAddon = {};
-      for (final c in catalogs) {
-        if (c['searchRequired'] == true) continue;
-        final key = c['addonBaseUrl'] as String;
-        byAddon.putIfAbsent(key, () => []).add(c);
+      final usable = catalogs.where((c) => c['searchRequired'] != true).toList();
+
+      final streamingAddonCats = usable.where(_isStreamingCatalogsAddon).toList();
+      final otherCats = usable.where((c) => !_isStreamingCatalogsAddon(c)).toList();
+
+      final Map<String, List<Map<String, dynamic>>> nextItems = {};
+      final List<Map<String, dynamic>> nextOrder = [];
+
+      // Streaming Catalogs addon: fetch in manifest order (sequential so rows match Netflix → Disney+ → …).
+      for (final cat in streamingAddonCats) {
+        try {
+          final items = await _stremio.getCatalog(
+            baseUrl: cat['addonBaseUrl'],
+            type: cat['catalogType'],
+            id: cat['catalogId'],
+          );
+          if (items.isEmpty) continue;
+          for (final item in items) {
+            item['_addonBaseUrl'] = cat['addonBaseUrl'];
+            item['_addonName'] = cat['addonName'];
+          }
+          final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+          nextItems[itemKey] = items;
+          nextOrder.add(cat);
+        } catch (_) {}
       }
 
-      // Mark that we've started loading so the build can show shimmer / placeholders.
-      if (mounted) setState(() => _catalogsLoaded = true);
-
-      // For each addon, try catalogs in order until one returns items.
-      // All addons are tried in parallel; within each addon they are tried sequentially.
+      // Other addons: first catalog per addon that returns items (original behavior).
+      final Map<String, List<Map<String, dynamic>>> byAddon = {};
+      for (final c in otherCats) {
+        byAddon.putIfAbsent(c['addonBaseUrl'] as String, () => []).add(c);
+      }
       await Future.wait(byAddon.values.map((addonCatalogs) async {
         for (final cat in addonCatalogs) {
           try {
@@ -471,29 +494,27 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               type: cat['catalogType'],
               id: cat['catalogId'],
             );
-            if (items.isEmpty) continue; // try next catalog for this addon
-
-            // Tag each item with the addon that provided it
+            if (items.isEmpty) continue;
             for (final item in items) {
               item['_addonBaseUrl'] = cat['addonBaseUrl'];
               item['_addonName'] = cat['addonName'];
             }
-            if (mounted) {
-              final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
-              setState(() {
-                // Add the winning catalog to the list if not already present
-                if (!_stremioCatalogs.any((c) =>
-                    c['addonBaseUrl'] == cat['addonBaseUrl'] &&
-                    c['catalogId'] == cat['catalogId'])) {
-                  _stremioCatalogs = [..._stremioCatalogs, cat];
-                }
-                _catalogItems[itemKey] = items;
-              });
-            }
-            return; // done for this addon
+            final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+            nextItems[itemKey] = items;
+            nextOrder.add(cat);
+            return;
           } catch (_) {}
         }
       }));
+
+      if (!mounted) return;
+      setState(() {
+        _catalogsLoaded = true;
+        _stremioCatalogs = nextOrder;
+        _catalogItems
+          ..clear()
+          ..addAll(nextItems);
+      });
     } catch (e) {
       debugPrint('[HomeScreen] Error loading Stremio catalogs: $e');
     }
@@ -639,13 +660,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           ),
           // Continue Watching
           const SliverToBoxAdapter(child: RepaintBoundary(child: _ContinueWatchingSection())),
-          // Trending movies → trending TV → multi-platform streaming (TMDB watch providers)
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Movies', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Series', icon: Icons.whatshot_rounded, future: _trendingTvFuture, onMovieTap: _openDetails))),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Movies on Streaming', icon: Icons.movie_outlined, future: _streamingMoviesFuture, onMovieTap: _openDetails))),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Series on Streaming', icon: Icons.tv_outlined, future: _streamingTvFuture, onMovieTap: _openDetails))),
-          // Popular
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
+          // Popular movies & series (TMDB), then Stremio catalog rows (Streaming Catalogs addon shows all services)
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Movies', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Series', icon: Icons.tv_rounded, future: _popularTvFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
           // Stremio Addon Catalogs
           if (_catalogsLoaded)
             ..._stremioCatalogs.map((cat) {
@@ -663,6 +680,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                 ),
               );
             }),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Movies', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Series', icon: Icons.whatshot_rounded, future: _trendingTvFuture, onMovieTap: _openDetails))),
           // Top Rated
           SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Top Rated', icon: Icons.star_rounded, future: _topRatedFuture, onMovieTap: _openDetails))),
           // Trakt Recommendations

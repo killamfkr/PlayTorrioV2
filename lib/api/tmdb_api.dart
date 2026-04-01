@@ -98,6 +98,16 @@ class TmdbApi {
     }
   }
 
+  Future<List<Movie>> getPopularTv() async {
+    final response = await http.get(Uri.parse('$_baseUrl/tv/popular?api_key=$_apiKey'));
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to load popular TV');
+    }
+  }
+
   Future<List<Movie>> getTopRated() async {
     final response = await http.get(Uri.parse('$_baseUrl/movie/top_rated?api_key=$_apiKey'));
     if (response.statusCode == 200) {
