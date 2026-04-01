@@ -246,7 +246,7 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
                   SizedBox(
                     height: 48,
                     child: ElevatedButton.icon(
-                      onPressed: _loading ? null : _fetchFiles,
+                      onPressed: _loading ? null : () => _fetchFiles(),
                       icon: _loading
                           ? const SizedBox(
                               width: 18, height: 18,

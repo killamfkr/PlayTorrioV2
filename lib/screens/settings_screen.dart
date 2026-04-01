@@ -745,7 +745,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _isExporting ? null : _exportSettings,
+                  onPressed: _isExporting ? null : () => _exportSettings(),
                   icon: _isExporting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.upload_rounded, size: 20),
@@ -761,7 +761,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _isImporting ? null : _importSettings,
+                  onPressed: _isImporting ? null : () => _importSettings(),
                   icon: _isImporting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.download_rounded, size: 20),
@@ -1027,7 +1027,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: _saveXmltvEpgUrl,
+                  onPressed: () => _saveXmltvEpgUrl(),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.primaryColor,
                     side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.5)),
@@ -1102,7 +1102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(width: 12),
               ElevatedButton(
-                onPressed: _isInstalling ? null : _installAddon,
+                onPressed: _isInstalling ? null : () => _installAddon(),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.white,
@@ -1276,7 +1276,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _isTestingJackett ? null : _testJackettConnection,
+                  onPressed: _isTestingJackett ? null : () => _testJackettConnection(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
@@ -1291,7 +1291,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _saveJackettSettings,
+                  onPressed: () => _saveJackettSettings(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primaryColor,
                     foregroundColor: Colors.white,
@@ -1371,7 +1371,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _isTestingProwlarr ? null : _testProwlarrConnection,
+                  onPressed: _isTestingProwlarr ? null : () => _testProwlarrConnection(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
@@ -1386,7 +1386,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _saveProwlarrSettings,
+                  onPressed: () => _saveProwlarrSettings(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primaryColor,
                     foregroundColor: Colors.white,
@@ -1749,7 +1749,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isTraktSyncing ? null : _syncTrakt,
+                onPressed: _isTraktSyncing ? null : () => _syncTrakt(),
                 icon: _isTraktSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
@@ -2005,7 +2005,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isSimklSyncing ? null : _syncSimkl,
+                onPressed: _isSimklSyncing ? null : () => _syncSimkl(),
                 icon: _isSimklSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
@@ -2222,7 +2222,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              onPressed: _saveMdblistApiKey,
+              onPressed: () => _saveMdblistApiKey(),
               icon: const Icon(Icons.save),
               label: const Text('Save API Key'),
               style: ElevatedButton.styleFrom(

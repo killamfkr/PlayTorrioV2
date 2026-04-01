@@ -672,7 +672,7 @@ class _JellyfinScreenState extends State<JellyfinScreen>
             ),
             const SizedBox(height: 36),
             ElevatedButton.icon(
-              onPressed: _showAddAccountDialog,
+              onPressed: () => _showAddAccountDialog(),
               icon: const Icon(Icons.add, size: 20),
               label: const Text('Add Account', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               style: ElevatedButton.styleFrom(
@@ -726,7 +726,7 @@ class _JellyfinScreenState extends State<JellyfinScreen>
             actions: [
               IconButton(
                 icon: const Icon(Icons.manage_accounts_rounded, color: Colors.white70),
-                onPressed: _showAccountManager,
+                onPressed: () => _showAccountManager(),
                 tooltip: 'Accounts',
               ),
               IconButton(

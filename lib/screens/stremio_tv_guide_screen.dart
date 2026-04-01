@@ -332,7 +332,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
           IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: _loading ? null : _load,
+            onPressed: _loading ? null : () => _load(),
           ),
         ],
       ),
