@@ -7,6 +7,7 @@ import '../models/movie.dart';
 import '../services/my_list_service.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
+import 'stremio_tv_guide_screen.dart';
 
 /// Full-screen catalog browser for Stremio addons.
 /// Shows all catalogs from installed addons, supports genre filtering,
@@ -76,7 +77,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   Future<void> _loadCatalogs() async {
     var catalogs = await _stremio.getAllCatalogs();
     if (widget.tvChannelsOnly) {
-      catalogs = catalogs.where((c) => c['catalogType'] == 'channel').toList();
+      catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
     }
     if (!mounted) return;
     setState(() {
@@ -178,7 +179,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   IconData _catalogTypeIcon(Object? type) {
     final t = type?.toString() ?? '';
     if (t == 'movie') return Icons.movie_outlined;
-    if (t == 'channel') return Icons.live_tv_outlined;
+    if (StremioService.isLiveTvCatalogType(t)) return Icons.live_tv_outlined;
     return Icons.tv_outlined;
   }
 
@@ -186,14 +187,14 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
     final t = type?.toString() ?? '';
     final alpha = mobilePicker ? 0.15 : 0.2;
     if (t == 'series') return Colors.blue.withValues(alpha: alpha);
-    if (t == 'channel') return Colors.green.withValues(alpha: alpha);
+    if (StremioService.isLiveTvCatalogType(t)) return Colors.green.withValues(alpha: alpha);
     return AppTheme.primaryColor.withValues(alpha: alpha);
   }
 
   Color _catalogTypeBadgeFg(Object? type) {
     final t = type?.toString() ?? '';
     if (t == 'series') return Colors.blue[300]!;
-    if (t == 'channel') return Colors.greenAccent;
+    if (StremioService.isLiveTvCatalogType(t)) return Colors.greenAccent;
     return AppTheme.primaryColor;
   }
 
@@ -268,7 +269,9 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       releaseDate: meta['releaseInfo']?.toString() ?? '',
       overview: meta['description']?.toString() ?? '',
       genres: (meta['genres'] as List?)?.cast<String>() ?? [],
-      mediaType: isCollection ? 'collections' : ((type == 'series' || type == 'channel') ? 'tv' : 'movie'),
+      mediaType: isCollection
+          ? 'collections'
+          : ((type == 'series' || type == 'channel' || type == 'tv') ? 'tv' : 'movie'),
       numberOfSeasons: 0,
     );
   }
@@ -310,7 +313,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
           const SizedBox(height: 8),
           Text(
             isChannels
-                ? 'Install a Stremio addon that provides live TV (channel) catalogs in Settings'
+                ? 'Install a Stremio addon that provides live TV catalogs (type channel or tv) in Settings'
                 : 'Install Stremio addons in Settings',
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.white24, fontSize: 13),
@@ -373,10 +376,21 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
             ),
             const SizedBox(width: 14),
           ],
-          Text(
-            widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
-            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5),
+          Expanded(
+            child: Text(
+              widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
+              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5),
+            ),
           ),
+          if (widget.tvChannelsOnly)
+            IconButton(
+              tooltip: 'TV Guide',
+              icon: const Icon(Icons.grid_view_rounded, color: AppTheme.primaryColor, size: 22),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const StremioTvGuideScreen()),
+              ),
+            ),
         ],
       ),
     );
@@ -499,7 +513,9 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                   child: Icon(
                     cat['catalogType'] == 'movie'
                         ? Icons.movie_outlined
-                        : (cat['catalogType'] == 'channel' ? Icons.live_tv_outlined : Icons.tv_outlined),
+                        : (StremioService.isLiveTvCatalogType(cat['catalogType'])
+                            ? Icons.live_tv_outlined
+                            : Icons.tv_outlined),
                     size: 16,
                     color: isSelected ? AppTheme.primaryColor : Colors.white38,
                   ),
@@ -581,6 +597,23 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                       ],
                     ),
                   ),
+                  if (widget.tvChannelsOnly) ...[
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: IconButton(
+                        tooltip: 'TV Guide',
+                        icon: const Icon(Icons.grid_view_rounded, color: Colors.white70, size: 20),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const StremioTvGuideScreen()),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   // Catalog picker button
                   Container(
                     decoration: BoxDecoration(
