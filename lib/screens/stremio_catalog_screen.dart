@@ -16,8 +16,18 @@ class StremioCatalogScreen extends StatefulWidget {
   final Map<String, dynamic>? initialCatalog;
   /// If set, pre-fills the search field.
   final String? initialSearch;
+  /// Only show catalogs whose Stremio type is `channel` (live TV from addons).
+  final bool tvChannelsOnly;
+  /// Set false when this screen is a root tab (no route to pop).
+  final bool showCatalogBackButton;
 
-  const StremioCatalogScreen({super.key, this.initialCatalog, this.initialSearch});
+  const StremioCatalogScreen({
+    super.key,
+    this.initialCatalog,
+    this.initialSearch,
+    this.tvChannelsOnly = false,
+    this.showCatalogBackButton = true,
+  });
 
   @override
   State<StremioCatalogScreen> createState() => _StremioCatalogScreenState();
@@ -64,7 +74,10 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   }
 
   Future<void> _loadCatalogs() async {
-    final catalogs = await _stremio.getAllCatalogs();
+    var catalogs = await _stremio.getAllCatalogs();
+    if (widget.tvChannelsOnly) {
+      catalogs = catalogs.where((c) => c['catalogType'] == 'channel').toList();
+    }
     if (!mounted) return;
     setState(() {
       _allCatalogs = catalogs;
@@ -81,6 +94,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   }
 
   List<Map<String, dynamic>> get _filteredCatalogs {
+    if (widget.tvChannelsOnly) return _allCatalogs;
     if (_filterType == 'all') return _allCatalogs;
     return _allCatalogs.where((c) => c['catalogType'] == _filterType).toList();
   }
@@ -159,6 +173,28 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   void _selectGenre(String? genre) {
     setState(() => _selectedGenre = genre);
     _fetchCatalogItems();
+  }
+
+  IconData _catalogTypeIcon(Object? type) {
+    final t = type?.toString() ?? '';
+    if (t == 'movie') return Icons.movie_outlined;
+    if (t == 'channel') return Icons.live_tv_outlined;
+    return Icons.tv_outlined;
+  }
+
+  Color _catalogTypeBadgeBg(Object? type, {bool mobilePicker = false}) {
+    final t = type?.toString() ?? '';
+    final alpha = mobilePicker ? 0.15 : 0.2;
+    if (t == 'series') return Colors.blue.withValues(alpha: alpha);
+    if (t == 'channel') return Colors.green.withValues(alpha: alpha);
+    return AppTheme.primaryColor.withValues(alpha: alpha);
+  }
+
+  Color _catalogTypeBadgeFg(Object? type) {
+    final t = type?.toString() ?? '';
+    if (t == 'series') return Colors.blue[300]!;
+    if (t == 'channel') return Colors.greenAccent;
+    return AppTheme.primaryColor;
   }
 
   Future<void> _openItem(Map<String, dynamic> item) async {
@@ -259,15 +295,26 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   }
 
   Widget _buildEmptyState() {
+    final isChannels = widget.tvChannelsOnly;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.extension_off, size: 80, color: Colors.white.withValues(alpha: 0.1)),
+          Icon(isChannels ? Icons.live_tv_rounded : Icons.extension_off,
+              size: 80, color: Colors.white.withValues(alpha: 0.1)),
           const SizedBox(height: 16),
-          const Text('No catalog addons installed', style: TextStyle(color: Colors.white38, fontSize: 16)),
+          Text(
+            isChannels ? 'No TV channel catalogs' : 'No catalog addons installed',
+            style: const TextStyle(color: Colors.white38, fontSize: 16),
+          ),
           const SizedBox(height: 8),
-          const Text('Install Stremio addons in Settings', style: TextStyle(color: Colors.white24, fontSize: 13)),
+          Text(
+            isChannels
+                ? 'Install a Stremio addon that provides live TV (channel) catalogs in Settings'
+                : 'Install Stremio addons in Settings',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white24, fontSize: 13),
+          ),
         ],
       ),
     );
@@ -313,24 +360,30 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(10),
+          if (widget.showCatalogBackButton) ...[
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
+                onPressed: () => Navigator.pop(context),
+              ),
             ),
-            child: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
-              onPressed: () => Navigator.pop(context),
-            ),
+            const SizedBox(width: 14),
+          ],
+          Text(
+            widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
+            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5),
           ),
-          const SizedBox(width: 14),
-          const Text('Catalogs', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5)),
         ],
       ),
     );
   }
 
   Widget _buildTypeFilter() {
+    if (widget.tvChannelsOnly) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
       child: Row(
@@ -444,7 +497,9 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
-                    cat['catalogType'] == 'movie' ? Icons.movie_outlined : Icons.tv_outlined,
+                    cat['catalogType'] == 'movie'
+                        ? Icons.movie_outlined
+                        : (cat['catalogType'] == 'channel' ? Icons.live_tv_outlined : Icons.tv_outlined),
                     size: 16,
                     color: isSelected ? AppTheme.primaryColor : Colors.white38,
                   ),
@@ -495,22 +550,27 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Row(
                 children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(12),
+                  if (widget.showCatalogBackButton) ...[
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
+                        onPressed: () => Navigator.pop(context),
+                      ),
                     ),
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
+                    const SizedBox(width: 14),
+                  ],
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Catalogs', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+                        Text(
+                          widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
+                          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
+                        ),
                         if (_selectedCatalog != null)
                           Text(
                             '${_selectedCatalog!['addonName']} • ${_selectedCatalog!['catalogName']}',
@@ -538,20 +598,21 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
           ),
 
           // ── Type filter chips ──
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: Row(
-                children: [
-                  _buildMobileFilterPill('All', 'all'),
-                  const SizedBox(width: 8),
-                  _buildMobileFilterPill('Movies', 'movie'),
-                  const SizedBox(width: 8),
-                  _buildMobileFilterPill('Series', 'series'),
-                ],
+          if (!widget.tvChannelsOnly)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Row(
+                  children: [
+                    _buildMobileFilterPill('All', 'all'),
+                    const SizedBox(width: 8),
+                    _buildMobileFilterPill('Movies', 'movie'),
+                    const SizedBox(width: 8),
+                    _buildMobileFilterPill('Series', 'series'),
+                  ],
+                ),
               ),
             ),
-          ),
 
           // ── Quick catalog scroller ──
           SliverToBoxAdapter(
@@ -648,23 +709,21 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                             child: CachedNetworkImage(
                               imageUrl: addonIcon, width: 16, height: 16,
                               errorWidget: (_, _, _) => Icon(
-                                cat['catalogType'] == 'movie' ? Icons.movie_outlined : Icons.tv_outlined,
+                                _catalogTypeIcon(cat['catalogType']),
                                 size: 16, color: Colors.white38,
                               ),
                             ),
                           )
                         else
                           Icon(
-                            cat['catalogType'] == 'movie' ? Icons.movie_outlined : Icons.tv_outlined,
+                            _catalogTypeIcon(cat['catalogType']),
                             size: 16, color: isSelected ? AppTheme.primaryColor : Colors.white38,
                           ),
                         const Spacer(),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                           decoration: BoxDecoration(
-                            color: cat['catalogType'] == 'series'
-                                ? Colors.blue.withValues(alpha: 0.2)
-                                : AppTheme.primaryColor.withValues(alpha: 0.2),
+                            color: _catalogTypeBadgeBg(cat['catalogType']),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -672,7 +731,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                             style: TextStyle(
                               fontSize: 8,
                               fontWeight: FontWeight.w700,
-                              color: cat['catalogType'] == 'series' ? Colors.blue[300] : AppTheme.primaryColor,
+                              color: _catalogTypeBadgeFg(cat['catalogType']),
                             ),
                           ),
                         ),
@@ -800,7 +859,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
             child: Row(
               children: [
                 Icon(
-                  cat['catalogType'] == 'movie' ? Icons.movie_outlined : Icons.tv_outlined,
+                  _catalogTypeIcon(cat['catalogType']),
                   size: 20,
                   color: isSelected ? AppTheme.primaryColor : Colors.white38,
                 ),
@@ -818,9 +877,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: cat['catalogType'] == 'series'
-                        ? Colors.blue.withValues(alpha: 0.15)
-                        : AppTheme.primaryColor.withValues(alpha: 0.15),
+                    color: _catalogTypeBadgeBg(cat['catalogType'], mobilePicker: true),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -828,7 +885,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                     style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w700,
-                      color: cat['catalogType'] == 'series' ? Colors.blue[300] : AppTheme.primaryColor,
+                      color: _catalogTypeBadgeFg(cat['catalogType']),
                     ),
                   ),
                 ),

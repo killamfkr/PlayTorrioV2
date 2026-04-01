@@ -16,7 +16,7 @@ import 'manga_screen.dart';
 import 'jellyfin_screen.dart';
 import 'anime_screen.dart';
 import 'arabic_screen.dart';
-import 'live_matches_screen.dart';
+import 'stremio_catalog_screen.dart';
 import 'magnet_player_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
@@ -53,7 +53,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'search':       {'icon': Icons.search,                      'active': Icons.search,                  'label': 'Search'},
     'mylist':       {'icon': Icons.bookmark_outline,            'active': Icons.bookmark,                'label': 'My List'},
     'magnet':       {'icon': Icons.link_rounded,                'active': Icons.link_rounded,            'label': 'Magnet'},
-    'live_matches': {'icon': Icons.sports_soccer_outlined,      'active': Icons.sports_soccer_rounded,   'label': 'Live Matches'},
+    'live_matches': {'icon': Icons.live_tv_outlined,            'active': Icons.live_tv_rounded,           'label': 'TV Channels'},
     'iptv':         {'icon': Icons.live_tv_outlined,            'active': Icons.live_tv,                 'label': 'IPTV'},
     'audiobooks':   {'icon': Icons.menu_book_outlined,          'active': Icons.menu_book,               'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,     'active': Icons.import_contacts_rounded, 'label': 'Books'},
@@ -82,7 +82,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'search':       const SearchScreen(),
       'mylist':       const MyListScreen(),
       'magnet':       const MagnetPlayerScreen(),
-      'live_matches': const LiveMatchesScreen(),
+      'live_matches': const StremioCatalogScreen(tvChannelsOnly: true, showCatalogBackButton: false),
       'iptv':         const IptvLoginScreen(),
       'audiobooks':   const AudiobookScreen(),
       'books':        const BooksScreen(),

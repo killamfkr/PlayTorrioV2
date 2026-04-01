@@ -1,6 +1,6 @@
 # PlayTorrio
 
-Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live sports. All in one app.
+Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live TV from Stremio. All in one app.
 
 Made by me. If you like it, star it or whatever.
 
@@ -35,9 +35,9 @@ Audiobooks:
 - Chapter navigation
 - Playback speed control
 
-Live Sports:
-- Watch live matches and events
-- Multiple stream sources
+Live TV (Stremio):
+- Browse TV channel catalogs from installed Stremio addons
+- Play streams through the same Stremio flow as movies and series
 
 IPTV:
 - Xtream Codes API support

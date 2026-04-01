@@ -808,7 +808,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'search':       {'icon': Icons.search,                     'label': 'Search'},
     'mylist':       {'icon': Icons.bookmark,                   'label': 'My List'},
     'magnet':       {'icon': Icons.link_rounded,               'label': 'Magnet'},
-    'live_matches': {'icon': Icons.sports_soccer_rounded,      'label': 'Live Matches'},
+    'live_matches': {'icon': Icons.live_tv_rounded,           'label': 'TV Channels'},
     'iptv':         {'icon': Icons.live_tv,                    'label': 'IPTV'},
     'audiobooks':   {'icon': Icons.menu_book,                  'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,    'label': 'Books'},
