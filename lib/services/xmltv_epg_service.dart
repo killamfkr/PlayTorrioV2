@@ -1,5 +1,6 @@
-import 'dart:convert';
+import 'dart:convert' show utf8;
 
+import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
@@ -70,7 +71,7 @@ class XmltvEpgService {
       if (response.bodyBytes.length > 2 &&
           response.bodyBytes[0] == 0x1f &&
           response.bodyBytes[1] == 0x8b) {
-        body = utf8.decode(gzip.decode(response.bodyBytes));
+        body = utf8.decode(GZipDecoder().decodeBytes(response.bodyBytes));
       }
       return _parseXml(body);
     } catch (_) {
