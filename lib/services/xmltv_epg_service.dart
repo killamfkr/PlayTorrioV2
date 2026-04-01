@@ -1,0 +1,180 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:xml/xml.dart';
+
+/// Parses XMLTV (xmltv) files and maps programmes to channel ids for TV Guide.
+class XmltvEpgService {
+  XmltvEpgService._();
+  static final XmltvEpgService instance = XmltvEpgService._();
+
+  /// Normalized keys → programmes (start ascending).
+  final Map<String, List<XmltvProgramme>> _byChannel = {};
+
+  bool get isLoaded => _byChannel.isNotEmpty;
+
+  void clear() => _byChannel.clear();
+
+  static String normalizeKey(String s) {
+    var t = s.toLowerCase().trim();
+    t = t.replaceAll(RegExp(r'\s+'), '');
+    t = t.replaceAll(RegExp(r'[^a-z0-9._:-]'), '');
+    return t;
+  }
+
+  /// XMLTV datetime: `YYYYMMDDHHmmss` with optional ` +0200` offset.
+  static DateTime? parseXmltvTime(String? raw) {
+    if (raw == null || raw.length < 14) return null;
+    final space = raw.indexOf(' ');
+    final core = space >= 0 ? raw.substring(0, space) : raw.substring(0, 14);
+    if (core.length < 14) return null;
+    try {
+      final y = int.parse(core.substring(0, 4));
+      final mo = int.parse(core.substring(4, 6));
+      final d = int.parse(core.substring(6, 8));
+      final h = int.parse(core.substring(8, 10));
+      final mi = int.parse(core.substring(10, 12));
+      final sec = int.parse(core.substring(12, 14));
+      if (space > 15 && raw.length > space + 5) {
+        final tz = raw.substring(space + 1).trim();
+        if (tz.length >= 5 && (tz.startsWith('+') || tz.startsWith('-'))) {
+          final sign = tz.startsWith('-') ? -1 : 1;
+          final th = int.tryParse(tz.substring(1, 3)) ?? 0;
+          final tmi = int.tryParse(tz.substring(3, 5)) ?? 0;
+          final offset = Duration(hours: sign * th, minutes: sign * tmi);
+          final utc = DateTime.utc(y, mo, d, h, mi, sec).subtract(offset);
+          return utc.toLocal();
+        }
+      }
+      return DateTime(y, mo, d, h, mi, sec);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _elemText(XmlElement parent, String name) {
+    final el = parent.findElements(name).firstOrNull;
+    return el?.innerText.trim() ?? '';
+  }
+
+  /// Fetches and parses an XMLTV document from [url]. Clears previous data.
+  Future<bool> loadFromUrl(String url) async {
+    clear();
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || !uri.hasScheme) return false;
+
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 25));
+      if (response.statusCode != 200) return false;
+      var body = response.body;
+      if (response.bodyBytes.length > 2 &&
+          response.bodyBytes[0] == 0x1f &&
+          response.bodyBytes[1] == 0x8b) {
+        body = utf8.decode(gzip.decode(response.bodyBytes));
+      }
+      return _parseXml(body);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _parseXml(String body) {
+    try {
+      final doc = XmlDocument.parse(body);
+      void addProgramme(String channelId, XmltvProgramme p) {
+        final k = normalizeKey(channelId);
+        if (k.isEmpty) return;
+        _byChannel.putIfAbsent(k, () => []).add(p);
+      }
+
+      for (final prog in doc.findAllElements('programme')) {
+        final ch = prog.getAttribute('channel');
+        if (ch == null || ch.isEmpty) continue;
+        final start = parseXmltvTime(prog.getAttribute('start'));
+        if (start == null) continue;
+        final stopRaw = prog.getAttribute('stop');
+        final stop = parseXmltvTime(stopRaw) ?? start.add(const Duration(hours: 1));
+        final title = _elemText(prog, 'title');
+        if (title.isEmpty) continue;
+        final sub = _elemText(prog, 'sub-title');
+        final desc = _elemText(prog, 'desc');
+        addProgramme(
+          ch,
+          XmltvProgramme(
+            start: start,
+            end: stop,
+            title: title,
+            subtitle: sub.isNotEmpty ? sub : (desc.isNotEmpty ? desc : null),
+          ),
+        );
+      }
+
+      for (final list in _byChannel.values) {
+        list.sort((a, b) => a.start.compareTo(b.start));
+      }
+      return _byChannel.isNotEmpty;
+    } catch (_) {
+      clear();
+      return false;
+    }
+  }
+
+  Iterable<String> _candidateKeys(String? tvgId, String? channelName, String? stremioId) sync* {
+    if (tvgId != null && tvgId.isNotEmpty) {
+      yield normalizeKey(tvgId);
+      final noDot = tvgId.replaceAll('.', '');
+      if (noDot != tvgId) yield normalizeKey(noDot);
+    }
+    if (channelName != null && channelName.isNotEmpty) {
+      yield normalizeKey(channelName);
+      yield normalizeKey(channelName.replaceAll(' ', '.'));
+    }
+    if (stremioId != null && stremioId.contains(':')) {
+      final tail = stremioId.split(':').last;
+      if (tail.isNotEmpty) {
+        yield normalizeKey(tail);
+        if (tail.contains('-')) {
+          final parts = tail.split('-');
+          if (parts.length > 1) yield normalizeKey(parts.last);
+        }
+      }
+    }
+  }
+
+  /// Programmes overlapping [from]..[to] for the best-matching channel id.
+  List<XmltvProgramme> programmesFor({
+    String? tvgId,
+    String? channelName,
+    String? stremioId,
+    required DateTime from,
+    required DateTime to,
+    int maxItems = 12,
+  }) {
+    for (final key in _candidateKeys(tvgId, channelName, stremioId)) {
+      final list = _byChannel[key];
+      if (list == null || list.isEmpty) continue;
+      final out = <XmltvProgramme>[];
+      for (final p in list) {
+        if (p.end.isBefore(from) || !p.start.isBefore(to)) continue;
+        out.add(p);
+        if (out.length >= maxItems) break;
+      }
+      if (out.isNotEmpty) return out;
+    }
+    return [];
+  }
+}
+
+class XmltvProgramme {
+  final DateTime start;
+  final DateTime end;
+  final String title;
+  final String? subtitle;
+
+  const XmltvProgramme({
+    required this.start,
+    required this.end,
+    required this.title,
+    this.subtitle,
+  });
+}

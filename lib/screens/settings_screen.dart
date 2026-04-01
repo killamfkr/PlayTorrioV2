@@ -41,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _useDebrid = false;
   String _debridService = 'None';
   final TextEditingController _addonController = TextEditingController();
+  final TextEditingController _xmltvEpgUrlController = TextEditingController();
   final TextEditingController _torboxController = TextEditingController();
   
   // Jackett
@@ -160,6 +161,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load light mode
     final lightMode = await _settings.isLightModeEnabled();
 
+    final xmltvEpg = await _settings.getXmltvEpgUrl();
     final defaultAddonUrl = await _settings.getDefaultStremioAddonBaseUrl();
     final bgPlay = await _settings.continuePlaybackInBackground();
     final pipBtn = await _settings.showAndroidPipButton();
@@ -221,6 +223,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isLightMode = lightMode;
         _navbarVisible = navVisible;
         _navbarOrder = navOrder;
+        _xmltvEpgUrlController.text = xmltvEpg ?? '';
         _defaultStremioStreamKey = streamKey;
         _continuePlaybackInBackground = bgPlay;
         _showAndroidPipButton = pipBtn;
@@ -262,6 +265,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _addonController.dispose();
+    _xmltvEpgUrlController.dispose();
     _torboxController.dispose();
     _jackettUrlController.dispose();
     _jackettApiKeyController.dispose();
@@ -488,6 +492,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     _buildDefaultStremioStreamSource(),
+                    const SizedBox(height: 24),
+                    _buildXmltvEpgSection(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -984,6 +990,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildXmltvEpgSection() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'TV Guide EPG (XMLTV)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Optional. When Stremio channels have no built-in schedule, the TV Guide loads programmes from this URL (XML or gzipped XML). Channel ids in the file should match each channel\'s tvgId when possible.',
+            style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _xmltvEpgUrlController,
+            decoration: InputDecoration(
+              hintText: 'https://example.com/epg.xml',
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+            onSubmitted: (_) => _saveXmltvEpgUrl(),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _saveXmltvEpgUrl,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.primaryColor,
+                    side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.5)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Save EPG URL'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () async {
+                    await _settings.setXmltvEpgUrl(null);
+                    if (mounted) {
+                      setState(() => _xmltvEpgUrlController.clear());
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('EPG URL cleared')),
+                      );
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white54,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Clear'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _saveXmltvEpgUrl() async {
+    final url = _xmltvEpgUrlController.text.trim();
+    await _settings.setXmltvEpgUrl(url.isEmpty ? null : url);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(url.isEmpty ? 'EPG URL cleared' : 'TV Guide EPG URL saved')),
+      );
+    }
   }
 
   Widget _buildAddonInput() {

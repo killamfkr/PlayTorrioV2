@@ -58,6 +58,25 @@ class SettingsService {
   static const String _torrentCacheTypeKey = 'torrent_cache_type';
   static const String _torrentRamCacheMbKey = 'torrent_ram_cache_mb';
 
+  /// Optional XMLTV URL for TV Guide when Stremio addons do not embed schedules.
+  static const String _xmltvEpgUrlKey = 'xmltv_epg_url';
+
+  Future<String?> getXmltvEpgUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_xmltvEpgUrlKey);
+    if (v == null || v.trim().isEmpty) return null;
+    return v.trim();
+  }
+
+  Future<void> setXmltvEpgUrl(String? url) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (url == null || url.trim().isEmpty) {
+      await prefs.remove(_xmltvEpgUrlKey);
+    } else {
+      await prefs.setString(_xmltvEpgUrlKey, url.trim());
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getStremioAddons() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> list = prefs.getStringList(_stremioAddonsKey) ?? [];
@@ -417,6 +436,7 @@ class SettingsService {
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
+      _xmltvEpgUrlKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -480,6 +500,7 @@ class SettingsService {
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
+      _xmltvEpgUrlKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);

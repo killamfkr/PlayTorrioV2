@@ -2,8 +2,10 @@ import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../models/movie.dart';
+import '../services/xmltv_epg_service.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
 
@@ -38,12 +40,17 @@ class _ChannelRow {
   final String addonBaseUrl;
   final String metaType;
   final List<_GuideSlot> slots;
+  /// True when slots came from addon meta (videos / behaviorHints), not XMLTV or placeholder.
+  final bool fromStremioSchedule;
+  final String? tvgId;
 
   _ChannelRow({
     required this.catalogItem,
     required this.addonBaseUrl,
     required this.metaType,
     required this.slots,
+    this.fromStremioSchedule = false,
+    this.tvgId,
   });
 
   String get id => catalogItem['id']?.toString() ?? '';
@@ -83,7 +90,8 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
     return null;
   }
 
-  List<_GuideSlot> _slotsFromMeta(Map<String, dynamic> meta, String channelName) {
+  /// [fromAddon] is true when videos or embedded EPG hints produced the list.
+  ({List<_GuideSlot> slots, bool fromAddon}) _slotsFromMeta(Map<String, dynamic> meta, String channelName) {
     final videos = meta['videos'];
     if (videos is List && videos.isNotEmpty) {
       final List<_GuideSlot> slots = [];
@@ -105,7 +113,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
         ));
       }
       slots.sort((a, b) => a.start.compareTo(b.start));
-      return slots;
+      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
     }
 
     // Optional: addon-specific EPG in behaviorHints (rare)
@@ -125,20 +133,51 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
         ));
       }
       slots.sort((a, b) => a.start.compareTo(b.start));
-      if (slots.isNotEmpty) return slots;
+      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
     }
 
     // Fallback: single "Live" block anchored to the current hour
     final now = DateTime.now();
     final hourStart = DateTime(now.year, now.month, now.day, now.hour);
-    return [
-      _GuideSlot(
-        start: hourStart,
-        end: hourStart.add(const Duration(hours: 1)),
-        title: 'Live',
-        subtitle: channelName,
-      ),
-    ];
+    return (
+      slots: [
+        _GuideSlot(
+          start: hourStart,
+          end: hourStart.add(const Duration(hours: 1)),
+          title: 'Live',
+          subtitle: channelName,
+        ),
+      ],
+      fromAddon: false,
+    );
+  }
+
+  List<_GuideSlot> _slotsFromXmltv(
+    XmltvEpgService epg, {
+    required String? tvgId,
+    required String channelName,
+    required String stremioId,
+  }) {
+    final from = DateTime.now().subtract(const Duration(hours: 6));
+    final to = DateTime.now().add(const Duration(days: 2));
+    final progs = epg.programmesFor(
+      tvgId: tvgId,
+      channelName: channelName,
+      stremioId: stremioId,
+      from: from,
+      to: to,
+      maxItems: 24,
+    );
+    return progs
+        .map(
+          (p) => _GuideSlot(
+            start: p.start,
+            end: p.end,
+            title: p.title,
+            subtitle: p.subtitle,
+          ),
+        )
+        .toList();
   }
 
   Future<void> _load() async {
@@ -148,6 +187,14 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
     });
 
     try {
+      final epgUrl = await SettingsService().getXmltvEpgUrl();
+      final epg = XmltvEpgService.instance;
+      if (epgUrl != null && epgUrl.isNotEmpty) {
+        await epg.loadFromUrl(epgUrl);
+      } else {
+        epg.clear();
+      }
+
       var catalogs = await _stremio.getAllCatalogs();
       catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
 
@@ -190,12 +237,28 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
           final meta = await _stremio.getMeta(baseUrl: base, type: type, id: id);
           if (meta == null) return null;
           final name = item['name']?.toString() ?? meta['name']?.toString() ?? 'Channel';
-          final slots = _slotsFromMeta(meta, name);
+          final tvgId = meta['tvgId']?.toString() ?? item['tvgId']?.toString();
+          final built = _slotsFromMeta(meta, name);
+          var slots = built.slots;
+          var fromStremio = built.fromAddon;
+          if (!fromStremio && epg.isLoaded) {
+            final xmlSlots = _slotsFromXmltv(
+              epg,
+              tvgId: tvgId,
+              channelName: name,
+              stremioId: id,
+            );
+            if (xmlSlots.isNotEmpty) {
+              slots = xmlSlots;
+            }
+          }
           return _ChannelRow(
             catalogItem: item,
             addonBaseUrl: base,
             metaType: type,
             slots: slots,
+            fromStremioSchedule: fromStremio,
+            tvgId: tvgId,
           );
         });
         final part = await Future.wait(futures);
@@ -316,7 +379,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 16, top: 4),
                               child: Text(
-                                'Schedules come from each addon when available; otherwise rows show a live placeholder.',
+                                'Schedules use the addon when it provides them. If not, add an XMLTV URL in Settings → Stremio (TV Guide EPG) to fill the grid; channel ids should match tvg-id or the channel name when possible.',
                                 style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 12, height: 1.35),
                               ),
                             );
