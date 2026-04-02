@@ -12,16 +12,40 @@ class XmltvEpgService {
   /// Normalized keys → programmes (start ascending).
   final Map<String, List<XmltvProgramme>> _byChannel = {};
 
-  bool get isLoaded => _byChannel.isNotEmpty;
+  /// Normalized channel key → raw `id` attribute (first seen).
+  final Map<String, String> _normToRawId = {};
 
-  /// Normalized `<channel id="...">` / `<programme channel="...">` ids present in the loaded file.
+  /// Normalized channel key → best display label from `<channel>` (for picker UI).
+  final Map<String, String> _normToDisplayName = {};
+
+  bool get isLoaded => _byChannel.isNotEmpty || _normToRawId.isNotEmpty;
+
+  /// Raw channel ids from the file, sorted by display name for pickers.
   List<String> get loadedChannelIds {
-    final ids = _byChannel.keys.toList();
-    ids.sort();
-    return ids;
+    final norms = {..._byChannel.keys, ..._normToRawId.keys};
+    final raw = norms.map((n) => _normToRawId[n] ?? n).toList();
+    raw.sort((a, b) {
+      final la = displayNameForChannelId(a).toLowerCase();
+      final lb = displayNameForChannelId(b).toLowerCase();
+      final c = la.compareTo(lb);
+      return c != 0 ? c : a.toLowerCase().compareTo(b.toLowerCase());
+    });
+    return raw;
   }
 
-  void clear() => _byChannel.clear();
+  /// User-facing label for a raw or normalized id (falls back to [id]).
+  String displayNameForChannelId(String id) {
+    final n = normalizeKey(id);
+    final fromMeta = _normToDisplayName[n];
+    if (fromMeta != null && fromMeta.isNotEmpty) return fromMeta;
+    return id;
+  }
+
+  void clear() {
+    _byChannel.clear();
+    _normToRawId.clear();
+    _normToDisplayName.clear();
+  }
 
   static String normalizeKey(String s) {
     var t = s.toLowerCase().trim();
@@ -86,13 +110,45 @@ class XmltvEpgService {
     }
   }
 
+  static String? _channelDisplayName(XmlElement channelEl) {
+    XmlElement? pick;
+    for (final el in channelEl.findElements('display-name')) {
+      final lang = el.getAttribute('lang')?.toLowerCase() ?? '';
+      if (lang.isEmpty || lang.startsWith('en')) {
+        pick = el;
+        break;
+      }
+      pick ??= el;
+    }
+    final t = pick?.innerText.trim() ?? '';
+    return t.isNotEmpty ? t : null;
+  }
+
   bool _parseXml(String body) {
     try {
       final doc = XmlDocument.parse(body);
+      void registerRawId(String channelId) {
+        final k = normalizeKey(channelId);
+        if (k.isEmpty) return;
+        _normToRawId.putIfAbsent(k, () => channelId.trim());
+      }
+
       void addProgramme(String channelId, XmltvProgramme p) {
         final k = normalizeKey(channelId);
         if (k.isEmpty) return;
+        registerRawId(channelId);
         _byChannel.putIfAbsent(k, () => []).add(p);
+      }
+
+      for (final cel in doc.findAllElements('channel')) {
+        final id = cel.getAttribute('id');
+        if (id == null || id.isEmpty) continue;
+        registerRawId(id);
+        final dn = _channelDisplayName(cel);
+        if (dn != null) {
+          final k = normalizeKey(id);
+          _normToDisplayName.putIfAbsent(k, () => dn);
+        }
       }
 
       for (final prog in doc.findAllElements('programme')) {
@@ -120,7 +176,7 @@ class XmltvEpgService {
       for (final list in _byChannel.values) {
         list.sort((a, b) => a.start.compareTo(b.start));
       }
-      return _byChannel.isNotEmpty;
+      return isLoaded;
     } catch (_) {
       clear();
       return false;

@@ -122,18 +122,138 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _openEpgPickerSheet(BuildContext sheetCtx, TextEditingController target) async {
+    final epg = XmltvEpgService.instance;
+    await showModalBottomSheet<void>(
+      context: sheetCtx,
+      backgroundColor: AppTheme.bgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (pickerCtx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.72,
+          minChildSize: 0.35,
+          maxChildSize: 0.92,
+          builder: (_, scrollController) {
+            var filter = '';
+            return StatefulBuilder(
+              builder: (pickerCtx, setPicker) {
+                final q = filter.toLowerCase().trim();
+                final ids = _epgIds.where((id) {
+                  if (q.isEmpty) return true;
+                  final dn = epg.displayNameForChannelId(id).toLowerCase();
+                  return dn.contains(q) || id.toLowerCase().contains(q);
+                }).toList();
+                return Padding(
+                  padding: EdgeInsets.only(
+                    top: 12,
+                    left: 16,
+                    right: 16,
+                    bottom: MediaQuery.of(pickerCtx).padding.bottom + 8,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'EPG channels',
+                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        autofocus: true,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'Search by name or id',
+                          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                          prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.06),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        onChanged: (v) => setPicker(() => filter = v),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: ids.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'No matches',
+                                  style: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+                                ),
+                              )
+                            : ListView.separated(
+                                controller: scrollController,
+                                itemCount: ids.length,
+                                separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white10),
+                                itemBuilder: (_, i) {
+                                  final id = ids[i];
+                                  final label = epg.displayNameForChannelId(id);
+                                  final showId = label != id;
+                                  return ListTile(
+                                    title: Text(
+                                      label,
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                    ),
+                                    subtitle: showId
+                                        ? Text(
+                                            id,
+                                            style: TextStyle(
+                                              color: Colors.white.withValues(alpha: 0.35),
+                                              fontSize: 12,
+                                            ),
+                                          )
+                                        : null,
+                                    onTap: () {
+                                      target.text = id;
+                                      Navigator.pop(pickerCtx);
+                                    },
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _openEditor(_LiveChannel ch) {
     final current = _map[ch.mapKey] ?? '';
     final controller = TextEditingController(text: current);
     final norm = XmltvEpgService.normalizeKey(current);
-    String selectedDropdown = '';
+    String matchedRawId = '';
     if (norm.isNotEmpty) {
       for (final id in _epgIds) {
         if (XmltvEpgService.normalizeKey(id) == norm) {
-          selectedDropdown = id;
+          matchedRawId = id;
           break;
         }
       }
+    }
+    if (matchedRawId.isNotEmpty && controller.text != matchedRawId) {
+      controller.text = matchedRawId;
     }
 
     showModalBottomSheet<void>(
@@ -177,34 +297,15 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
                     ),
                     const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      value: selectedDropdown.isEmpty ? null : selectedDropdown,
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFF1E1E2E),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
+                    OutlinedButton.icon(
+                      onPressed: () => _openEpgPickerSheet(ctx, controller).then((_) => setModal(() {})),
+                      icon: const Icon(Icons.list_rounded, color: Colors.white70),
+                      label: const Text('Browse & search EPG channels'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white24),
+                        minimumSize: const Size.fromHeight(48),
                       ),
-                      hint: const Text('Select EPG channel id', style: TextStyle(color: Colors.white38)),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('— None —')),
-                        ..._epgIds.map(
-                          (id) => DropdownMenuItem(
-                            value: id,
-                            child: Text(id, overflow: TextOverflow.ellipsis),
-                          ),
-                        ),
-                      ],
-                      onChanged: (v) {
-                        setModal(() {
-                          selectedDropdown = v ?? '';
-                          if (v != null && v.isNotEmpty) controller.text = v;
-                        });
-                      },
                     ),
                     const SizedBox(height: 16),
                   ],
@@ -218,6 +319,7 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
                   TextField(
                     controller: controller,
                     style: const TextStyle(color: Colors.white),
+                    onChanged: (_) => setModal(() {}),
                     decoration: InputDecoration(
                       hintText: 'e.g. BBCOne.uk',
                       hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.2)),
@@ -313,8 +415,8 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                       child: Text(
                         _epgLoaded
-                            ? 'Tap a live channel and link it to an id from your XMLTV file (same value as programme channel="...").'
-                            : 'Set an XMLTV URL in Settings first to pick ids from the file. You can still type ids manually.',
+                            ? 'Tap a channel, then use Browse & search to pick from your XMLTV file (by display name or id).'
+                            : 'Set an XMLTV URL in Settings first to browse EPG channels. You can still type ids manually.',
                         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 13, height: 1.35),
                       ),
                     ),
@@ -333,6 +435,15 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
                               itemBuilder: (context, i) {
                                 final ch = _channels[i];
                                 final mapped = _map[ch.mapKey];
+                                final epg = XmltvEpgService.instance;
+                                late final String subtitleText;
+                                if (mapped == null || mapped.isEmpty) {
+                                  subtitleText = 'Auto-match or not set';
+                                } else {
+                                  final label = epg.displayNameForChannelId(mapped);
+                                  subtitleText =
+                                      label != mapped ? 'EPG: $label ($mapped)' : 'EPG: $mapped';
+                                }
                                 return Material(
                                   color: AppTheme.bgCard,
                                   borderRadius: BorderRadius.circular(12),
@@ -342,9 +453,7 @@ class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
                                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                                     ),
                                     subtitle: Text(
-                                      mapped != null && mapped.isNotEmpty
-                                          ? 'EPG: $mapped'
-                                          : 'Auto-match or not set',
+                                      subtitleText,
                                       style: TextStyle(
                                         color: mapped != null && mapped.isNotEmpty
                                             ? Colors.greenAccent.withValues(alpha: 0.8)
