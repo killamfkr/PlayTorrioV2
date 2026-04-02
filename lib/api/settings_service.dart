@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'trakt_service.dart';
 
 class SettingsService {
   static final SettingsService _instance = SettingsService._internal();
@@ -450,6 +451,8 @@ class SettingsService {
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
+      TraktService.prefsClientIdKey,
+      TraktService.prefsClientSecretKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -514,6 +517,8 @@ class SettingsService {
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
+      TraktService.prefsClientIdKey,
+      TraktService.prefsClientSecretKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);

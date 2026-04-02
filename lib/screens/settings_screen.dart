@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../services/external_player_service.dart';
@@ -62,6 +63,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   // Trakt
   final TraktService _trakt = TraktService();
+  final TextEditingController _traktClientIdController = TextEditingController();
+  final TextEditingController _traktClientSecretController = TextEditingController();
   bool _isTraktLoggedIn = false;
   String? _traktUserCode;
   String? _traktVerifyUrl;
@@ -119,6 +122,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
+    // Trakt API app credentials (local / sideload builds)
+    final traktPrefs = await SharedPreferences.getInstance();
+    _traktClientIdController.text =
+        traktPrefs.getString(TraktService.prefsClientIdKey) ?? '';
+    _traktClientSecretController.text =
+        traktPrefs.getString(TraktService.prefsClientSecretKey) ?? '';
+
     // Load Trakt status
     final traktLoggedIn = await _trakt.isLoggedIn();
     String? traktUser;
@@ -272,6 +282,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _prowlarrUrlController.dispose();
     _prowlarrApiKeyController.dispose();
     _mdblistApiKeyController.dispose();
+    _traktClientIdController.dispose();
+    _traktClientSecretController.dispose();
     _rdPollTimer?.cancel();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
@@ -1522,12 +1534,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Trakt
   // ═══════════════════════════════════════════════════════════════════════
 
+  Future<void> _saveTraktApiCredentials() async {
+    final id = _traktClientIdController.text.trim();
+    final secret = _traktClientSecretController.text.trim();
+    if (id.isEmpty || secret.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter both Trakt Client ID and Client Secret'),
+          ),
+        );
+      }
+      return;
+    }
+    await _trakt.setApiCredentials(clientId: id, clientSecret: secret);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Trakt API credentials saved')),
+      );
+    }
+  }
+
   void _startTraktLogin() async {
+    if (!await _trakt.hasApiCredentials()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Add your Trakt Client ID and Secret above (from trakt.tv/oauth/apps), then tap Login again.',
+            ),
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+      return;
+    }
     final data = await _trakt.startDeviceAuth();
     if (data == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to start Trakt login')),
+          const SnackBar(
+            content: Text(
+              'Trakt did not return a device code. Check your Client ID and network, or try again.',
+            ),
+            duration: Duration(seconds: 4),
+          ),
         );
       }
       return;
@@ -1705,7 +1756,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Sync your watchlist and watch history with Trakt.tv',
             style: TextStyle(fontSize: 13, color: Colors.white54),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          Text(
+            'Create an app at trakt.tv/oauth/apps (Redirect: urn:ietf:wg:oauth:2.0:oob), then paste Client ID and Secret below. Official builds may already include these.',
+            style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.35), height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _traktClientIdController,
+            decoration: InputDecoration(
+              labelText: 'Trakt Client ID',
+              hintText: 'From your Trakt API app',
+              labelStyle: const TextStyle(color: Colors.white54),
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.2)),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _traktClientSecretController,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: 'Trakt Client Secret',
+              labelStyle: const TextStyle(color: Colors.white54),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _saveTraktApiCredentials,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primaryColor,
+                side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Save Trakt API credentials'),
+            ),
+          ),
+          const SizedBox(height: 20),
 
           if (_isTraktLoggedIn) ...[
             // ── Logged in ──
