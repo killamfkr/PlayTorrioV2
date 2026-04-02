@@ -60,6 +60,10 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   final Map<String, TvScheduleSlot?> _nowPlayingByKey = {};
   Timer? _nowPlayingTicker;
   int _nowPlayingFetchGen = 0;
+  Timer? _lazyEpgDebounce;
+  int _lazyEpgSession = 0;
+  int _lazyEpgPreparedSession = -1;
+  Map<String, String> _lazyEpgChannelMap = {};
 
   @override
   void initState() {
@@ -79,6 +83,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
 
   @override
   void dispose() {
+    _lazyEpgDebounce?.cancel();
     _nowPlayingTicker?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
@@ -92,38 +97,128 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
     return '$base|$type|$id';
   }
 
-  Future<void> _prefetchChannelNowPlaying({required bool replaceAll}) async {
-    if (!widget.tvChannelsOnly || !mounted) return;
-    final items = List<Map<String, dynamic>>.from(_items);
-    if (items.isEmpty) return;
+  /// Same cross-axis layout math as [_buildContentGrid] (for visible-index range).
+  ({int crossAxisCount, double aspectRatio}) _gridLayoutForItems(double width) {
+    final shape = _items.firstOrNull?['posterShape']?.toString() ?? 'poster';
+    final double aspectRatio;
+    final int crossAxisCount;
 
-    final gen = ++_nowPlayingFetchGen;
+    if (shape == 'landscape') {
+      aspectRatio = widget.tvChannelsOnly ? 16 / 11.2 : 16 / 9;
+      crossAxisCount = width > 1200 ? 5 : (width > 900 ? 4 : (width > 600 ? 3 : 2));
+    } else if (shape == 'square') {
+      aspectRatio = 1.0;
+      crossAxisCount = width > 1200 ? 6 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
+    } else {
+      aspectRatio = 2 / 3;
+      crossAxisCount = width > 1200 ? 7 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
+    }
+    return (crossAxisCount: crossAxisCount, aspectRatio: aspectRatio);
+  }
+
+  /// Approximate grid indices currently visible (plus buffer rows) for lazy EPG fetch.
+  ({int start, int end})? _visibleItemIndexRange({
+    required int crossAxisCount,
+    required double aspectRatio,
+  }) {
+    if (!mounted || _items.isEmpty) return null;
+    if (!_scrollController.hasClients) return null;
+    final pos = _scrollController.position;
+    final width = MediaQuery.sizeOf(context).width;
+    const horizontalPadding = 16.0;
+    const crossSpacing = 14.0;
+    const mainSpacing = 14.0;
+    const verticalPadding = 16.0;
+
+    final usableW = width - 2 * horizontalPadding;
+    final childW = (usableW - (crossAxisCount - 1) * crossSpacing) / crossAxisCount;
+    final childH = childW / aspectRatio;
+    final rowStride = childH + mainSpacing;
+    if (rowStride < 1) return null;
+
+    final scrollTop = pos.pixels;
+    final viewportH = pos.viewportDimension;
+    var firstRow = ((scrollTop - verticalPadding) / rowStride).floor();
+    if (firstRow < 0) firstRow = 0;
+    var lastRow = ((scrollTop + viewportH - verticalPadding) / rowStride).ceil();
+    const bufferRows = 2;
+    firstRow = (firstRow - bufferRows).clamp(0, 1 << 20);
+    final maxRow = _items.length <= 0 ? 0 : (_items.length - 1) ~/ crossAxisCount;
+    lastRow = (lastRow + bufferRows).clamp(0, maxRow);
+
+    final start = firstRow * crossAxisCount;
+    final end = ((lastRow + 1) * crossAxisCount - 1).clamp(0, _items.length - 1);
+    if (start > end) return null;
+    return (start: start, end: end);
+  }
+
+  Future<void> _prepareLazyEpgIfNeeded() async {
+    if (_lazyEpgPreparedSession == _lazyEpgSession) return;
+    final session = _lazyEpgSession;
     final settings = SettingsService();
     final epgUrl = await settings.getXmltvEpgUrl();
-    final epgMap = await settings.getXmltvChannelMap();
+    final map = await settings.getXmltvChannelMap();
+    if (!mounted || session != _lazyEpgSession) return;
     final epg = XmltvEpgService.instance;
     if (epgUrl != null && epgUrl.isNotEmpty) {
       await epg.loadFromUrl(epgUrl);
     } else {
       epg.clear();
     }
-    final epgLoaded = epg.isLoaded;
+    if (!mounted || session != _lazyEpgSession) return;
+    _lazyEpgChannelMap = map;
+    _lazyEpgPreparedSession = session;
+  }
 
-    if (!mounted || gen != _nowPlayingFetchGen) return;
+  void _scheduleLazyNowPlayingPrefetch() {
+    if (!widget.tvChannelsOnly) return;
+    _lazyEpgDebounce?.cancel();
+    _lazyEpgDebounce = Timer(const Duration(milliseconds: 140), () {
+      if (!mounted) return;
+      unawaited(_runLazyNowPlayingPrefetch());
+    });
+  }
 
-    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
-    const maxFetch = 80;
-    const concurrency = 6;
-
-    final toFetch = <Map<String, dynamic>>[];
-    for (final item in items.take(maxFetch)) {
-      final key = _channelRowKey(item, catType);
-      if (!replaceAll && _nowPlayingByKey.containsKey(key)) continue;
-      toFetch.add(item);
+  Future<void> _runLazyNowPlayingPrefetch() async {
+    if (!widget.tvChannelsOnly || !mounted || _items.isEmpty) return;
+    if (!_scrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleLazyNowPlayingPrefetch();
+      });
+      return;
     }
 
+    final gen = _nowPlayingFetchGen;
+    final session = _lazyEpgSession;
+    final width = MediaQuery.sizeOf(context).width;
+    final layout = _gridLayoutForItems(width);
+    final range = _visibleItemIndexRange(
+      crossAxisCount: layout.crossAxisCount,
+      aspectRatio: layout.aspectRatio,
+    );
+    if (range == null) return;
+
+    await _prepareLazyEpgIfNeeded();
+    if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
+
+    final epg = XmltvEpgService.instance;
+    final epgLoaded = epg.isLoaded;
+    final epgMap = _lazyEpgChannelMap;
+    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
+
+    const maxBatch = 30;
+    const concurrency = 6;
+    final toFetch = <Map<String, dynamic>>[];
+    for (var i = range.start; i <= range.end && toFetch.length < maxBatch; i++) {
+      final item = _items[i];
+      final key = _channelRowKey(item, catType);
+      if (_nowPlayingByKey.containsKey(key)) continue;
+      toFetch.add(item);
+    }
+    if (toFetch.isEmpty) return;
+
     for (var i = 0; i < toFetch.length; i += concurrency) {
-      if (!mounted || gen != _nowPlayingFetchGen) return;
+      if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
       final chunk = toFetch.skip(i).take(concurrency).toList();
       final updates = <String, TvScheduleSlot?>{};
       await Future.wait(chunk.map((item) async {
@@ -157,7 +252,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
           updates[key] = null;
         }
       }));
-      if (!mounted || gen != _nowPlayingFetchGen) return;
+      if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
       setState(() {
         for (final e in updates.entries) {
           _nowPlayingByKey[e.key] = e.value;
@@ -167,8 +262,12 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400) {
+    if (_scrollController.hasClients &&
+        _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400) {
       _loadMore();
+    }
+    if (widget.tvChannelsOnly && _items.isNotEmpty) {
+      _scheduleLazyNowPlayingPrefetch();
     }
   }
 
@@ -230,8 +329,13 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       _skip = results.length;
     });
     if (widget.tvChannelsOnly) {
+      _nowPlayingFetchGen++;
+      _lazyEpgSession++;
+      _lazyEpgPreparedSession = -1;
       setState(() => _nowPlayingByKey.clear());
-      unawaited(_prefetchChannelNowPlaying(replaceAll: true));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleLazyNowPlayingPrefetch();
+      });
     }
   }
 
@@ -262,7 +366,9 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       _isLoadingMore = false;
     });
     if (widget.tvChannelsOnly) {
-      unawaited(_prefetchChannelNowPlaying(replaceAll: false));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleLazyNowPlayingPrefetch();
+      });
     }
   }
 
@@ -1252,23 +1358,17 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
     }
 
     final width = MediaQuery.of(context).size.width;
-    // Determine poster shape from first item
-    final shape = _items.firstOrNull?['posterShape']?.toString() ?? 'poster';
-    final double aspectRatio;
-    final int crossAxisCount;
-
-    if (shape == 'landscape') {
-      aspectRatio = widget.tvChannelsOnly ? 16 / 11.2 : 16 / 9;
-      crossAxisCount = width > 1200 ? 5 : (width > 900 ? 4 : (width > 600 ? 3 : 2));
-    } else if (shape == 'square') {
-      aspectRatio = 1.0;
-      crossAxisCount = width > 1200 ? 6 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
-    } else {
-      aspectRatio = 2 / 3;
-      crossAxisCount = width > 1200 ? 7 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
-    }
+    final layout = _gridLayoutForItems(width);
+    final crossAxisCount = layout.crossAxisCount;
+    final aspectRatio = layout.aspectRatio;
 
     final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
+
+    if (widget.tvChannelsOnly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleLazyNowPlayingPrefetch();
+      });
+    }
 
     return GridView.builder(
       controller: _scrollController,
@@ -1286,16 +1386,14 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
           return _buildShimmerCard();
         }
         final item = _items[index];
-        const maxNowPlayingIndex = 80;
         final rowKey = widget.tvChannelsOnly ? _channelRowKey(item, catType) : null;
-        final showEpgOnCard = widget.tvChannelsOnly && index < maxNowPlayingIndex;
-        final nowSlot = showEpgOnCard && rowKey != null ? _nowPlayingByKey[rowKey] : null;
+        final nowSlot = widget.tvChannelsOnly && rowKey != null ? _nowPlayingByKey[rowKey] : null;
         return _StremioCatalogCard(
           item: item,
           onTap: () => _openItem(item),
           nowPlaying: nowSlot,
-          showNowPlayingBar: showEpgOnCard,
-          nowPlayingLoaded: showEpgOnCard && rowKey != null && _nowPlayingByKey.containsKey(rowKey),
+          showNowPlayingBar: widget.tvChannelsOnly,
+          nowPlayingLoaded: widget.tvChannelsOnly && rowKey != null && _nowPlayingByKey.containsKey(rowKey),
         );
       },
     );
