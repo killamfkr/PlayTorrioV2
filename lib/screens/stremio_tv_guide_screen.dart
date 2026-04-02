@@ -7,6 +7,7 @@ import '../api/stremio_service.dart';
 import '../models/movie.dart';
 import '../services/xmltv_epg_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/stremio_tv_schedule.dart';
 import 'details_screen.dart';
 import 'epg_channel_mapping_screen.dart';
 
@@ -22,25 +23,11 @@ class StremioTvGuideScreen extends StatefulWidget {
   State<StremioTvGuideScreen> createState() => _StremioTvGuideScreenState();
 }
 
-class _GuideSlot {
-  final DateTime start;
-  final DateTime end;
-  final String title;
-  final String? subtitle;
-
-  const _GuideSlot({
-    required this.start,
-    required this.end,
-    required this.title,
-    this.subtitle,
-  });
-}
-
 class _ChannelRow {
   final Map<String, dynamic> catalogItem;
   final String addonBaseUrl;
   final String metaType;
-  final List<_GuideSlot> slots;
+  final List<TvScheduleSlot> slots;
   /// True when slots came from addon meta (videos / behaviorHints), not XMLTV or placeholder.
   final bool fromStremioSchedule;
   final String? tvgId;
@@ -72,115 +59,6 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
   void initState() {
     super.initState();
     _load();
-  }
-
-  DateTime? _parseReleased(dynamic released) {
-    if (released == null) return null;
-    if (released is int) {
-      final n = released;
-      if (n > 2000000000000) return DateTime.fromMillisecondsSinceEpoch(n);
-      if (n > 2000000000) return DateTime.fromMillisecondsSinceEpoch(n * 1000);
-      return DateTime.fromMillisecondsSinceEpoch(n * 1000);
-    }
-    if (released is String) {
-      final t = DateTime.tryParse(released);
-      if (t != null) return t;
-      final asInt = int.tryParse(released);
-      if (asInt != null) return _parseReleased(asInt);
-    }
-    return null;
-  }
-
-  /// [fromAddon] is true when videos or embedded EPG hints produced the list.
-  ({List<_GuideSlot> slots, bool fromAddon}) _slotsFromMeta(Map<String, dynamic> meta, String channelName) {
-    final videos = meta['videos'];
-    if (videos is List && videos.isNotEmpty) {
-      final List<_GuideSlot> slots = [];
-      for (final raw in videos) {
-        if (raw is! Map) continue;
-        final m = Map<String, dynamic>.from(raw as Map);
-        final title = (m['name'] ?? m['title'] ?? 'Program').toString();
-        final start = _parseReleased(m['released'] ?? m['firstAired'] ?? m['airDate']);
-        if (start == null) continue;
-        final durMin = (m['duration'] as num?)?.toInt() ??
-            (m['runtime'] as num?)?.toInt() ??
-            30;
-        final end = start.add(Duration(minutes: durMin.clamp(15, 240)));
-        slots.add(_GuideSlot(
-          start: start,
-          end: end,
-          title: title,
-          subtitle: m['description']?.toString(),
-        ));
-      }
-      slots.sort((a, b) => a.start.compareTo(b.start));
-      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
-    }
-
-    // Optional: addon-specific EPG in behaviorHints (rare)
-    final hints = meta['behaviorHints'];
-    if (hints is Map && hints['epg'] is List) {
-      final List<_GuideSlot> slots = [];
-      for (final e in hints['epg'] as List) {
-        if (e is! Map) continue;
-        final start = _parseReleased(e['start'] ?? e['from']);
-        final end = _parseReleased(e['end'] ?? e['to']);
-        if (start == null) continue;
-        slots.add(_GuideSlot(
-          start: start,
-          end: end ?? start.add(const Duration(hours: 1)),
-          title: (e['title'] ?? e['name'] ?? 'Program').toString(),
-          subtitle: e['description']?.toString(),
-        ));
-      }
-      slots.sort((a, b) => a.start.compareTo(b.start));
-      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
-    }
-
-    // Fallback: single "Live" block anchored to the current hour
-    final now = DateTime.now();
-    final hourStart = DateTime(now.year, now.month, now.day, now.hour);
-    return (
-      slots: [
-        _GuideSlot(
-          start: hourStart,
-          end: hourStart.add(const Duration(hours: 1)),
-          title: 'Live',
-          subtitle: channelName,
-        ),
-      ],
-      fromAddon: false,
-    );
-  }
-
-  List<_GuideSlot> _slotsFromXmltv(
-    XmltvEpgService epg, {
-    required String? tvgId,
-    required String channelName,
-    required String stremioId,
-    String? epgChannelOverride,
-  }) {
-    final from = DateTime.now().subtract(const Duration(hours: 6));
-    final to = DateTime.now().add(const Duration(days: 2));
-    final progs = epg.programmesFor(
-      tvgId: tvgId,
-      channelName: channelName,
-      stremioId: stremioId,
-      epgChannelOverride: epgChannelOverride,
-      from: from,
-      to: to,
-      maxItems: 24,
-    );
-    return progs
-        .map(
-          (p) => _GuideSlot(
-            start: p.start,
-            end: p.end,
-            title: p.title,
-            subtitle: p.subtitle,
-          ),
-        )
-        .toList();
   }
 
   Future<void> _load() async {
@@ -243,15 +121,15 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
           if (meta == null) return null;
           final name = item['name']?.toString() ?? meta['name']?.toString() ?? 'Channel';
           final tvgId = meta['tvgId']?.toString() ?? item['tvgId']?.toString();
-          final built = _slotsFromMeta(meta, name);
+          final mapKey = SettingsService.xmltvChannelMapKeyFor(
+            addonBaseUrl: base,
+            stremioChannelId: id,
+          );
+          final built = StremioTvSchedule.slotsFromMeta(meta, name);
           var slots = built.slots;
           var fromStremio = built.fromAddon;
           if (!fromStremio && epg.isLoaded) {
-            final mapKey = SettingsService.xmltvChannelMapKeyFor(
-              addonBaseUrl: base,
-              stremioChannelId: id,
-            );
-            final xmlSlots = _slotsFromXmltv(
+            final xmlSlots = StremioTvSchedule.slotsFromXmltv(
               epg,
               tvgId: tvgId,
               channelName: name,
@@ -323,7 +201,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
     return '$h:$m';
   }
 
-  List<_GuideSlot> _upcomingSlots(_ChannelRow row, {int max = 4}) {
+  List<TvScheduleSlot> _upcomingSlots(_ChannelRow row, {int max = 4}) {
     final now = DateTime.now();
     final filtered = row.slots.where((s) => s.end.isAfter(now.subtract(const Duration(minutes: 5)))).toList();
     if (filtered.isEmpty) return row.slots.take(max).toList();

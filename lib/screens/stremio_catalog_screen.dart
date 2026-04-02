@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shimmer/shimmer.dart';
+import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../api/tmdb_api.dart';
 import '../models/movie.dart';
 import '../services/my_list_service.dart';
+import '../services/xmltv_epg_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/stremio_tv_schedule.dart';
 import 'details_screen.dart';
 import 'stremio_tv_guide_screen.dart';
 
@@ -50,6 +55,12 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   String _searchQuery = '';
   String _filterType = 'all'; // 'all', 'movie', 'series'
 
+  /// Per-channel "now playing" for TV Channels tab (key: addon|type|id).
+  /// Missing key = not loaded yet; `null` value = loaded, no programme in the current window.
+  final Map<String, TvScheduleSlot?> _nowPlayingByKey = {};
+  Timer? _nowPlayingTicker;
+  int _nowPlayingFetchGen = 0;
+
   @override
   void initState() {
     super.initState();
@@ -59,13 +70,100 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       _searchQuery = widget.initialSearch!;
     }
     _loadCatalogs();
+    if (widget.tvChannelsOnly) {
+      _nowPlayingTicker = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (mounted && _nowPlayingByKey.isNotEmpty) setState(() {});
+      });
+    }
   }
 
   @override
   void dispose() {
+    _nowPlayingTicker?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  static String _channelRowKey(Map<String, dynamic> item, String catalogType) {
+    final base = item['_addonBaseUrl']?.toString() ?? '';
+    final id = item['id']?.toString() ?? '';
+    final type = item['type']?.toString() ?? catalogType;
+    return '$base|$type|$id';
+  }
+
+  Future<void> _prefetchChannelNowPlaying({required bool replaceAll}) async {
+    if (!widget.tvChannelsOnly || !mounted) return;
+    final items = List<Map<String, dynamic>>.from(_items);
+    if (items.isEmpty) return;
+
+    final gen = ++_nowPlayingFetchGen;
+    final settings = SettingsService();
+    final epgUrl = await settings.getXmltvEpgUrl();
+    final epgMap = await settings.getXmltvChannelMap();
+    final epg = XmltvEpgService.instance;
+    if (epgUrl != null && epgUrl.isNotEmpty) {
+      await epg.loadFromUrl(epgUrl);
+    } else {
+      epg.clear();
+    }
+    final epgLoaded = epg.isLoaded;
+
+    if (!mounted || gen != _nowPlayingFetchGen) return;
+
+    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
+    const maxFetch = 80;
+    const concurrency = 6;
+
+    final toFetch = <Map<String, dynamic>>[];
+    for (final item in items.take(maxFetch)) {
+      final key = _channelRowKey(item, catType);
+      if (!replaceAll && _nowPlayingByKey.containsKey(key)) continue;
+      toFetch.add(item);
+    }
+
+    for (var i = 0; i < toFetch.length; i += concurrency) {
+      if (!mounted || gen != _nowPlayingFetchGen) return;
+      final chunk = toFetch.skip(i).take(concurrency).toList();
+      final updates = <String, TvScheduleSlot?>{};
+      await Future.wait(chunk.map((item) async {
+        final base = item['_addonBaseUrl']?.toString() ?? '';
+        final id = item['id']?.toString() ?? '';
+        if (base.isEmpty || id.isEmpty) return;
+        final type = item['type']?.toString() ?? catType;
+        final key = _channelRowKey(item, catType);
+        try {
+          final meta = await _stremio.getMeta(baseUrl: base, type: type, id: id);
+          if (meta == null) {
+            updates[key] = null;
+            return;
+          }
+          final name = item['name']?.toString() ?? meta['name']?.toString() ?? 'Channel';
+          final mapKey = SettingsService.xmltvChannelMapKeyFor(
+            addonBaseUrl: base,
+            stremioChannelId: id,
+          );
+          final slots = StremioTvSchedule.resolveSlots(
+            meta: meta,
+            channelName: name,
+            stremioId: id,
+            epg: epg,
+            epgLoaded: epgLoaded,
+            epgChannelOverride: epgMap[mapKey],
+            catalogItemTvgId: item['tvgId']?.toString(),
+          );
+          updates[key] = StremioTvSchedule.currentSlot(slots);
+        } catch (_) {
+          updates[key] = null;
+        }
+      }));
+      if (!mounted || gen != _nowPlayingFetchGen) return;
+      setState(() {
+        for (final e in updates.entries) {
+          _nowPlayingByKey[e.key] = e.value;
+        }
+      });
+    }
   }
 
   void _onScroll() {
@@ -131,6 +229,10 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       _hasMore = results.length >= 100;
       _skip = results.length;
     });
+    if (widget.tvChannelsOnly) {
+      setState(() => _nowPlayingByKey.clear());
+      unawaited(_prefetchChannelNowPlaying(replaceAll: true));
+    }
   }
 
   Future<void> _loadMore() async {
@@ -159,6 +261,9 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       _hasMore = results.length >= 100;
       _isLoadingMore = false;
     });
+    if (widget.tvChannelsOnly) {
+      unawaited(_prefetchChannelNowPlaying(replaceAll: false));
+    }
   }
 
   void _selectCatalog(Map<String, dynamic> catalog) {
@@ -1153,7 +1258,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
     final int crossAxisCount;
 
     if (shape == 'landscape') {
-      aspectRatio = 16 / 9;
+      aspectRatio = widget.tvChannelsOnly ? 16 / 11.2 : 16 / 9;
       crossAxisCount = width > 1200 ? 5 : (width > 900 ? 4 : (width > 600 ? 3 : 2));
     } else if (shape == 'square') {
       aspectRatio = 1.0;
@@ -1162,6 +1267,8 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       aspectRatio = 2 / 3;
       crossAxisCount = width > 1200 ? 7 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
     }
+
+    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
 
     return GridView.builder(
       controller: _scrollController,
@@ -1178,9 +1285,17 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
         if (index >= _items.length) {
           return _buildShimmerCard();
         }
+        final item = _items[index];
+        const maxNowPlayingIndex = 80;
+        final rowKey = widget.tvChannelsOnly ? _channelRowKey(item, catType) : null;
+        final showEpgOnCard = widget.tvChannelsOnly && index < maxNowPlayingIndex;
+        final nowSlot = showEpgOnCard && rowKey != null ? _nowPlayingByKey[rowKey] : null;
         return _StremioCatalogCard(
-          item: _items[index],
-          onTap: () => _openItem(_items[index]),
+          item: item,
+          onTap: () => _openItem(item),
+          nowPlaying: nowSlot,
+          showNowPlayingBar: showEpgOnCard,
+          nowPlayingLoaded: showEpgOnCard && rowKey != null && _nowPlayingByKey.containsKey(rowKey),
         );
       },
     );
@@ -1224,8 +1339,17 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
 class _StremioCatalogCard extends StatelessWidget {
   final Map<String, dynamic> item;
   final VoidCallback onTap;
+  final TvScheduleSlot? nowPlaying;
+  final bool showNowPlayingBar;
+  final bool nowPlayingLoaded;
 
-  const _StremioCatalogCard({required this.item, required this.onTap});
+  const _StremioCatalogCard({
+    required this.item,
+    required this.onTap,
+    this.nowPlaying,
+    this.showNowPlayingBar = false,
+    this.nowPlayingLoaded = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1234,6 +1358,7 @@ class _StremioCatalogCard extends StatelessWidget {
     final type = item['type']?.toString() ?? '';
     final rating = item['imdbRating']?.toString() ?? '';
     final releaseInfo = item['releaseInfo']?.toString() ?? '';
+    final progress = nowPlaying != null ? StremioTvSchedule.progressOf(nowPlaying!) : 0.0;
 
     return FocusableControl(
       onTap: onTap,
@@ -1286,8 +1411,8 @@ class _StremioCatalogCard extends StatelessWidget {
                 ),
               ),
 
-            // Type badge
-            if (type.isNotEmpty)
+            // Type badge (hidden on TV channels — cards are always live TV)
+            if (type.isNotEmpty && !showNowPlayingBar)
               Positioned(
                 top: 6, left: 6,
                 child: Container(
@@ -1309,12 +1434,12 @@ class _StremioCatalogCard extends StatelessWidget {
             Positioned(
               bottom: 0, left: 0, right: 0,
               child: Container(
-                padding: const EdgeInsets.all(8),
+                padding: EdgeInsets.fromLTRB(8, 10, 8, showNowPlayingBar ? 10 : 8),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
-                    colors: [Colors.black.withValues(alpha: 0.9), Colors.transparent],
+                    colors: [Colors.black.withValues(alpha: 0.92), Colors.transparent],
                   ),
                 ),
                 child: Column(
@@ -1323,11 +1448,42 @@ class _StremioCatalogCard extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      maxLines: 2,
+                      maxLines: showNowPlayingBar ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                     ),
-                    if (releaseInfo.isNotEmpty)
+                    if (showNowPlayingBar) ...[
+                      const SizedBox(height: 6),
+                      if (nowPlaying != null) ...[
+                        Text(
+                          'Now · ${nowPlaying!.title}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white70, fontSize: 10, height: 1.2),
+                        ),
+                        const SizedBox(height: 5),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: LinearProgressIndicator(
+                            value: progress.clamp(0.0, 1.0),
+                            minHeight: 4,
+                            backgroundColor: Colors.white.withValues(alpha: 0.15),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppTheme.primaryColor.withValues(alpha: 0.95),
+                            ),
+                          ),
+                        ),
+                      ] else if (!nowPlayingLoaded)
+                        Text(
+                          'Loading schedule…',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10),
+                        )
+                      else
+                        Text(
+                          'No listing for now',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 10),
+                        ),
+                    ] else if (releaseInfo.isNotEmpty)
                       Text(
                         releaseInfo,
                         style: const TextStyle(color: Colors.white54, fontSize: 10),
@@ -1339,7 +1495,8 @@ class _StremioCatalogCard extends StatelessWidget {
 
             // My List add/remove button
             Positioned(
-              bottom: 44, right: 6,
+              bottom: showNowPlayingBar ? 88 : 44,
+              right: 6,
               child: _AddToMyListStremioButton(item: item),
             ),
           ],
