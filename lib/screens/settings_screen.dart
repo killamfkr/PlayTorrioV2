@@ -18,6 +18,7 @@ import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../utils/app_theme.dart';
 import 'lists_screen.dart';
+import 'epg_channel_mapping_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -1070,6 +1071,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const EpgChannelMappingScreen()),
+                );
+              },
+              icon: const Icon(Icons.link_rounded, size: 20),
+              label: const Text('Match EPG channels to Live TV'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.4)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
           ),
         ],
       ),

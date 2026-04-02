@@ -8,6 +8,7 @@ import '../models/movie.dart';
 import '../services/xmltv_epg_service.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
+import 'epg_channel_mapping_screen.dart';
 
 /// Time-blocked listing for Stremio live-TV channels.
 ///
@@ -157,6 +158,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
     required String? tvgId,
     required String channelName,
     required String stremioId,
+    String? epgChannelOverride,
   }) {
     final from = DateTime.now().subtract(const Duration(hours: 6));
     final to = DateTime.now().add(const Duration(days: 2));
@@ -164,6 +166,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
       tvgId: tvgId,
       channelName: channelName,
       stremioId: stremioId,
+      epgChannelOverride: epgChannelOverride,
       from: from,
       to: to,
       maxItems: 24,
@@ -187,7 +190,9 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
     });
 
     try {
-      final epgUrl = await SettingsService().getXmltvEpgUrl();
+      final settings = SettingsService();
+      final epgUrl = await settings.getXmltvEpgUrl();
+      final epgMap = await settings.getXmltvChannelMap();
       final epg = XmltvEpgService.instance;
       if (epgUrl != null && epgUrl.isNotEmpty) {
         await epg.loadFromUrl(epgUrl);
@@ -242,11 +247,16 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
           var slots = built.slots;
           var fromStremio = built.fromAddon;
           if (!fromStremio && epg.isLoaded) {
+            final mapKey = SettingsService.xmltvChannelMapKeyFor(
+              addonBaseUrl: base,
+              stremioChannelId: id,
+            );
             final xmlSlots = _slotsFromXmltv(
               epg,
               tvgId: tvgId,
               channelName: name,
               stremioId: id,
+              epgChannelOverride: epgMap[mapKey],
             );
             if (xmlSlots.isNotEmpty) {
               slots = xmlSlots;
@@ -329,6 +339,16 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
         elevation: 0,
         title: const Text('TV Guide'),
         actions: [
+          IconButton(
+            tooltip: 'Match EPG to channels',
+            icon: const Icon(Icons.link_rounded),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EpgChannelMappingScreen()),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh_rounded),

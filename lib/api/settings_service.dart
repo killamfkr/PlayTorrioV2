@@ -78,6 +78,54 @@ class SettingsService {
     }
   }
 
+  /// XMLTV `<programme channel="...">` id → match a live Stremio channel (same addon baseUrl + meta id).
+  static const String _xmltvChannelMapKey = 'xmltv_epg_channel_map_json';
+
+  /// Keys are JSON: `{"b":"<addonBaseUrl>","i":"<stremioChannelId>"}` → EPG channel id string.
+  Future<Map<String, String>> getXmltvChannelMap() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_xmltvChannelMapKey);
+    if (raw == null || raw.trim().isEmpty) return {};
+    try {
+      final decoded = json.decode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static String xmltvChannelMapKeyFor({required String addonBaseUrl, required String stremioChannelId}) {
+    return json.encode({'b': addonBaseUrl, 'i': stremioChannelId});
+  }
+
+  Future<void> setXmltvChannelMap(Map<String, String> map) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (map.isEmpty) {
+      await prefs.remove(_xmltvChannelMapKey);
+    } else {
+      await prefs.setString(_xmltvChannelMapKey, json.encode(map));
+    }
+  }
+
+  Future<void> setXmltvChannelMapping({
+    required String addonBaseUrl,
+    required String stremioChannelId,
+    required String epgChannelId,
+  }) async {
+    final map = await getXmltvChannelMap();
+    final k = xmltvChannelMapKeyFor(
+      addonBaseUrl: addonBaseUrl,
+      stremioChannelId: stremioChannelId,
+    );
+    if (epgChannelId.trim().isEmpty) {
+      map.remove(k);
+    } else {
+      map[k] = epgChannelId.trim();
+    }
+    await setXmltvChannelMap(map);
+  }
+
   Future<List<Map<String, dynamic>>> getStremioAddons() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> list = prefs.getStringList(_stremioAddonsKey) ?? [];
@@ -451,6 +499,7 @@ class SettingsService {
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
+      _xmltvChannelMapKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
     ]) {
@@ -517,6 +566,7 @@ class SettingsService {
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
+      _xmltvChannelMapKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
     ]) {

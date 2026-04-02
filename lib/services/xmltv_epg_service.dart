@@ -14,6 +14,13 @@ class XmltvEpgService {
 
   bool get isLoaded => _byChannel.isNotEmpty;
 
+  /// Normalized `<channel id="...">` / `<programme channel="...">` ids present in the loaded file.
+  List<String> get loadedChannelIds {
+    final ids = _byChannel.keys.toList();
+    ids.sort();
+    return ids;
+  }
+
   void clear() => _byChannel.clear();
 
   static String normalizeKey(String s) {
@@ -143,15 +150,27 @@ class XmltvEpgService {
   }
 
   /// Programmes overlapping [from]..[to] for the best-matching channel id.
+  /// [epgChannelOverride] is tried first (manual match from Settings).
   List<XmltvProgramme> programmesFor({
     String? tvgId,
     String? channelName,
     String? stremioId,
+    String? epgChannelOverride,
     required DateTime from,
     required DateTime to,
     int maxItems = 12,
   }) {
-    for (final key in _candidateKeys(tvgId, channelName, stremioId)) {
+    final seen = <String>{};
+    Iterable<String> keys() sync* {
+      if (epgChannelOverride != null && epgChannelOverride.trim().isNotEmpty) {
+        yield normalizeKey(epgChannelOverride.trim());
+      }
+      for (final k in _candidateKeys(tvgId, channelName, stremioId)) {
+        if (seen.add(k)) yield k;
+      }
+    }
+
+    for (final key in keys()) {
       final list = _byChannel[key];
       if (list == null || list.isEmpty) continue;
       final out = <XmltvProgramme>[];
