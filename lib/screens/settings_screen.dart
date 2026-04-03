@@ -18,6 +18,7 @@ import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/settings_backup_download.dart';
+import '../utils/read_file_path.dart';
 import '../platform_flags.dart';
 import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
@@ -672,7 +673,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (file.bytes != null) {
       jsonStr = utf8.decode(file.bytes!);
     } else if (file.path != null) {
-      jsonStr = await File(file.path!).readAsString();
+      jsonStr = await readFilePathAsString(file.path!);
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
