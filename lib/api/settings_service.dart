@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'music_storage_service.dart';
 import 'trakt_service.dart';
 
 class SettingsService {
@@ -512,7 +513,12 @@ class SettingsService {
       if (v != null) prefsMap[key] = v;
     }
     // StringList keys
-    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+    for (final key in [
+      _stremioAddonsKey,
+      _navbarConfigKey,
+      MusicStorageService.prefsLikedSongsKey,
+      MusicStorageService.prefsPlaylistsKey,
+    ]) {
       final v = prefs.getStringList(key);
       if (v != null) prefsMap[key] = v;
     }
@@ -581,7 +587,12 @@ class SettingsService {
       }
     }
     // StringList keys
-    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+    for (final key in [
+      _stremioAddonsKey,
+      _navbarConfigKey,
+      MusicStorageService.prefsLikedSongsKey,
+      MusicStorageService.prefsPlaylistsKey,
+    ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setStringList(
             key, (prefsMap[key] as List).cast<String>());
@@ -599,5 +610,8 @@ class SettingsService {
     // Notify listeners so UI refreshes
     addonChangeNotifier.value++;
     navbarChangeNotifier.value++;
+
+    final music = MusicStorageService();
+    music.likedSongs.value = await music.getLikedSongs();
   }
 }

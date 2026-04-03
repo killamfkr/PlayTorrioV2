@@ -750,7 +750,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Export or import all your settings, addons, API keys, and preferences as a JSON file.',
+            'Export or import all your settings, addons, API keys, music liked songs and playlists, and preferences as a JSON file.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
           ),
           const SizedBox(height: 16),
