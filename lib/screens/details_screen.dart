@@ -23,6 +23,7 @@ import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
 import '../utils/extensions.dart';
 import '../utils/app_theme.dart';
+import '../utils/performance_tuning.dart';
 import '../platform_flags.dart';
 import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
@@ -1698,8 +1699,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
           alignment: Alignment.topCenter,
           errorWidget: (c, u, e) => Container(color: const Color(0xFF0A0A1A)),
         ),
-        BackdropFilter(filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-          child: Container(color: Colors.transparent)),
+        if (PerformanceTuning.skipBackdropBlur)
+          Container(color: Colors.black.withValues(alpha: 0.35))
+        else
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+            child: Container(color: Colors.transparent),
+          ),
         Container(decoration: const BoxDecoration(gradient: LinearGradient(
           begin: Alignment.topLeft, end: Alignment.bottomRight,
           colors: [Color(0xD5050510), Color(0xE8000000)]))),

@@ -20,6 +20,7 @@ import 'magnet_player_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../utils/performance_tuning.dart';
 import '../utils/tv_guide_refresh.dart';
 import '../api/settings_service.dart';
 import '../platform_flags.dart';
@@ -73,6 +74,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     MainScreen.stremioSearchNotifier.addListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.addListener(_onNavbarConfigChanged);
+    SettingsService.lightModeNotifier.addListener(_onLightModeChanged);
 
     _allScreens = {
       'home':         const HomeScreen(),
@@ -179,11 +181,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (idx != -1) setState(() => _selectedIndex = idx);
   }
 
+  void _onLightModeChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     MainScreen.stremioSearchNotifier.removeListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.removeListener(_onNavbarConfigChanged);
+    SettingsService.lightModeNotifier.removeListener(_onLightModeChanged);
     super.dispose();
   }
 
@@ -201,8 +208,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         children: [
           // Base gradient
           Container(decoration: AppTheme.effectiveBackground),
-          // Ambient glows (skipped in light mode)
-          if (!AppTheme.isLightMode) ...[
+          // Ambient glows (skipped in lite mode / on Android — expensive overdraw)
+          if (!PerformanceTuning.skipAmbientShellGlows) ...[
           // Ambient purple glow – top-right
           Positioned(
             top: -80,
@@ -300,9 +307,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ),
                 ),
               Expanded(
-                child: IndexedStack(
-                  index: _selectedIndex,
-                  children: _visibleIds.map((id) => _allScreens[id]!).toList(),
+                child: _LazyTabStack(
+                  selectedIndex: _selectedIndex,
+                  tabIds: _visibleIds,
+                  builders: _allScreens,
                 ),
               ),
             ],
@@ -393,7 +401,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
-    if (lightMode || DeviceProfile.isAndroidTv) {
+    if (PerformanceTuning.skipBottomNavBlur || DeviceProfile.isAndroidTv) {
       return ClipRect(child: navContent);
     }
 
@@ -402,6 +410,74 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: navContent,
       ),
+    );
+  }
+}
+
+/// Builds each tab only after it has been selected at least once (unlike IndexedStack, which builds all tabs up front).
+class _LazyTabStack extends StatefulWidget {
+  final int selectedIndex;
+  final List<String> tabIds;
+  final Map<String, Widget> builders;
+
+  const _LazyTabStack({
+    required this.selectedIndex,
+    required this.tabIds,
+    required this.builders,
+  });
+
+  @override
+  State<_LazyTabStack> createState() => _LazyTabStackState();
+}
+
+class _LazyTabStackState extends State<_LazyTabStack> {
+  final Set<int> _visited = {};
+
+  static bool _sameTabOrder(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _visited.add(widget.selectedIndex);
+  }
+
+  @override
+  void didUpdateWidget(_LazyTabStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_sameTabOrder(oldWidget.tabIds, widget.tabIds)) {
+      _visited
+        ..clear()
+        ..add(widget.selectedIndex);
+    } else {
+      _visited.add(widget.selectedIndex);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: List.generate(widget.tabIds.length, (i) {
+        if (!_visited.contains(i)) {
+          return const SizedBox.shrink();
+        }
+        final id = widget.tabIds[i];
+        final child = widget.builders[id]!;
+        final visible = i == widget.selectedIndex;
+        return Offstage(
+          offstage: !visible,
+          child: TickerMode(
+            enabled: visible,
+            child: child,
+          ),
+        );
+      }),
     );
   }
 }

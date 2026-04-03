@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../platform_flags.dart';
+import 'performance_tuning.dart';
 
 /// Runtime device traits from the native embedder (Android TV, etc.).
 class DeviceProfile {
@@ -39,7 +40,7 @@ class DeviceProfile {
     required double sigma,
     required BorderRadius borderRadius,
   }) {
-    if (isAndroidTv) {
+    if (PerformanceTuning.skipBackdropBlur || isAndroidTv) {
       return ClipRRect(borderRadius: borderRadius, child: child);
     }
     return ClipRRect(

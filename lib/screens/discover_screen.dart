@@ -6,6 +6,7 @@ import '../api/settings_service.dart';
 import '../models/movie.dart';
 import '../services/my_list_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/performance_tuning.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 
@@ -615,7 +616,7 @@ class _CompactFilterDialog extends StatelessWidget {
         constraints: BoxConstraints(maxWidth: 380, maxHeight: maxHeight ?? 500),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
-          child: AppTheme.isLightMode
+          child: PerformanceTuning.skipBackdropBlur
               ? _buildDialogBody(context)
               : BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
