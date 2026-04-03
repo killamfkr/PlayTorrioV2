@@ -18,6 +18,7 @@ import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../utils/performance_tuning.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
@@ -44,6 +45,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   
   Timer? _heroTimer;
   int _heroIndex = 0;
+  /// Hero uses at most 5 items; kept in sync with trending load for correct auto-advance.
+  int _heroPageCount = 1;
 
   // Hero logo cache: movieId -> logo URL
   final Map<int, String> _heroLogos = {};
@@ -66,6 +69,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     super.initState();
     _trendingFuture = _api.getTrending().then((movies) {
       _fetchHeroLogos(movies.take(5).toList());
+      if (mounted) {
+        final n = movies.length.clamp(0, 5);
+        setState(() => _heroPageCount = n > 0 ? n : 1);
+      }
       return movies;
     });
     _trendingTvFuture = _api.getTrendingTv();
@@ -150,16 +157,17 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   }
 
   void _startHeroTimer() {
-    if (AppTheme.isLightMode) return; // skip periodic rebuilds in light mode
+    if (AppTheme.isLightMode || PerformanceTuning.skipHomeHeroAutoAdvance) {
+      return;
+    }
     _heroTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
-      if (_heroController.hasClients) {
-        final next = (_heroIndex + 1) % 5;
+      if (_heroController.hasClients && _heroPageCount > 1) {
+        final next = (_heroIndex + 1) % _heroPageCount;
         _heroController.animateToPage(
           next,
           duration: const Duration(milliseconds: 1000),
           curve: Curves.easeInOutCubic,
         );
-        setState(() => _heroIndex = next);
       }
     });
   }
@@ -609,8 +617,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       backgroundColor: AppTheme.bgDark,
       body: Stack(
         children: [
-          // Atmospheric ambient glow spots (skipped in light mode)
-          if (!AppTheme.isLightMode) ...[
+          // Atmospheric ambient glow spots (skipped in light mode / Android TV)
+          if (!PerformanceTuning.skipHomeAmbientGlows) ...[
           Positioned(
             top: MediaQuery.of(context).size.height * 0.6,
             left: -80,
@@ -1497,10 +1505,18 @@ class _MovieCard extends StatelessWidget {
               color: AppTheme.bgCard,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 0.5),
-              boxShadow: AppTheme.isLightMode ? null : [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16, offset: const Offset(0, 8)),
-                BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.05), blurRadius: 20, spreadRadius: -4),
-              ],
+              boxShadow: (AppTheme.isLightMode || DeviceProfile.isAndroidTv)
+                  ? null
+                  : [
+                      BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8)),
+                      BoxShadow(
+                          color: AppTheme.primaryColor.withValues(alpha: 0.05),
+                          blurRadius: 20,
+                          spreadRadius: -4),
+                    ],
             ),
             child: Stack(
               fit: StackFit.expand,

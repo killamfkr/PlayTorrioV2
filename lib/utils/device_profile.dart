@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../api/settings_service.dart';
 import '../platform_flags.dart';
-import 'performance_tuning.dart';
 
 /// Runtime device traits from the native embedder (Android TV, etc.).
 class DeviceProfile {
@@ -40,7 +40,10 @@ class DeviceProfile {
     required double sigma,
     required BorderRadius borderRadius,
   }) {
-    if (PerformanceTuning.skipBackdropBlur || isAndroidTv) {
+    final skipBlur = isAndroidTv ||
+        (!kIsWeb && platformIsAndroid) ||
+        SettingsService.lightModeNotifier.value;
+    if (skipBlur) {
       return ClipRRect(borderRadius: borderRadius, child: child);
     }
     return ClipRRect(

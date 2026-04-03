@@ -32,6 +32,7 @@ import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
+import '../../utils/device_profile.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -110,6 +111,20 @@ class _BlurGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (DeviceProfile.isAndroidTv) {
+      return Container(
+        padding: padding,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1C1E).withValues(alpha: 0.88),
+          borderRadius: BorderRadius.circular(radius),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.16),
+            width: 0.8,
+          ),
+        ),
+        child: child,
+      );
+    }
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
@@ -495,6 +510,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   // ── Next Episode State ────────────────────────────────────────────────────
   bool _isLoadingNextEp = false;
   bool _nearEndOfEpisode = false;
+
+  /// When controls are hidden, throttling position/buffer notifier updates
+  /// avoids rebuilding the overlay every ~16ms (hurts Android TV SoCs).
+  int _lastPositionUiPushMs = 0;
+  int _lastBufferedUiPushMs = 0;
 
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipInToolbar = false;
@@ -1067,7 +1087,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   void _subscribeToStreams() {
     _positionSub = _player.stream.position.listen((pos) {
       if (_disposed) return;
-      _positionNotifier.value = pos;
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final overlayActive = _showControls && !_isLocked;
+      final minIntervalMs = DeviceProfile.isAndroidTv ? 500 : 0;
+      if (overlayActive ||
+          minIntervalMs == 0 ||
+          now - _lastPositionUiPushMs >= minIntervalMs) {
+        _lastPositionUiPushMs = now;
+        _positionNotifier.value = pos;
+      }
 
       // Near-end detection for next episode button
       if (_isNextEpisodeAvailable && !_nearEndOfEpisode) {
@@ -1116,6 +1145,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     _bufferSub = _player.stream.buffer.listen((buf) {
       if (_disposed) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final overlayActive = _showControls && !_isLocked;
+      if (DeviceProfile.isAndroidTv &&
+          !overlayActive &&
+          now - _lastBufferedUiPushMs < 800) {
+        return;
+      }
+      _lastBufferedUiPushMs = now;
       _bufferedNotifier.value = buf;
     });
 

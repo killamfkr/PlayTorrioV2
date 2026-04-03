@@ -17,6 +17,7 @@ import '../api/mdblist_service.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
 import '../utils/settings_backup_download.dart';
 import '../utils/read_file_path.dart';
 import '../platform_flags.dart';
@@ -348,11 +349,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: AppTheme.backgroundDecoration,
-        child: SafeArea(
-          child: CustomScrollView(
+    final scrollView = CustomScrollView(
             slivers: [
               const SliverAppBar(
                 backgroundColor: Colors.transparent,
@@ -612,7 +609,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
-          ),
+          );
+
+    return Scaffold(
+      body: Container(
+        decoration: AppTheme.backgroundDecoration,
+        child: SafeArea(
+          child: DeviceProfile.isAndroidTv
+              ? FocusTraversalGroup(
+                  policy: OrderedTraversalPolicy(),
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      scrollbars: false,
+                      physics: const ClampingScrollPhysics(),
+                    ),
+                    child: scrollView,
+                  ),
+                )
+              : scrollView,
         ),
       ),
     );
@@ -828,93 +842,214 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildNavbarConfig() {
+    final tvHint = DeviceProfile.isAndroidTv
+        ? 'Show, hide, and reorder tabs with the arrow buttons. Settings is always visible.'
+        : 'Show, hide, and reorder navigation tabs. Drag to reorder. Settings is always visible.';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 4, bottom: 12),
           child: Text(
-            'Show, hide, and reorder navigation tabs. Drag to reorder. Settings is always visible.',
+            tvHint,
             style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 13),
           ),
         ),
-        ReorderableListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          buildDefaultDragHandles: false,
-          itemCount: _navbarOrder.length,
-          proxyDecorator: (child, index, animation) {
-            return Material(
-              color: Colors.transparent,
-              child: child,
-            );
-          },
-          onReorder: (oldIndex, newIndex) {
-            setState(() {
-              if (newIndex > oldIndex) newIndex--;
-              final item = _navbarOrder.removeAt(oldIndex);
-              _navbarOrder.insert(newIndex, item);
-            });
-            _saveNavbarConfig();
-          },
-          itemBuilder: (context, index) {
-            final id = _navbarOrder[index];
-            final meta = _navMeta[id]!;
-            final isVisible = _navbarVisible.contains(id);
-
-            return Container(
-              key: ValueKey(id),
-              margin: const EdgeInsets.only(bottom: 2),
-              decoration: BoxDecoration(
-                color: isVisible
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : Colors.white.withValues(alpha: 0.02),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ListTile(
-                leading: Icon(
-                  meta['icon'] as IconData,
-                  color: isVisible ? Colors.white : Colors.white24,
-                  size: 22,
+        if (DeviceProfile.isAndroidTv)
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _navbarOrder.length,
+            itemBuilder: (context, index) {
+              final id = _navbarOrder[index];
+              final meta = _navMeta[id]!;
+              final isVisible = _navbarVisible.contains(id);
+              return Container(
+                key: ValueKey(id),
+                margin: const EdgeInsets.only(bottom: 2),
+                decoration: BoxDecoration(
+                  color: isVisible
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : Colors.white.withValues(alpha: 0.02),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                title: Text(
-                  meta['label'] as String,
-                  style: TextStyle(
-                    color: isVisible ? Colors.white : Colors.white38,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                child: ListTile(
+                  leading: Icon(
+                    meta['icon'] as IconData,
+                    color: isVisible ? Colors.white : Colors.white24,
+                    size: 22,
+                  ),
+                  title: Text(
+                    meta['label'] as String,
+                    style: TextStyle(
+                      color: isVisible ? Colors.white : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (index > 0)
+                        FocusableControl(
+                          onTap: () {
+                            setState(() {
+                              final item = _navbarOrder.removeAt(index);
+                              _navbarOrder.insert(index - 1, item);
+                            });
+                            _saveNavbarConfig();
+                          },
+                          borderRadius: 8,
+                          scaleOnFocus: 1.0,
+                          child: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(
+                              Icons.arrow_upward_rounded,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          ),
+                        )
+                      else
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.arrow_upward_rounded,
+                            color: Colors.white12,
+                            size: 22,
+                          ),
+                        ),
+                      if (index < _navbarOrder.length - 1)
+                        FocusableControl(
+                          onTap: () {
+                            setState(() {
+                              final item = _navbarOrder.removeAt(index);
+                              _navbarOrder.insert(index + 1, item);
+                            });
+                            _saveNavbarConfig();
+                          },
+                          borderRadius: 8,
+                          scaleOnFocus: 1.0,
+                          child: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(
+                              Icons.arrow_downward_rounded,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          ),
+                        )
+                      else
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.arrow_downward_rounded,
+                            color: Colors.white12,
+                            size: 22,
+                          ),
+                        ),
+                      Focus(
+                        skipTraversal: true,
+                        canRequestFocus: false,
+                        child: Switch(
+                          value: isVisible,
+                          activeTrackColor: AppTheme.primaryColor,
+                          onChanged: (val) {
+                            setState(() {
+                              if (val) {
+                                _navbarVisible.add(id);
+                              } else {
+                                _navbarVisible.remove(id);
+                              }
+                            });
+                            _saveNavbarConfig();
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Switch(
-                      value: isVisible,
-                      activeTrackColor: AppTheme.primaryColor,
-                      onChanged: (val) {
-                        setState(() {
-                          if (val) {
-                            _navbarVisible.add(id);
-                          } else {
-                            _navbarVisible.remove(id);
-                          }
-                        });
-                        _saveNavbarConfig();
-                      },
-                    ),
-                    ReorderableDragStartListener(
-                      index: index,
-                      child: const Padding(
-                        padding: EdgeInsets.only(left: 4),
-                        child: Icon(Icons.drag_handle, color: Colors.white24, size: 20),
-                      ),
-                    ),
-                  ],
+              );
+            },
+          )
+        else
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: _navbarOrder.length,
+            proxyDecorator: (child, index, animation) {
+              return Material(
+                color: Colors.transparent,
+                child: child,
+              );
+            },
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex--;
+                final item = _navbarOrder.removeAt(oldIndex);
+                _navbarOrder.insert(newIndex, item);
+              });
+              _saveNavbarConfig();
+            },
+            itemBuilder: (context, index) {
+              final id = _navbarOrder[index];
+              final meta = _navMeta[id]!;
+              final isVisible = _navbarVisible.contains(id);
+
+              return Container(
+                key: ValueKey(id),
+                margin: const EdgeInsets.only(bottom: 2),
+                decoration: BoxDecoration(
+                  color: isVisible
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : Colors.white.withValues(alpha: 0.02),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ),
-            );
-          },
-        ),
+                child: ListTile(
+                  leading: Icon(
+                    meta['icon'] as IconData,
+                    color: isVisible ? Colors.white : Colors.white24,
+                    size: 22,
+                  ),
+                  title: Text(
+                    meta['label'] as String,
+                    style: TextStyle(
+                      color: isVisible ? Colors.white : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Switch(
+                        value: isVisible,
+                        activeTrackColor: AppTheme.primaryColor,
+                        onChanged: (val) {
+                          setState(() {
+                            if (val) {
+                              _navbarVisible.add(id);
+                            } else {
+                              _navbarVisible.remove(id);
+                            }
+                          });
+                          _saveNavbarConfig();
+                        },
+                      ),
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child: Icon(Icons.drag_handle, color: Colors.white24, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         // Settings row — always visible, not reorderable
         Container(
           margin: const EdgeInsets.only(top: 2),
@@ -943,9 +1078,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  String _defaultStremioStreamLabel() {
+    if (_defaultStremioStreamKey == '__auto__') {
+      return 'Auto — Stremio addon first';
+    }
+    if (_defaultStremioStreamKey == '__playtorrio__') {
+      return 'PlayTorrio (built-in / torrents)';
+    }
+    for (final a in _installedAddons) {
+      if (a['baseUrl'] == _defaultStremioStreamKey) {
+        return a['name']?.toString() ?? 'Addon';
+      }
+    }
+    return 'Auto — Stremio addon first';
+  }
+
+  Future<void> _pickDefaultStremioStreamSource() async {
+    final entries = <MapEntry<String, String>>[
+      const MapEntry('__auto__', 'Auto — Stremio addon first'),
+      const MapEntry('__playtorrio__', 'PlayTorrio (built-in / torrents)'),
+      ..._installedAddons.map(
+        (a) => MapEntry(
+          a['baseUrl'] as String,
+          a['name']?.toString() ?? 'Addon',
+        ),
+      ),
+    ];
+    final chosen = await _showTvChoiceSheet(
+      title: 'Default stream source',
+      entries: entries,
+      selectedValue: (_defaultStremioStreamKey == '__auto__' ||
+              _defaultStremioStreamKey == '__playtorrio__' ||
+              _installedAddons.any((a) => a['baseUrl'] == _defaultStremioStreamKey))
+          ? _defaultStremioStreamKey
+          : '__auto__',
+    );
+    if (chosen == null || !mounted) return;
+    await _settings.setDefaultStremioAddonBaseUrl(
+      chosen == '__auto__' ? null : chosen,
+    );
+    setState(() => _defaultStremioStreamKey = chosen);
+  }
+
   Widget _buildDefaultStremioStreamSource() {
+    final padding = const EdgeInsets.symmetric(horizontal: 16);
+    if (DeviceProfile.isAndroidTv) {
+      return Padding(
+        padding: padding,
+        child: FocusableControl(
+          onTap: _pickDefaultStremioStreamSource,
+          borderRadius: 12,
+          scaleOnFocus: 1.0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _defaultStremioStreamLabel(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppTheme.primaryColor),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: padding,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
@@ -2379,6 +2592,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// D-pad friendly choice list (Android TV); returns the selected entry [key].
+  Future<String?> _showTvChoiceSheet({
+    required String title,
+    required List<MapEntry<String, String>> entries,
+    required String selectedValue,
+  }) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A0B2E),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final e in entries)
+                FocusableControl(
+                  onTap: () => Navigator.pop(ctx, e.key),
+                  borderRadius: 10,
+                  scaleOnFocus: 1.0,
+                  child: ListTile(
+                    title: Text(
+                      e.value,
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                    ),
+                    trailing: e.key == selectedValue
+                        ? const Icon(Icons.check_rounded, color: AppTheme.primaryColor)
+                        : null,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildFocusableToggle(String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
     return FocusableControl(
       onTap: () => onChanged(!value),
@@ -2409,6 +2660,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildFocusableDropdown(String title, String subtitle, String value, List<String> options, ValueChanged<String?> onChanged) {
+    Future<void> openPicker() async {
+      final entries = options.map((o) => MapEntry(o, o)).toList();
+      final next = await _showTvChoiceSheet(
+        title: title,
+        entries: entries,
+        selectedValue: value,
+      );
+      if (next != null) onChanged(next);
+    }
+
+    if (DeviceProfile.isAndroidTv) {
+      return FocusableControl(
+        onTap: openPicker,
+        scaleOnFocus: 1.0,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: const TextStyle(fontSize: 13, color: Colors.white54)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 200),
+                      child: Text(
+                        value,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chevron_right_rounded, color: AppTheme.primaryColor),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return FocusableControl(
       onTap: () {},
       scaleOnFocus: 1.0, // Disable scaling
