@@ -27,11 +27,30 @@ class StremioTvSchedule {
       if (n > 2000000000) return DateTime.fromMillisecondsSinceEpoch(n * 1000);
       return DateTime.fromMillisecondsSinceEpoch(n * 1000);
     }
+    if (released is double) {
+      return parseReleased(released.round());
+    }
     if (released is String) {
       final t = DateTime.tryParse(released);
       if (t != null) return t;
       final asInt = int.tryParse(released);
       if (asInt != null) return parseReleased(asInt);
+      // Compact ISO without separators: YYYYMMDDTHHmmss or YYYYMMDD
+      final digits = released.replaceAll(RegExp(r'[^0-9]'), '');
+      if (digits.length >= 8) {
+        final y = int.tryParse(digits.substring(0, 4));
+        final mo = digits.length >= 6 ? int.tryParse(digits.substring(4, 6)) : null;
+        final d = digits.length >= 8 ? int.tryParse(digits.substring(6, 8)) : null;
+        if (y != null && mo != null && d != null) {
+          if (digits.length >= 14) {
+            final h = int.tryParse(digits.substring(8, 10)) ?? 0;
+            final mi = int.tryParse(digits.substring(10, 12)) ?? 0;
+            final sec = int.tryParse(digits.substring(12, 14)) ?? 0;
+            return DateTime(y, mo, d, h, mi, sec);
+          }
+          return DateTime(y, mo, d);
+        }
+      }
     }
     return null;
   }
@@ -66,7 +85,15 @@ class StremioTvSchedule {
         if (raw is! Map) continue;
         final m = Map<String, dynamic>.from(raw as Map);
         final title = (m['name'] ?? m['title'] ?? 'Program').toString();
-        final start = parseReleased(m['released'] ?? m['firstAired'] ?? m['airDate']);
+        final start = parseReleased(
+          m['released'] ??
+              m['firstAired'] ??
+              m['airDate'] ??
+              m['time'] ??
+              m['start'] ??
+              m['from'] ??
+              m['date'],
+        );
         if (start == null) continue;
         final durMin = (m['duration'] as num?)?.toInt() ??
             (m['runtime'] as num?)?.toInt() ??
@@ -147,7 +174,10 @@ class StremioTvSchedule {
         .toList();
   }
 
-  /// Resolves schedule: Stremio meta first; if not from addon and EPG loaded, merge XMLTV.
+  /// Resolves schedule from Stremio meta and optional XMLTV.
+  ///
+  /// XMLTV is preferred when it yields a programme airing **now**, so channel cards
+  /// show real titles instead of the hourly "Live" placeholder when EPG matches.
   static List<TvScheduleSlot> resolveSlots({
     required Map<String, dynamic> meta,
     required String channelName,
@@ -158,21 +188,32 @@ class StremioTvSchedule {
     String? catalogItemTvgId,
   }) {
     final built = slotsFromMeta(meta, channelName);
-    var slots = built.slots;
-    var fromStremio = built.fromAddon;
-    if (!fromStremio && epgLoaded) {
-      final tvgId = meta['tvgId']?.toString() ?? catalogItemTvgId;
-      final xmlSlots = slotsFromXmltv(
-        epg,
-        tvgId: tvgId,
-        channelName: channelName,
-        stremioId: stremioId,
-        epgChannelOverride: epgChannelOverride,
-      );
-      if (xmlSlots.isNotEmpty) {
-        slots = xmlSlots;
-      }
+    final now = DateTime.now();
+
+    if (!epgLoaded) {
+      return built.slots;
     }
-    return slots;
+
+    final tvgId =
+        meta['tvgId']?.toString() ?? meta['tvg_id']?.toString() ?? catalogItemTvgId;
+    final xmlSlots = slotsFromXmltv(
+      epg,
+      tvgId: tvgId,
+      channelName: channelName,
+      stremioId: stremioId,
+      epgChannelOverride: epgChannelOverride,
+    );
+    if (xmlSlots.isEmpty) {
+      return built.slots;
+    }
+
+    final xmlNow = currentSlot(xmlSlots, now);
+    if (xmlNow != null) {
+      return xmlSlots;
+    }
+    if (!built.fromAddon) {
+      return xmlSlots;
+    }
+    return built.slots;
   }
 }

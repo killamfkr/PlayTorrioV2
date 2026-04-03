@@ -192,6 +192,12 @@ class XmltvEpgService {
     if (channelName != null && channelName.isNotEmpty) {
       yield normalizeKey(channelName);
       yield normalizeKey(channelName.replaceAll(' ', '.'));
+      final noSpace = channelName.replaceAll(RegExp(r'\s+'), '');
+      if (noSpace != channelName) yield normalizeKey(noSpace);
+      final slug = channelName
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9]+'), '');
+      if (slug.isNotEmpty) yield normalizeKey(slug);
     }
     if (stremioId != null && stremioId.contains(':')) {
       final tail = stremioId.split(':').last;
@@ -207,6 +213,9 @@ class XmltvEpgService {
 
   /// Programmes overlapping [from]..[to] for the best-matching channel id.
   /// [epgChannelOverride] is tried first (manual match from Settings).
+  /// Overlapping programmes in [from]..[to] for the first matching channel key.
+  /// [maxItems] caps the returned list only after the full window is collected (so
+  /// "now" is not dropped when many programmes precede it in the same window).
   List<XmltvProgramme> programmesFor({
     String? tvgId,
     String? channelName,
@@ -214,7 +223,7 @@ class XmltvEpgService {
     String? epgChannelOverride,
     required DateTime from,
     required DateTime to,
-    int maxItems = 12,
+    int? maxItems,
   }) {
     final seen = <String>{};
     Iterable<String> keys() sync* {
@@ -230,12 +239,28 @@ class XmltvEpgService {
       final list = _byChannel[key];
       if (list == null || list.isEmpty) continue;
       final out = <XmltvProgramme>[];
+      const safetyCap = 800;
       for (final p in list) {
         if (p.end.isBefore(from) || !p.start.isBefore(to)) continue;
         out.add(p);
-        if (out.length >= maxItems) break;
+        if (out.length >= safetyCap) break;
       }
-      if (out.isNotEmpty) return out;
+      if (out.isEmpty) continue;
+      if (maxItems != null && out.length > maxItems) {
+        final now = DateTime.now();
+        var anchor = 0;
+        for (var i = 0; i < out.length; i++) {
+          if (!out[i].end.isBefore(now)) {
+            anchor = i;
+            break;
+          }
+        }
+        final maxStart = out.length - maxItems;
+        final start = (anchor - (maxItems ~/ 2)).clamp(0, maxStart < 0 ? 0 : maxStart);
+        final end = (start + maxItems).clamp(0, out.length);
+        return out.sublist(start, end);
+      }
+      return out;
     }
     return [];
   }
