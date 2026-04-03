@@ -11,6 +11,7 @@ import '../api/music_downloader_service.dart';
 import '../utils/app_theme.dart';
 import '../platform_flags.dart';
 import '../widgets/local_file_image.dart';
+import '../utils/music_file_ops.dart';
 import 'music_player_screen.dart';
 
 class MusicScreen extends StatefulWidget {
@@ -1965,12 +1966,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     if (isDownloaded) {
                       final downloadedTrack = downloaded.firstWhere((s) => s.id == track.id);
                       if (downloadedTrack.localPath != null) {
-                        final file = File(downloadedTrack.localPath!);
-                        if (await file.exists()) await file.delete();
+                        await deleteFileIfExists(downloadedTrack.localPath!);
                       }
                       if (!downloadedTrack.cover.startsWith('http')) {
-                        final coverFile = File(downloadedTrack.cover);
-                        if (await coverFile.exists()) await coverFile.delete();
+                        await deleteFileIfExists(downloadedTrack.cover);
                       }
                       await _storageService.removeDownloadedTrack(track.id);
                     } else {
@@ -2202,7 +2201,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       return;
     }
     final path = downloaded.first.localPath ?? 'Android/media/com.example.play_torrio_native/Music';
-    final dirPath = File(path).parent.path;
+    final dirPath = parentDirectoryPath(path) ?? path;
 
     showDialog(
       context: context,
