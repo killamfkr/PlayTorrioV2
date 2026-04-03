@@ -29,6 +29,16 @@ If you prefer a URL-based template list:
 
 2. Build the image as in step 3 above.
 
+## Docker Compose (any host, including Unraid)
+
+From the **repository root**:
+
+```bash
+docker compose -f docker/web/docker-compose.yml up -d --build
+```
+
+Opens on **http://YOUR_IP:8089**. Edit `docker/web/docker-compose.yml` to change the host port.
+
 ## Option C — Pre-built image on a registry
 
 Build and push from any machine:

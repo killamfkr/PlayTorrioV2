@@ -1,0 +1,17 @@
+# PlayTorrio web UI (nginx + static Flutter build).
+# Run from repository root:
+#   docker compose -f docker/web/docker-compose.yml up -d --build
+#
+# Or from this directory with context parent:
+#   docker compose up -d --build
+
+services:
+  playtorrio-web:
+    build:
+      context: ../..
+      dockerfile: docker/web/Dockerfile
+    image: playtorrio-web:latest
+    container_name: playtorrio-web
+    ports:
+      - "8089:80"
+    restart: unless-stopped

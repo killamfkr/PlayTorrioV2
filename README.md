@@ -85,6 +85,12 @@ docker build -f docker/web/Dockerfile -t playtorrio-web .
 docker run --rm -p 8089:80 playtorrio-web
 ```
 
+**Docker Compose** (from repo root, builds and runs on port 8089):
+
+```
+docker compose -f docker/web/docker-compose.yml up -d --build
+```
+
 Then open http://localhost:8089
 
 ### Unraid
