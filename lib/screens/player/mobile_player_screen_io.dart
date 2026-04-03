@@ -501,7 +501,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   String? _selectedExternalSubUrl;
 
   // ── Feature State ─────────────────────────────────────────────────────────
-  _HwDecMode _hwDecMode = _HwDecMode.autoSafe;
+  /// TV: default to copy-back hwdec — `auto-safe` + direct rendering can yield
+  /// ~1–2 FPS (slideshow) on some Amlogic/MediaTek Android TV SoCs.
+  _HwDecMode _hwDecMode =
+      DeviceProfile.isAndroidTv ? _HwDecMode.autoCopy : _HwDecMode.autoSafe;
   bool _loopEnabled = false;
   double _subtitleDelay = 0.0;
   double _subtitleSize = 24.0;
@@ -1254,8 +1257,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('hwdec', _hwDecMode.mpvValue);
 
     // Zero-copy direct rendering — decoder writes straight to GPU texture.
-    // Big win on mobile for battery + throughput on H.265/4K content.
-    await mpv.setProperty('vd-lavc-dr', 'yes');
+    // On phones this often helps; on Android TV it can stall the texture path
+    // badly (slideshow / ~2 FPS). Copy-back hwdec + dr=no is safer there.
+    await mpv.setProperty(
+      'vd-lavc-dr',
+      DeviceProfile.isAndroidTv ? 'no' : 'yes',
+    );
 
     // Auto thread count (0 = let mpv decide). On mobile 4–8 cores typical.
     await mpv.setProperty('vd-lavc-threads', '0');
