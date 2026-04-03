@@ -26,6 +26,8 @@ class StremioCatalogScreen extends StatefulWidget {
   final bool tvChannelsOnly;
   /// Set false when this screen is a root tab (no route to pop).
   final bool showCatalogBackButton;
+  /// When this value changes (e.g. app resumed), TV channel EPG cache is cleared and refetched.
+  final ValueListenable<int>? tvGuideRefreshListenable;
 
   const StremioCatalogScreen({
     super.key,
@@ -33,6 +35,7 @@ class StremioCatalogScreen extends StatefulWidget {
     this.initialSearch,
     this.tvChannelsOnly = false,
     this.showCatalogBackButton = true,
+    this.tvGuideRefreshListenable,
   });
 
   @override
@@ -69,6 +72,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    widget.tvGuideRefreshListenable?.addListener(_onTvGuideRefreshSignal);
     if (widget.initialSearch != null) {
       _searchController.text = widget.initialSearch!;
       _searchQuery = widget.initialSearch!;
@@ -82,7 +86,30 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   }
 
   @override
+  void didUpdateWidget(StremioCatalogScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tvGuideRefreshListenable != widget.tvGuideRefreshListenable) {
+      oldWidget.tvGuideRefreshListenable?.removeListener(_onTvGuideRefreshSignal);
+      widget.tvGuideRefreshListenable?.addListener(_onTvGuideRefreshSignal);
+    }
+  }
+
+  void _onTvGuideRefreshSignal() {
+    if (!widget.tvChannelsOnly || !mounted) return;
+    setState(() {
+      _nowPlayingByKey.clear();
+      _nowPlayingFetchGen++;
+      _lazyEpgSession++;
+      _lazyEpgPreparedSession = -1;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scheduleLazyNowPlayingPrefetch();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.tvGuideRefreshListenable?.removeListener(_onTvGuideRefreshSignal);
     _lazyEpgDebounce?.cancel();
     _nowPlayingTicker?.cancel();
     _scrollController.dispose();

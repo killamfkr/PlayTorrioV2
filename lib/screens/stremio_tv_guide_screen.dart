@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import '../models/movie.dart';
 import '../services/xmltv_epg_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/stremio_tv_schedule.dart';
+import '../utils/tv_guide_refresh.dart';
 import 'details_screen.dart';
 import 'epg_channel_mapping_screen.dart';
 
@@ -54,23 +56,40 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
   List<_ChannelRow> _rows = [];
   final int _maxChannels = 48;
   final int _concurrency = 6;
+  int _loadGen = 0;
 
   @override
   void initState() {
     super.initState();
+    TvGuideRefresh.notifier.addListener(_onTvGuideRefreshSignal);
     _load();
   }
 
+  @override
+  void dispose() {
+    TvGuideRefresh.notifier.removeListener(_onTvGuideRefreshSignal);
+    super.dispose();
+  }
+
+  void _onTvGuideRefreshSignal() {
+    if (mounted) unawaited(_load());
+  }
+
   Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    final gen = ++_loadGen;
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final settings = SettingsService();
       final epgUrl = await settings.getXmltvEpgUrl();
+      if (!mounted || gen != _loadGen) return;
       final epgMap = await settings.getXmltvChannelMap();
+      if (!mounted || gen != _loadGen) return;
       final epg = XmltvEpgService.instance;
       if (epgUrl != null && epgUrl.isNotEmpty) {
         await epg.loadFromUrl(epgUrl);
@@ -78,6 +97,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
         epg.clear();
       }
 
+      if (!mounted || gen != _loadGen) return;
       var catalogs = await _stremio.getAllCatalogs();
       catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
 
@@ -98,8 +118,10 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
         }
       }
 
+      if (!mounted || gen != _loadGen) return;
+
       if (items.isEmpty) {
-        if (mounted) {
+        if (mounted && gen == _loadGen) {
           setState(() {
             _loading = false;
             _rows = [];
@@ -111,6 +133,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
 
       final List<_ChannelRow> rows = [];
       for (var i = 0; i < items.length; i += _concurrency) {
+        if (!mounted || gen != _loadGen) return;
         final chunk = items.skip(i).take(_concurrency);
         final futures = chunk.map((item) async {
           final base = item['_addonBaseUrl']?.toString() ?? '';
@@ -150,17 +173,18 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
           );
         });
         final part = await Future.wait(futures);
+        if (!mounted || gen != _loadGen) return;
         rows.addAll(part.whereType<_ChannelRow>());
       }
 
-      if (mounted) {
+      if (mounted && gen == _loadGen) {
         setState(() {
           _rows = rows;
           _loading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && gen == _loadGen) {
         setState(() {
           _loading = false;
           _error = e.toString();

@@ -20,6 +20,7 @@ import 'magnet_player_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../utils/tv_guide_refresh.dart';
 import '../api/settings_service.dart';
 
 class MainScreen extends StatefulWidget {
@@ -78,7 +79,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'search':       const SearchScreen(),
       'mylist':       const MyListScreen(),
       'magnet':       const MagnetPlayerScreen(),
-      'live_matches': const StremioCatalogScreen(tvChannelsOnly: true, showCatalogBackButton: false),
+      'live_matches': StremioCatalogScreen(
+        tvChannelsOnly: true,
+        showCatalogBackButton: false,
+        tvGuideRefreshListenable: TvGuideRefresh.notifier,
+      ),
       'iptv':         const IptvLoginScreen(),
       'audiobooks':   const AudiobookScreen(),
       'books':        const BooksScreen(),
@@ -91,6 +96,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     };
 
     _loadNavbarConfig();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      TvGuideRefresh.bump();
+    });
   }
 
   Future<void> _loadNavbarConfig() async {

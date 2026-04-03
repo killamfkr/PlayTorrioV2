@@ -21,6 +21,7 @@ import 'services/player_pool_service.dart';
 import 'utils/webview_cleanup.dart';
 import 'utils/app_theme.dart';
 import 'utils/device_profile.dart';
+import 'utils/tv_guide_refresh.dart';
 
 import 'screens/main_screen.dart';
 import 'screens/search_screen.dart';
@@ -157,6 +158,9 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
       PlayerPoolService().dispose();
       TorrentStreamService().cleanup();
       WebViewCleanup.cleanupWebView2Cache();
+    }
+    if (state == AppLifecycleState.resumed) {
+      TvGuideRefresh.bump();
     }
   }
 
