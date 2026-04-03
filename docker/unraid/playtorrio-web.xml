@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>playtorrio-web</Name>
-  <Repository>playtorrio-web:latest</Repository>
-  <Registry/>
+  <Repository>ghcr.io/killamfkr/playtorrio-web:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
@@ -10,9 +10,10 @@
   <Project>https://github.com/killamfkr/PlayTorrioV2</Project>
   <Overview>
     PlayTorrio **web** build (experimental): browse Stremio/TMDB-style UI in a browser. Served by nginx inside the container.&#xD;&#xD;
-    **Image:** This template defaults to `playtorrio-web:latest` on the **local** Docker engine. Build it on Unraid (SSH or terminal) from a clone of the repo:&#xD;
-    `docker build -f docker/web/Dockerfile -t playtorrio-web:latest .`&#xD;&#xD;
-    If you publish the image to Docker Hub or GHCR, change **Repository** below (e.g. `youruser/playtorrio-web:latest`).
+    **Default image:** `ghcr.io/killamfkr/playtorrio-web:latest` — pulled from **GitHub Container Registry** (no build on Unraid). Requires the repo workflow *Docker Web (GHCR)* to have run on `main` at least once.&#xD;&#xD;
+    **Forks:** Change **Repository** to `ghcr.io/YOUR_GITHUB_USER/playtorrio-web:latest` after your fork’s workflow pushes.&#xD;&#xD;
+    **Local build instead:** Set **Repository** to `playtorrio-web:latest`, clear **Registry**, then `docker build -f docker/web/Dockerfile -t playtorrio-web:latest .` from a repo clone.&#xD;&#xD;
+    **Private GHCR:** add `ghcr.io` credentials under Docker (PAT with read:packages).
   </Overview>
   <Category>MediaApp:Video MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8089]/</WebUI>

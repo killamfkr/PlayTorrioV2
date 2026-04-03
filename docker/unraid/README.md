@@ -39,7 +39,23 @@ docker compose -f docker/web/docker-compose.yml up -d --build
 
 Opens on **http://YOUR_IP:8089**. Edit `docker/web/docker-compose.yml` to change the host port.
 
-## Option C — Pre-built image on a registry
+## Option C — GitHub Container Registry (no build on Unraid)
+
+If the [Docker Web (GHCR)](../../.github/workflows/docker-web.yml) workflow has run on `main`, pull the image:
+
+```bash
+docker pull ghcr.io/killamfkr/playtorrio-web:latest
+```
+
+In the Unraid template (or **Add Container**), set **Repository** to:
+
+`ghcr.io/killamfkr/playtorrio-web:latest`
+
+**Private repos / auth:** On Unraid **Docker** tab, add registry credentials for `ghcr.io` (GitHub PAT with `read:packages`). Public packages usually pull without login.
+
+**Forks:** Use `ghcr.io/YOUR_GITHUB_USER/playtorrio-web:latest` after your fork’s workflow has pushed.
+
+## Option D — Other registries
 
 Build and push from any machine:
 
@@ -48,7 +64,7 @@ docker build -f docker/web/Dockerfile -t YOURUSER/playtorrio-web:latest .
 docker push YOURUSER/playtorrio-web:latest
 ```
 
-Edit the template (or container form) **Repository** to `YOURUSER/playtorrio-web:latest` and **Registry** if needed (Docker Hub default is often empty).
+Edit **Repository** to `YOURUSER/playtorrio-web:latest`.
 
 ## Notes
 

@@ -85,11 +85,20 @@ docker build -f docker/web/Dockerfile -t playtorrio-web .
 docker run --rm -p 8089:80 playtorrio-web
 ```
 
-**Docker Compose** (from repo root, builds and runs on port 8089):
+**Docker Compose — build locally** (from repo root):
 
 ```
 docker compose -f docker/web/docker-compose.yml up -d --build
 ```
+
+**Docker Compose — pull pre-built image** (no clone/build; image from GitHub Container Registry after CI runs on `main`):
+
+```
+docker compose -f docker/web/docker-compose.ghcr.yml pull
+docker compose -f docker/web/docker-compose.ghcr.yml up -d
+```
+
+Default image: `ghcr.io/killamfkr/playtorrio-web:latest`. Forks: run the **Docker Web (GHCR)** workflow on your repo, then set `PLAYTORRIO_WEB_IMAGE=ghcr.io/<your-github-user>/playtorrio-web:latest`.
 
 Then open http://localhost:8089
 
