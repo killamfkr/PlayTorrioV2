@@ -69,6 +69,24 @@ flutter build linux
 flutter build apk
 ```
 
+### Web (experimental)
+
+A **browser build** is supported for browsing and streaming where the platform allows (no magnet/torrent engine, no local Shelf proxy, simplified player, some tabs stubbed). Build static files with:
+
+```
+flutter pub get
+flutter build web --release
+```
+
+Serve `build/web` with any static file server, or use Docker:
+
+```
+docker build -f docker/web/Dockerfile -t playtorrio-web .
+docker run --rm -p 8080:80 playtorrio-web
+```
+
+Then open http://localhost:8080
+
 ## License
 
 

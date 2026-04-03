@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:auto_orientation_v2/auto_orientation_v2.dart';
@@ -22,6 +22,7 @@ import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../utils/tv_guide_refresh.dart';
 import '../api/settings_service.dart';
+import '../platform_flags.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -136,7 +137,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
-    if (Platform.isAndroid) {
+    if (platformIsAndroid) {
       Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) {
           SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -148,7 +149,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed && Platform.isAndroid) {
+    if (state == AppLifecycleState.resumed && platformIsAndroid) {
       if (!DeviceProfile.isAndroidTv) {
         AutoOrientation.fullAutoMode(forceSensor: true);
         SystemChrome.setPreferredOrientations([]);
@@ -188,7 +189,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    final isDesktop = platformIsDesktop;
     final orientation = MediaQuery.of(context).orientation;
     final isLandscape = orientation == Orientation.landscape;
     

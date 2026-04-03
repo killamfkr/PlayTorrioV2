@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -9,6 +9,7 @@ import '../api/music_player_service.dart';
 import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../utils/app_theme.dart';
+import '../platform_flags.dart';
 import 'music_player_screen.dart';
 
 class MusicScreen extends StatefulWidget {
@@ -53,7 +54,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     return 'Late Night Vibes';
   }
 
-  bool get _isDesktop => (Platform.isWindows || Platform.isLinux || Platform.isMacOS) && MediaQuery.of(context).size.width > 900;
+  bool get _isDesktop => platformIsDesktop && MediaQuery.of(context).size.width > 900;
 
   @override
   void initState() {
@@ -133,7 +134,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
   void _openFullPlayer() {
     _playerService.isFullScreenVisible.value = true;
-    if (Platform.isWindows || MediaQuery.of(context).size.width > 900) {
+    if (platformIsWindows || MediaQuery.of(context).size.width > 900) {
       showDialog(
         context: context,
         builder: (context) => Dialog(

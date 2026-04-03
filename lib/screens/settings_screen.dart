@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/settings_service.dart';
@@ -17,8 +17,11 @@ import '../api/mdblist_service.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/settings_backup_download.dart';
+import '../platform_flags.dart';
 import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
+import 'settings_export.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -445,7 +448,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           setState(() => _builtinPlayerSubtitlesEnabled = val);
                         },
                       ),
-                      if (Platform.isAndroid) ...[
+                      if (platformIsAndroid) ...[
                         _buildFocusableToggle(
                           'Picture-in-picture button',
                           'Shows a PiP icon in the player toolbar (Android 8+).',
@@ -630,32 +633,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
       final fileName = 'playtorrio_settings_$timestamp.json';
 
-      // Write to a temp file first, then let the user pick where to save
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/$fileName');
-      await tempFile.writeAsString(jsonStr);
-
-      final result = await FilePicker.platform.saveFile(
-        dialogTitle: 'Export Settings',
-        fileName: fileName,
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-        bytes: Uint8List.fromList(utf8.encode(jsonStr)),
-      );
-
-      if (result != null) {
-        // On desktop, saveFile() returns a path but doesn't write — we must do it ourselves
-        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-          await File(result).writeAsString(jsonStr);
+      if (kIsWeb) {
+        triggerJsonDownload(fileName, jsonStr);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings download started.')),
+          );
         }
-      }
-
-      await tempFile.delete();
-
-      if (result != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings exported successfully!')),
-        );
+      } else {
+        final ok = await runNativeSettingsExport(jsonStr, fileName);
+        if (ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings exported successfully!')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

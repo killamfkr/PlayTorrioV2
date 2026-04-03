@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -23,6 +23,7 @@ import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
 import '../utils/extensions.dart';
 import '../utils/app_theme.dart';
+import '../platform_flags.dart';
 import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
@@ -1634,7 +1635,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     final w = MediaQuery.of(context).size.width;
-    final isMobile = (Platform.isAndroid || Platform.isIOS) || w < 800;
+    final isMobile = (platformIsAndroid || platformIsIOS) || w < 800;
 
     return KeyboardListener(
       focusNode: _keyboardFocusNode,

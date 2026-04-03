@@ -1,8 +1,10 @@
-import 'dart:io';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../platform_flags.dart';
 
 /// Runtime device traits from the native embedder (Android TV, etc.).
 class DeviceProfile {
@@ -21,7 +23,7 @@ class DeviceProfile {
   static Future<void> initAndroidProfile() async {
     if (_inited) return;
     _inited = true;
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !platformIsAndroid) return;
     try {
       final v = await _channel.invokeMethod<bool>('isAndroidTv');
       _androidTv = v ?? false;

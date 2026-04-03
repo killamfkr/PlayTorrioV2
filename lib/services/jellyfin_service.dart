@@ -1,9 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/local_server_service.dart';
+import '../platform_flags.dart';
 
 /// Represents a single Jellyfin server account.
 class JellyfinAccount {
@@ -247,7 +248,7 @@ class JellyfinService {
   Map<String, String> get _authHeaders {
     final parts = [
       'MediaBrowser Client="PlayTorrio"',
-      'Device="${Platform.isAndroid ? "Android" : "Windows"}"',
+      'Device="${kIsWeb ? "Web" : (platformIsAndroid ? "Android" : "Windows")}"',
       'DeviceId="$_deviceId"',
       'Version="1.0.0"',
     ];
