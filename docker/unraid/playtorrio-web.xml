@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>playtorrio-web</Name>
+  <Repository>playtorrio-web:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/killamfkr/PlayTorrioV2</Support>
+  <Project>https://github.com/killamfkr/PlayTorrioV2</Project>
+  <Overview>
+    PlayTorrio **web** build (experimental): browse Stremio/TMDB-style UI in a browser. Served by nginx inside the container.&#xD;&#xD;
+    **Image:** This template defaults to `playtorrio-web:latest` on the **local** Docker engine. Build it on Unraid (SSH or terminal) from a clone of the repo:&#xD;
+    `docker build -f docker/web/Dockerfile -t playtorrio-web:latest .`&#xD;&#xD;
+    If you publish the image to Docker Hub or GHCR, change **Repository** below (e.g. `youruser/playtorrio-web:latest`).
+  </Overview>
+  <Category>MediaApp:Video MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:8089]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/assets/icon/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI port" Target="80" Default="8089" Mode="tcp" Description="HTTP port (host 8089 → container 80). Change host side if 8089 is in use." Type="Port" Display="always" Required="true" Mask="false">8089</Config>
+</Container>

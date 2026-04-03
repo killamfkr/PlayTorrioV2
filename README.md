@@ -87,6 +87,10 @@ docker run --rm -p 8089:80 playtorrio-web
 
 Then open http://localhost:8089
 
+### Unraid
+
+Use the Community Applications–style template in [`docker/unraid/playtorrio-web.xml`](docker/unraid/playtorrio-web.xml). Copy it to `config/plugins/dockerMan/templates-user/` on your Unraid flash drive, build the image on the server (`docker build -f docker/web/Dockerfile -t playtorrio-web:latest .`), then add the container from the template. Full steps: [`docker/unraid/README.md`](docker/unraid/README.md).
+
 ## License
 
 
