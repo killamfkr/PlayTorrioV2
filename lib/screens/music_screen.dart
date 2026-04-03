@@ -10,6 +10,7 @@ import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../utils/app_theme.dart';
 import '../platform_flags.dart';
+import '../widgets/local_file_image.dart';
 import 'music_player_screen.dart';
 
 class MusicScreen extends StatefulWidget {
@@ -2310,15 +2311,11 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         ),
       );
     }
-    return Image.file(
-      File(cover),
-      width: width, height: height,
+    return localFileImageOrFallback(
+      path: cover,
+      width: width,
+      height: height,
       fit: BoxFit.cover,
-      errorBuilder: (c, e, s) => Container(
-        width: width, height: height,
-        color: Colors.white.withValues(alpha: 0.05),
-        child: const Icon(Icons.music_note_rounded, color: Colors.white24),
-      ),
     );
   }
 

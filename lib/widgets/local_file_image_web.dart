@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 Widget localFileImageOrFallback({
   required String path,
-  required double width,
-  required double height,
+  double? width,
+  double? height,
   BoxFit fit = BoxFit.cover,
 }) {
   return Container(

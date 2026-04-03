@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/local_server_service.dart';
 import '../platform_flags.dart';
+import 'jellyfin_http.dart';
 
 /// Represents a single Jellyfin server account.
 class JellyfinAccount {
@@ -160,9 +161,8 @@ class JellyfinService {
   static const String _accountsKey = 'jellyfin_accounts';
   static const String _activeAccountKey = 'jellyfin_active_account';
 
-  /// HTTP client that follows redirects (including 308 on POST).
-  late final HttpClient _ioClient = HttpClient()
-    ..badCertificateCallback = (cert, host, port) => true;
+  /// HTTP client (IO: accepts self-signed Jellyfin certs; web: standard Client).
+  final http.Client _httpClient = createJellyfinHttpClient();
 
   /// Performs an HTTP request following all redirects (301/302/307/308).
   /// Returns the final response. Works for GET, POST, HEAD, etc.
@@ -177,38 +177,28 @@ class JellyfinService {
     const maxRedirects = 5;
 
     for (var i = 0; i <= maxRedirects; i++) {
-      final ioReq = await _ioClient.openUrl(method, currentUri).timeout(timeout);
-      ioReq.followRedirects = false; // we handle manually
-
-      // Set headers
-      headers?.forEach((k, v) => ioReq.headers.set(k, v));
-
-      // Write body for POST/PUT
+      final req = http.Request(method, currentUri);
+      headers?.forEach((k, v) {
+        req.headers[k] = v;
+      });
       if (body != null && (method == 'POST' || method == 'PUT')) {
-        ioReq.write(body);
+        req.body = body;
       }
 
-      final ioResp = await ioReq.close().timeout(timeout);
-      final statusCode = ioResp.statusCode;
+      final streamed = await _httpClient.send(req).timeout(timeout);
+      final statusCode = streamed.statusCode;
 
-      // Handle redirects
       if (statusCode >= 300 && statusCode < 400) {
-        final location = ioResp.headers.value('location');
+        final location = streamed.headers['location'];
         if (location == null) break;
-        await ioResp.drain<void>();
-        currentUri = Uri.parse(location);
+        await streamed.stream.drain();
+        currentUri = currentUri.resolve(location);
         debugPrint('[Jellyfin] Redirect $statusCode → $currentUri');
         continue;
       }
 
-      // Read response body
-      final respBody = await ioResp.transform(utf8.decoder).join();
-      final respHeaders = <String, String>{};
-      ioResp.headers.forEach((name, values) {
-        respHeaders[name] = values.join(', ');
-      });
-
-      return http.Response(respBody, statusCode, headers: respHeaders);
+      final respBody = await streamed.stream.transform(utf8.decoder).join();
+      return http.Response(respBody, statusCode, headers: streamed.headers);
     }
 
     throw Exception('Too many redirects');
