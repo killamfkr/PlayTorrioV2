@@ -82,10 +82,10 @@ Serve `build/web` with any static file server, or use Docker:
 
 ```
 docker build -f docker/web/Dockerfile -t playtorrio-web .
-docker run --rm -p 8080:80 playtorrio-web
+docker run --rm -p 8089:80 playtorrio-web
 ```
 
-Then open http://localhost:8080
+Then open http://localhost:8089
 
 ## License
 

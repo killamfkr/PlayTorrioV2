@@ -1,7 +1,7 @@
 # Build Flutter web, then serve static files with nginx.
 # Usage (from repo root):
 #   docker build -f docker/web/Dockerfile -t playtorrio-web .
-#   docker run --rm -p 8080:80 playtorrio-web
+#   docker run --rm -p 8089:80 playtorrio-web
 
 FROM ghcr.io/cirruslabs/flutter:stable AS build
 WORKDIR /app
