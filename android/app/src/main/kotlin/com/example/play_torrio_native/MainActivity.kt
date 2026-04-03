@@ -3,11 +3,14 @@ package com.example.play_torrio_native
 import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.view.Display
 import com.ryanheise.audioservice.AudioServiceActivity
 import com.thesparks.android_pip.PipCallbackHelper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlin.math.abs
 
 class MainActivity : AudioServiceActivity() {
 
@@ -31,6 +34,70 @@ class MainActivity : AudioServiceActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.play_torrio_native/display",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setPreferredVideoRefreshRate" -> {
+                    val fpsAny = call.argument<Any>("fps")
+                    val fps = when (fpsAny) {
+                        is Double -> fpsAny
+                        is Float -> fpsAny.toDouble()
+                        is Int -> fpsAny.toDouble()
+                        else -> 0.0
+                    }
+                    if (fps < 10.0 || fps > 240.0) {
+                        result.success(false)
+                    } else {
+                        result.success(setPreferredVideoRefreshRate(fps))
+                    }
+                }
+                "clearPreferredDisplayMode" -> {
+                    clearPreferredDisplayMode()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun displayCompat(): Display? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            display
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay
+        }
+
+    /**
+     * Picks the supported [Display.Mode] whose refresh rate is closest to [fps]
+     * (e.g. 23.976 → 24 Hz), like frame-rate matching on Google TV / Stremio.
+     */
+    private fun setPreferredVideoRefreshRate(fps: Double): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        return try {
+            val display = displayCompat() ?: return false
+            val modes = display.supportedModes ?: return false
+            if (modes.isEmpty()) return false
+            val best = modes.minByOrNull { abs(it.refreshRate.toDouble() - fps) } ?: return false
+            val attrs = window.attributes
+            attrs.preferredDisplayModeId = best.modeId
+            window.attributes = attrs
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun clearPreferredDisplayMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            val attrs = window.attributes
+            attrs.preferredDisplayModeId = 0
+            window.attributes = attrs
+        } catch (_: Throwable) {}
     }
 
     override fun onPictureInPictureModeChanged(

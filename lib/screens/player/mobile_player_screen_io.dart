@@ -32,6 +32,7 @@ import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
+import '../../utils/android_display_mode.dart';
 import '../../utils/device_profile.dart';
 import '../player_screen.dart';
 import 'utils.dart';
@@ -519,6 +520,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   int _lastPositionUiPushMs = 0;
   int _lastBufferedUiPushMs = 0;
 
+  /// Google TV / Android TV: match panel refresh to content fps (Stremio-style).
+  Timer? _displayModeProbeTimer;
+  bool _appliedDisplayMode = false;
+
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipInToolbar = false;
 
@@ -660,6 +665,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
+    _displayModeProbeTimer?.cancel();
+    clearPreferredVideoDisplayMode();
     _rippleController.dispose();
 
     _positionSub?.cancel();
@@ -707,6 +714,62 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       posterPath: widget.movie?.posterPath,
     );
     await _activateVideoAudioSession();
+    _scheduleAndroidTvDisplayModeMatch();
+  }
+
+  /// Parses mpv properties like `23.976` or `24000/1001`.
+  static double? _parseMpvFps(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    final slash = s.indexOf('/');
+    if (slash >= 0) {
+      final a = double.tryParse(s.substring(0, slash).trim());
+      final b = double.tryParse(s.substring(slash + 1).trim());
+      if (a != null && b != null && b != 0) return a / b;
+      return null;
+    }
+    return double.tryParse(s);
+  }
+
+  void _scheduleAndroidTvDisplayModeMatch() {
+    if (!Platform.isAndroid || !DeviceProfile.isAndroidTv) return;
+    _displayModeProbeTimer?.cancel();
+    _appliedDisplayMode = false;
+    var ticks = 0;
+    _displayModeProbeTimer = Timer.periodic(const Duration(milliseconds: 500), (t) async {
+      if (_disposed) {
+        t.cancel();
+        return;
+      }
+      ticks++;
+      if (ticks > 24) {
+        t.cancel();
+        return;
+      }
+      final p = _player.platform;
+      if (p is! NativePlayer) {
+        t.cancel();
+        return;
+      }
+      try {
+        var v = await p.getProperty('container-fps');
+        var fps = _parseMpvFps(v);
+        if (fps == null || fps < 10 || fps > 240) {
+          v = await p.getProperty('estimated-vf-fps');
+          fps = _parseMpvFps(v);
+        }
+        if (fps != null && fps >= 10 && fps <= 240) {
+          final ok = await setPreferredVideoRefreshRate(fps);
+          if (ok) {
+            _appliedDisplayMode = true;
+            debugPrint(
+              '[Player] Android TV: matched display mode to ~${fps.toStringAsFixed(3)} Hz',
+            );
+            t.cancel();
+          }
+        }
+      } catch (_) {}
+    });
   }
 
   /// Movie-style session + focus so audio keeps running when the screen locks
@@ -745,6 +808,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   /// so the details page never sees stale landscape dimensions.
   Future<void> _exitPlayer() async {
     _saveWatchHistory();
+    _displayModeProbeTimer?.cancel();
+    await clearPreferredVideoDisplayMode();
     AutoOrientation.fullAutoMode(forceSensor: true);
     await SystemChrome.setPreferredOrientations([]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
