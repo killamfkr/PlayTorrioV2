@@ -13,6 +13,7 @@ import 'api/settings_service.dart';
 import 'api/music_player_service.dart';
 import 'play_torrio_app.dart';
 import 'utils/device_profile.dart';
+import 'utils/tv_settings_remote_service.dart';
 import 'platform_flags.dart';
 
 void setupAppLogging() {
@@ -30,6 +31,7 @@ Future<void> bootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('[Boot] Flutter binding initialized');
   await DeviceProfile.initAndroidProfile();
+  await TvSettingsRemoteService().ensureStarted();
 
   if (platformIsAndroid) {
     try {

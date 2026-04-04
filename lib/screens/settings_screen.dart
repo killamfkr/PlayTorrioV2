@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../services/external_player_service.dart';
@@ -20,6 +21,7 @@ import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../utils/settings_backup_download.dart';
 import '../utils/read_file_path.dart';
+import '../utils/tv_settings_remote_service.dart';
 import '../platform_flags.dart';
 import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
@@ -114,6 +116,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// `null` = player default (~12 Mbps on TV); `0` = unlimited.
   int? _androidTvMaxStreamBitrateKbps;
+
+  /// LAN URL with token for phone → TV settings import (Android TV).
+  String? _tvRemoteSettingsUrl;
 
   @override
   void initState() {
@@ -224,6 +229,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _settings.setDefaultStremioAddonBaseUrl(null);
     }
 
+    if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+      await TvSettingsRemoteService().ensureStarted();
+    }
+
     if (mounted) {
       setState(() {
         _isStreamingMode = streaming;
@@ -266,8 +275,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (platformIsAndroid && DeviceProfile.isAndroidTv) {
           _androidTvMaxStreamBitrateKbps = tvBitrateCap;
         }
+        _tvRemoteSettingsUrl = platformIsAndroid && DeviceProfile.isAndroidTv
+            ? TvSettingsRemoteService().remoteUrl
+            : null;
       });
     }
+  }
+
+  Widget _buildTvRemoteSettingsCard() {
+    final url = _tvRemoteSettingsUrl;
+    if (url == null) return const SizedBox.shrink();
+    return FocusableControl(
+      onTap: () {},
+      scaleOnFocus: 1.0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Edit settings from your phone',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Scan the QR code with your phone (same Wi‑Fi). Paste exported JSON to import — the link includes a one-time style token.',
+              style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: QrImageView(
+                    data: url,
+                    version: QrVersions.auto,
+                    size: 200,
+                    gapless: true,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              url,
+              style: const TextStyle(fontSize: 11, color: Colors.white38),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _installAddon() async {
@@ -527,6 +588,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           },
                         ),
+                        if (_tvRemoteSettingsUrl != null) ...[
+                          const SizedBox(height: 24),
+                          _buildTvRemoteSettingsCard(),
+                        ],
                       ],
                     ] else ...[
                       const Padding(
