@@ -112,10 +112,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoEnterPipAndroid = false;
   bool _builtinPlayerSubtitlesEnabled = true;
 
+  /// `null` = player default (~12 Mbps on TV); `0` = unlimited.
+  int? _androidTvMaxStreamBitrateKbps;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
+  }
+
+  String _androidTvStreamBitrateLabel() {
+    final c = _androidTvMaxStreamBitrateKbps;
+    if (c == null) return 'Auto (~12 Mbps, recommended)';
+    if (c == 0) return 'Unlimited (4K — heavy)';
+    if (c == 8000) return '8 Mbps';
+    if (c == 15000) return '15 Mbps';
+    if (c == 25000) return '25 Mbps';
+    if (c == 40000) return '40 Mbps';
+    final mbps = c / 1000.0;
+    return '${mbps == mbps.roundToDouble() ? mbps.toInt() : mbps.toStringAsFixed(1)} Mbps (custom)';
   }
 
   Future<void> _loadSettings() async {
@@ -183,6 +198,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
     final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
+    final tvBitrateCap = platformIsAndroid && DeviceProfile.isAndroidTv
+        ? await _settings.getAndroidTvMaxStreamBitrateKbps()
+        : null;
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -245,6 +263,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
         _builtinPlayerSubtitlesEnabled = builtinSubs;
+        if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+          _androidTvMaxStreamBitrateKbps = tvBitrateCap;
+        }
       });
     }
   }
@@ -463,6 +484,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           (val) async {
                             await _settings.setAutoEnterPipAndroid(val);
                             setState(() => _autoEnterPipAndroid = val);
+                          },
+                        ),
+                      ],
+                      if (platformIsAndroid && DeviceProfile.isAndroidTv) ...[
+                        const SizedBox(height: 16),
+                        _buildFocusableDropdown(
+                          'Android TV stream bitrate cap',
+                          'Built-in player only. Limits HLS/DASH quality so the box is not forced into 4K variants (often unwatchable on Google TV / ONN).',
+                          _androidTvStreamBitrateLabel(),
+                          const [
+                            'Auto (~12 Mbps, recommended)',
+                            '8 Mbps',
+                            '15 Mbps',
+                            '25 Mbps',
+                            '40 Mbps',
+                            'Unlimited (4K — heavy)',
+                          ],
+                          (val) async {
+                            if (val == null) return;
+                            int? k;
+                            if (val == 'Auto (~12 Mbps, recommended)') {
+                              await _settings.clearAndroidTvMaxStreamBitrateKbps();
+                              k = null;
+                            } else if (val == 'Unlimited (4K — heavy)') {
+                              await _settings.setAndroidTvMaxStreamBitrateKbps(0);
+                              k = 0;
+                            } else if (val == '8 Mbps') {
+                              k = 8000;
+                            } else if (val == '15 Mbps') {
+                              k = 15000;
+                            } else if (val == '25 Mbps') {
+                              k = 25000;
+                            } else if (val == '40 Mbps') {
+                              k = 40000;
+                            }
+                            if (k != null || val == 'Auto (~12 Mbps, recommended)') {
+                              if (k != null && k > 0) {
+                                await _settings.setAndroidTvMaxStreamBitrateKbps(k);
+                              }
+                              setState(() => _androidTvMaxStreamBitrateKbps = k);
+                            }
                           },
                         ),
                       ],

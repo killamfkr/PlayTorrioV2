@@ -35,6 +35,11 @@ class SettingsService {
   static const String _builtinPlayerSubtitlesEnabledKey =
       'playback_builtin_subtitles_enabled';
 
+  /// Android TV: max HLS/DASH variant bitrate (Kbps) for mpv `hls-bitrate`. `0` = no cap (max).
+  /// When unset, the player uses a safe default cap on TV only.
+  static const String _androidTvMaxStreamBitrateKbpsKey =
+      'playback_android_tv_max_stream_bitrate_kbps';
+
   /// Keeps the built-in player UI in sync when the user toggles subtitles in Settings.
   static final ValueNotifier<bool> builtinPlayerSubtitlesEnabledNotifier =
       ValueNotifier<bool>(true);
@@ -237,6 +242,24 @@ class SettingsService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_builtinPlayerSubtitlesEnabledKey, value);
     builtinPlayerSubtitlesEnabledNotifier.value = value;
+  }
+
+  /// `null` if the user never changed TV stream cap (player uses built-in default).
+  /// `0` means unlimited (mpv `hls-bitrate=max`).
+  Future<int?> getAndroidTvMaxStreamBitrateKbps() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_androidTvMaxStreamBitrateKbpsKey)) return null;
+    return prefs.getInt(_androidTvMaxStreamBitrateKbpsKey);
+  }
+
+  Future<void> setAndroidTvMaxStreamBitrateKbps(int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_androidTvMaxStreamBitrateKbpsKey, value);
+  }
+
+  Future<void> clearAndroidTvMaxStreamBitrateKbps() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_androidTvMaxStreamBitrateKbpsKey);
   }
 
   Future<bool> isStreamingModeEnabled() async {
@@ -508,7 +531,10 @@ class SettingsService {
       if (v != null) prefsMap[key] = v;
     }
     // Int keys
-    for (final key in [_torrentRamCacheMbKey]) {
+    for (final key in [
+      _torrentRamCacheMbKey,
+      _androidTvMaxStreamBitrateKbpsKey,
+    ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
     }
@@ -581,9 +607,12 @@ class SettingsService {
       }
     }
     // Int keys
-    for (final key in [_torrentRamCacheMbKey]) {
+    for (final key in [
+      _torrentRamCacheMbKey,
+      _androidTvMaxStreamBitrateKbpsKey,
+    ]) {
       if (prefsMap.containsKey(key)) {
-        await prefs.setInt(key, prefsMap[key] as int);
+        await prefs.setInt(key, (prefsMap[key] as num).toInt());
       }
     }
     // StringList keys

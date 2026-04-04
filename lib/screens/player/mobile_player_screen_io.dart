@@ -524,6 +524,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   Timer? _displayModeProbeTimer;
   bool _appliedDisplayMode = false;
 
+  /// Android TV: `null` = use default cap (~12 Mbps); `0` = mpv `hls-bitrate=max`.
+  int? _androidTvStreamBitrateCapKbps;
+
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipInToolbar = false;
 
@@ -605,6 +608,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await SettingsService().continuePlaybackInBackground();
       await _configureVideoAudioSession();
       if (Platform.isAndroid) {
+        if (DeviceProfile.isAndroidTv) {
+          _androidTvStreamBitrateCapKbps =
+              await SettingsService().getAndroidTvMaxStreamBitrateKbps();
+        }
         _showAndroidPipInToolbar =
             await SettingsService().showAndroidPipButton();
         final autoPip = await SettingsService().autoEnterPipAndroid();
@@ -1329,8 +1336,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       DeviceProfile.isAndroidTv ? 'no' : 'yes',
     );
 
-    // Auto thread count (0 = let mpv decide). On mobile 4–8 cores typical.
-    await mpv.setProperty('vd-lavc-threads', '0');
+    // Decoder threads: TV SoCs are often memory-bandwidth limited; fewer
+    // threads can reduce stutter vs. default auto on low-end Google TV boxes.
+    await mpv.setProperty(
+      'vd-lavc-threads',
+      (Platform.isAndroid && DeviceProfile.isAndroidTv) ? '2' : '0',
+    );
 
     // ── Audio Codec Fallback ──────────────────────────────────────────────
     // Continue playback even if audio codec is unsupported (e.g., TrueHD).
@@ -1350,21 +1361,40 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('video-sync', 'audio');
 
     // ── Adaptive Streaming (HLS/DASH) ─────────────────────────────────────
-    // Always pick the highest bitrate variant in multi-quality playlists.
-    await mpv.setProperty('hls-bitrate', 'max');
+    // Phones: max quality. Android TV: forcing max often picks 4K HEVC that
+    // this device cannot decode fast enough through Flutter → slideshow.
+    if (Platform.isAndroid && DeviceProfile.isAndroidTv) {
+      final cap = _androidTvStreamBitrateCapKbps;
+      if (cap == null) {
+        await mpv.setProperty('hls-bitrate', '12000'); // ~1080p SDR / good 1080p HDR
+      } else if (cap <= 0) {
+        await mpv.setProperty('hls-bitrate', 'max');
+      } else {
+        await mpv.setProperty('hls-bitrate', cap.clamp(500, 80000).toString());
+      }
+    } else {
+      await mpv.setProperty('hls-bitrate', 'max');
+    }
 
     // ── Network / Cache ───────────────────────────────────────────────────
     await mpv.setProperty('network-timeout', '30');
     await mpv.setProperty('tls-verify', 'no');
 
-    // 150 MiB forward cache (less than desktop's 300 MiB — spare mobile RAM).
-    await mpv.setProperty('cache', 'yes');
-    await mpv.setProperty('cache-secs', '120');
-    await mpv.setProperty('demuxer-max-bytes', '150MiB');
-    await mpv.setProperty('demuxer-readahead-secs', '120');
-
-    // 30 MiB back-buffer so backward seeks don't require a full rebuffer.
-    await mpv.setProperty('demuxer-max-back-bytes', '30MiB');
+    if (Platform.isAndroid && DeviceProfile.isAndroidTv) {
+      await mpv.setProperty('cache', 'yes');
+      await mpv.setProperty('cache-secs', '90');
+      await mpv.setProperty('demuxer-max-bytes', '80MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '60');
+      await mpv.setProperty('demuxer-max-back-bytes', '20MiB');
+    } else {
+      // 150 MiB forward cache (less than desktop's 300 MiB — spare mobile RAM).
+      await mpv.setProperty('cache', 'yes');
+      await mpv.setProperty('cache-secs', '120');
+      await mpv.setProperty('demuxer-max-bytes', '150MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '120');
+      // 30 MiB back-buffer so backward seeks don't require a full rebuffer.
+      await mpv.setProperty('demuxer-max-back-bytes', '30MiB');
+    }
 
     // We supply our own URL — no yt-dlp needed.
     await mpv.setProperty('ytdl', 'no');
