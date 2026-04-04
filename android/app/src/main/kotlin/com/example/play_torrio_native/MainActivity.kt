@@ -19,6 +19,7 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         pipCallbackHelper.configureFlutterEngine(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
+        flutterEngine.plugins.add(ExoPlayerViewPlugin())
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.example.play_torrio_native/device",

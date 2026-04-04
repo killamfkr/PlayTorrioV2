@@ -35,7 +35,11 @@ android {
             // Enable minification and resource shrinking
             isMinifyEnabled = true
             isShrinkResources = true
-            
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+
             // Use release signing config if available, otherwise fall back to debug
             signingConfig = if (project.hasProperty("PLAYTORRIO_KEYSTORE_PATH")) {
                 signingConfigs.getByName("release")
@@ -54,6 +58,14 @@ android {
             keyPassword = project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
         }
     }
+}
+
+dependencies {
+    val media3 = "1.4.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3")
 }
 
 flutter {

@@ -6,6 +6,7 @@ import '../api/settings_service.dart';
 import '../platform_flags.dart';
 import 'player/mobile_player_screen.dart';
 import 'player/desktop_player_screen.dart';
+import 'player/native_exo_player_screen.dart';
 import '../api/stremio_service.dart';
 
 class PlayerScreen extends StatefulWidget {
@@ -143,25 +144,64 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     if (platformIsAndroid || platformIsIOS) {
-      return MobilePlayerScreen(
-        mediaPath: widget.streamUrl,
-        title: widget.title,
-        audioUrl: widget.audioUrl,
-        headers: widget.headers,
-        movie: widget.movie,
-        selectedSeason: widget.selectedSeason,
-        selectedEpisode: widget.selectedEpisode,
-        magnetLink: widget.magnetLink,
-        activeProvider: widget.activeProvider,
-        startPosition: widget.startPosition,
-        sources: widget.sources,
-        fileIndex: widget.fileIndex,
-        externalSubtitles: widget.externalSubtitles,
-        stremioId: widget.stremioId,
-        stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
-        stremioStreamType: widget.stremioStreamType ??
-            StremioService.streamTypeForStremioMetaType(null, fallbackMediaType: widget.movie?.mediaType),
-        providers: widget.providers,
+      return FutureBuilder<String>(
+        future: SettingsService().getExternalPlayer(),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(
+                child: CircularProgressIndicator(color: Color(0xFF7C3AED)),
+              ),
+            );
+          }
+          if (snap.data == NativeExoPlayerScreen.playerSettingsName &&
+              platformIsAndroid) {
+            return NativeExoPlayerScreen(
+              mediaPath: widget.streamUrl,
+              title: widget.title,
+              audioUrl: widget.audioUrl,
+              headers: widget.headers,
+              movie: widget.movie,
+              selectedSeason: widget.selectedSeason,
+              selectedEpisode: widget.selectedEpisode,
+              magnetLink: widget.magnetLink,
+              activeProvider: widget.activeProvider,
+              startPosition: widget.startPosition,
+              sources: widget.sources,
+              fileIndex: widget.fileIndex,
+              externalSubtitles: widget.externalSubtitles,
+              stremioId: widget.stremioId,
+              stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+              stremioStreamType: widget.stremioStreamType ??
+                  StremioService.streamTypeForStremioMetaType(
+                    null,
+                    fallbackMediaType: widget.movie?.mediaType,
+                  ),
+              providers: widget.providers,
+            );
+          }
+          return MobilePlayerScreen(
+            mediaPath: widget.streamUrl,
+            title: widget.title,
+            audioUrl: widget.audioUrl,
+            headers: widget.headers,
+            movie: widget.movie,
+            selectedSeason: widget.selectedSeason,
+            selectedEpisode: widget.selectedEpisode,
+            magnetLink: widget.magnetLink,
+            activeProvider: widget.activeProvider,
+            startPosition: widget.startPosition,
+            sources: widget.sources,
+            fileIndex: widget.fileIndex,
+            externalSubtitles: widget.externalSubtitles,
+            stremioId: widget.stremioId,
+            stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+            stremioStreamType: widget.stremioStreamType ??
+                StremioService.streamTypeForStremioMetaType(null, fallbackMediaType: widget.movie?.mediaType),
+            providers: widget.providers,
+          );
+        },
       );
     }
 
