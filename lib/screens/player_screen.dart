@@ -67,7 +67,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _checkExternalPlayer() async {
     final playerName = await SettingsService().getExternalPlayer();
-    final isExternal = playerName != 'Built-in Player';
+    // In-app native stack — not an external app intent (see build() branch).
+    final isNativeExo =
+        platformIsAndroid && playerName == NativeExoPlayerScreen.playerSettingsName;
+    final isExternal =
+        playerName != 'Built-in Player' && !isNativeExo;
 
     if (!mounted) return;
 
