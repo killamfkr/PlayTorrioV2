@@ -3,7 +3,7 @@ import '../../models/movie.dart';
 import '../../models/stream_source.dart';
 import 'mobile_player_screen.dart';
 
-/// Web: no ExoView — use media_kit player.
+/// Web: no ExoView / libVLC — use media_kit player.
 class NativeExoPlayerScreen extends StatelessWidget {
   static const String playerSettingsName = 'Native ExoPlayer (TV)';
 

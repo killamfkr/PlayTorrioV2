@@ -3,14 +3,29 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_vlc_player/flutter_vlc_player.dart';
 
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
-import '../../services/android_player_launcher.dart';
 import 'mobile_player_screen.dart';
 
-/// Android: Media3 ExoPlayer in a [PlatformView]. On fatal error, tries VLC;
-/// if VLC is missing or fails, falls back to [MobilePlayerScreen] (media_kit).
+VlcPlayerOptions? _vlcOptionsFromHeaders(Map<String, String>? headers) {
+  if (headers == null || headers.isEmpty) return null;
+  final list = <String>[];
+  final referer = headers['Referer'] ?? headers['referer'];
+  final ua = headers['User-Agent'] ?? headers['user-agent'];
+  if (referer != null && referer.isNotEmpty) {
+    list.add(VlcHttpOptions.httpReferrer(referer));
+  }
+  if (ua != null && ua.isNotEmpty) {
+    list.add(VlcHttpOptions.httpUserAgent(ua));
+  }
+  if (list.isEmpty) return null;
+  return VlcPlayerOptions(http: VlcHttpOptions(list));
+}
+
+/// Android: Media3 ExoPlayer in a [PlatformView]. On fatal error, embedded
+/// **libVLC** via [flutter_vlc_player]; if that errors, [MobilePlayerScreen].
 class NativeExoPlayerScreen extends StatefulWidget {
   static const String playerSettingsName = 'Native ExoPlayer (TV)';
 
@@ -64,7 +79,10 @@ class _NativeExoPlayerScreenState extends State<NativeExoPlayerScreen> {
   EventChannel? _eventChannel;
   StreamSubscription<dynamic>? _exoSub;
 
-  bool _fallbackStarted = false;
+  bool _exoFallbackStarted = false;
+  bool _libVlcActive = false;
+  bool _mediaKitFallback = false;
+  VlcPlayerController? _vlcController;
   String? _status;
 
   @override
@@ -81,7 +99,7 @@ class _NativeExoPlayerScreenState extends State<NativeExoPlayerScreen> {
   }
 
   Future<void> _onExoEvent(dynamic event) async {
-    if (_fallbackStarted || !mounted) return;
+    if (_exoFallbackStarted || !mounted) return;
     if (event is! Map) return;
     final type = event['type']?.toString();
     if (type != 'error') return;
@@ -90,29 +108,68 @@ class _NativeExoPlayerScreenState extends State<NativeExoPlayerScreen> {
   }
 
   Future<void> _onExoFatal(String message) async {
-    if (_fallbackStarted || !mounted) return;
-    _fallbackStarted = true;
+    if (_exoFallbackStarted || !mounted) return;
+    _exoFallbackStarted = true;
     await _exoSub?.cancel();
     _exoSub = null;
 
-    setState(() => _status = 'ExoPlayer: $message\nTrying VLC…');
+    setState(() => _status = 'ExoPlayer: $message\nLoading libVLC…');
 
-    final vlcOk = await AndroidPlayerLauncher.launch(
-      url: widget.mediaPath,
-      packageName: 'org.videolan.vlc',
-      title: widget.title,
-      extras: const {'title': true},
-    );
-
-    if (!mounted) return;
-
-    if (vlcOk) {
-      Navigator.of(context).pop();
-      return;
+    try {
+      final opts = _vlcOptionsFromHeaders(widget.headers);
+      final c = VlcPlayerController.network(
+        widget.mediaPath,
+        hwAcc: HwAcc.decoding,
+        autoInitialize: false,
+        autoPlay: false,
+        options: opts,
+      );
+      await c.initialize();
+      if (widget.startPosition != null &&
+          widget.startPosition!.inMilliseconds > 0) {
+        await c.seekTo(widget.startPosition!);
+      }
+      c.addListener(_onVlcControllerUpdate);
+      await c.play();
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() {
+        _vlcController = c;
+        _libVlcActive = true;
+        _status = null;
+      });
+    } catch (e) {
+      if (mounted) {
+        await _openMediaKitFallback('libVLC failed: $e');
+      }
     }
+  }
 
-    setState(() => _status = 'VLC not available. Opening built-in player…');
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+  void _onVlcControllerUpdate() {
+    if (_mediaKitFallback || !mounted) return;
+    final c = _vlcController;
+    if (c == null) return;
+    if (c.value.hasError) {
+      final err = c.value.errorDescription;
+      c.removeListener(_onVlcControllerUpdate);
+      _openMediaKitFallback(err.isEmpty ? 'libVLC error' : err);
+    }
+  }
+
+  Future<void> _openMediaKitFallback(String reason) async {
+    if (_mediaKitFallback || !mounted) return;
+    _mediaKitFallback = true;
+
+    setState(() => _status = '$reason\nOpening built-in player…');
+
+    try {
+      await _vlcController?.dispose();
+    } catch (_) {}
+    _vlcController = null;
+
+    await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
 
     await Navigator.of(context).pushReplacement(
@@ -143,6 +200,8 @@ class _NativeExoPlayerScreenState extends State<NativeExoPlayerScreen> {
   @override
   void dispose() {
     _exoSub?.cancel();
+    _vlcController?.removeListener(_onVlcControllerUpdate);
+    _vlcController?.dispose();
     super.dispose();
   }
 
@@ -167,6 +226,36 @@ class _NativeExoPlayerScreenState extends State<NativeExoPlayerScreen> {
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioStreamType: widget.stremioStreamType,
         providers: widget.providers,
+      );
+    }
+
+    if (_libVlcActive && _vlcController != null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: VlcPlayer(
+                controller: _vlcController!,
+                aspectRatio: 16 / 9,
+                virtualDisplay: false,
+                placeholder: const Center(
+                  child: CircularProgressIndicator(color: Color(0xFF7C3AED)),
+                ),
+              ),
+            ),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
