@@ -33,6 +33,7 @@ import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
+import '../../api/introdb_service.dart';
 import '../player_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────

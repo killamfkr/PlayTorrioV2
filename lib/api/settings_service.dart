@@ -47,6 +47,14 @@ class SettingsService {
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
+  // Built-in player subtitle appearance (fork player)
+  static const String _subSizeKey = 'sub_size';
+  static const String _subColorKey = 'sub_color';
+  static const String _subBgOpacityKey = 'sub_bg_opacity';
+  static const String _subBoldKey = 'sub_bold';
+  static const String _subBottomPaddingKey = 'sub_bottom_padding';
+  static const String _subFontKey = 'sub_font';
+
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
   static const String _jackettApiKeyKey = 'jackett_api_key';
@@ -323,6 +331,70 @@ class SettingsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Built-in player subtitle style (SharedPreferences)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<double> getSubSize({bool isDesktop = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subSizeKey) ?? (isDesktop ? 44.0 : 24.0);
+  }
+
+  Future<void> setSubSize(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subSizeKey, v);
+  }
+
+  Future<int> getSubColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_subColorKey) ?? 0xFFFFFFFF;
+  }
+
+  Future<void> setSubColor(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_subColorKey, v);
+  }
+
+  Future<double> getSubBgOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBgOpacityKey) ?? 0.67;
+  }
+
+  Future<void> setSubBgOpacity(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBgOpacityKey, v);
+  }
+
+  Future<bool> getSubBold() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_subBoldKey) ?? false;
+  }
+
+  Future<void> setSubBold(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_subBoldKey, v);
+  }
+
+  Future<double> getSubBottomPadding() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBottomPaddingKey) ?? 24.0;
+  }
+
+  Future<void> setSubBottomPadding(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBottomPaddingKey, v);
+  }
+
+  Future<String> getSubFont() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_subFontKey) ?? 'Default';
+  }
+
+  Future<void> setSubFont(String v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_subFontKey, v);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Jackett Settings
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -513,6 +585,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _subBoldKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -532,6 +605,7 @@ class SettingsService {
       _xmltvChannelMapKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
+      _subFontKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -540,8 +614,18 @@ class SettingsService {
     for (final key in [
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
+      _subColorKey,
     ]) {
       final v = prefs.getInt(key);
+      if (v != null) prefsMap[key] = v;
+    }
+    // Double keys
+    for (final key in [
+      _subSizeKey,
+      _subBgOpacityKey,
+      _subBottomPaddingKey,
+    ]) {
+      final v = prefs.getDouble(key);
       if (v != null) prefsMap[key] = v;
     }
     // StringList keys
@@ -587,6 +671,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _subBoldKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -607,6 +692,7 @@ class SettingsService {
       _xmltvChannelMapKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
+      _subFontKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);
@@ -616,9 +702,20 @@ class SettingsService {
     for (final key in [
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
+      _subColorKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());
+      }
+    }
+    // Double keys
+    for (final key in [
+      _subSizeKey,
+      _subBgOpacityKey,
+      _subBottomPaddingKey,
+    ]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setDouble(key, (prefsMap[key] as num).toDouble());
       }
     }
     // StringList keys
