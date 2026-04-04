@@ -89,6 +89,13 @@ jobs:
             flutter build apk --release "${DART_DEFINES[@]}"
           fi
 
+      # Same binary as universal APK; distinct filename for Android TV / leanback installs.
+      - name: Label Android TV universal copy
+        if: matrix.apk_kind == 'universal'
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            build/app/outputs/flutter-apk/PlayTorrio-AndroidTV-universal.apk
+
       - name: Upload split per-ABI APKs
         if: matrix.apk_kind == 'split'
         uses: actions/upload-artifact@v4
@@ -101,7 +108,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PlayTorrio-Android-universal
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/PlayTorrio-AndroidTV-universal.apk
 
   # ─── Windows ──────────────────────────────────────────────────────────────
   windows:
