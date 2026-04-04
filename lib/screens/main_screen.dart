@@ -269,43 +269,85 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           Row(
             children: [
               if (useNavRail)
-                SingleChildScrollView(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: MediaQuery.of(context).size.height),
-                    child: IntrinsicHeight(
-                      child: NavigationRail(
-                        backgroundColor: Colors.transparent,
-                        selectedIndex: _selectedIndex,
-                        onDestinationSelected: _onItemTapped,
-                        labelType: NavigationRailLabelType.all,
-                        indicatorColor: AppTheme.primaryColor,
-                        selectedLabelTextStyle: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        unselectedLabelTextStyle: const TextStyle(
-                          color: Colors.white54,
-                        ),
-                        leading: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24.0),
-                          child: Icon(
-                            Icons.play_circle_fill,
-                            color: AppTheme.primaryColor,
-                            size: 48,
+                // Android TV: avoid wrapping the rail in a scroll view — it can steal
+                // focus and make the selected destination / content highlight feel "lost".
+                DeviceProfile.isAndroidTv
+                    ? ConstrainedBox(
+                        constraints:
+                            BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                        child: IntrinsicHeight(
+                          child: NavigationRail(
+                            backgroundColor: Colors.transparent,
+                            selectedIndex: _selectedIndex,
+                            onDestinationSelected: _onItemTapped,
+                            labelType: NavigationRailLabelType.all,
+                            indicatorColor: AppTheme.primaryColor,
+                            selectedLabelTextStyle: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            unselectedLabelTextStyle: const TextStyle(
+                              color: Colors.white54,
+                            ),
+                            leading: const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 24.0),
+                              child: Icon(
+                                Icons.play_circle_fill,
+                                color: AppTheme.primaryColor,
+                                size: 48,
+                              ),
+                            ),
+                            destinations: _visibleIds.map((id) {
+                              final meta = _navMeta[id]!;
+                              return NavigationRailDestination(
+                                icon: Icon(meta['icon'] as IconData, color: Colors.white54),
+                                selectedIcon:
+                                    Icon(meta['active'] as IconData, color: Colors.white),
+                                label: Text(meta['label'] as String),
+                              );
+                            }).toList(),
                           ),
                         ),
-                        destinations: _visibleIds.map((id) {
-                          final meta = _navMeta[id]!;
-                          return NavigationRailDestination(
-                            icon: Icon(meta['icon'] as IconData, color: Colors.white54),
-                            selectedIcon: Icon(meta['active'] as IconData, color: Colors.white),
-                            label: Text(meta['label'] as String),
-                          );
-                        }).toList(),
+                      )
+                    : SingleChildScrollView(
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
+                              backgroundColor: Colors.transparent,
+                              selectedIndex: _selectedIndex,
+                              onDestinationSelected: _onItemTapped,
+                              labelType: NavigationRailLabelType.all,
+                              indicatorColor: AppTheme.primaryColor,
+                              selectedLabelTextStyle: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              unselectedLabelTextStyle: const TextStyle(
+                                color: Colors.white54,
+                              ),
+                              leading: const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24.0),
+                                child: Icon(
+                                  Icons.play_circle_fill,
+                                  color: AppTheme.primaryColor,
+                                  size: 48,
+                                ),
+                              ),
+                              destinations: _visibleIds.map((id) {
+                                final meta = _navMeta[id]!;
+                                return NavigationRailDestination(
+                                  icon: Icon(meta['icon'] as IconData, color: Colors.white54),
+                                  selectedIcon:
+                                      Icon(meta['active'] as IconData, color: Colors.white),
+                                  label: Text(meta['label'] as String),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
               Expanded(
                 child: _LazyTabStack(
                   selectedIndex: _selectedIndex,
