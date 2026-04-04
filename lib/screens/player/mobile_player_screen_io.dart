@@ -520,14 +520,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   int _lastPositionUiPushMs = 0;
   int _lastBufferedUiPushMs = 0;
 
-  /// Google TV / Android TV: match panel refresh to content fps (Stremio-style).
-  Timer? _displayModeProbeTimer;
-  bool _appliedDisplayMode = false;
-
   /// Android TV: `null` = use default cap (~12 Mbps); `0` = mpv `hls-bitrate=max`.
   int? _androidTvStreamBitrateCapKbps;
 
   bool _continuePlaybackInBackground = true;
+
+  bool get _openMediaPausedForTv =>
+      Platform.isAndroid && DeviceProfile.isAndroidTv;
   bool _showAndroidPipInToolbar = false;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -672,7 +671,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
-    _displayModeProbeTimer?.cancel();
     clearPreferredVideoDisplayMode();
     _rippleController.dispose();
 
@@ -721,7 +719,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       posterPath: widget.movie?.posterPath,
     );
     await _activateVideoAudioSession();
-    _scheduleAndroidTvDisplayModeMatch();
   }
 
   /// Parses mpv properties like `23.976` or `24000/1001`.
@@ -738,45 +735,40 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     return double.tryParse(s);
   }
 
-  void _scheduleAndroidTvDisplayModeMatch() {
-    if (!Platform.isAndroid || !DeviceProfile.isAndroidTv) return;
-    _displayModeProbeTimer?.cancel();
-    _appliedDisplayMode = false;
-    var ticks = 0;
-    _displayModeProbeTimer = Timer.periodic(const Duration(milliseconds: 500), (t) async {
-      if (_disposed) {
-        t.cancel();
-        return;
-      }
-      ticks++;
-      if (ticks > 24) {
-        t.cancel();
-        return;
-      }
-      final p = _player.platform;
-      if (p is! NativePlayer) {
-        t.cancel();
-        return;
-      }
+  /// Stremio-style: load stream **paused**, read fps, switch [Display.Mode] for
+  /// clean cadence (e.g. 24 fps → 24/48/120 Hz not 60 Hz), brief settle, then play.
+  Future<void> _applyAndroidTvDisplayModeBeforePlayback() async {
+    if (!_openMediaPausedForTv || _disposed) return;
+    final p = _player.platform;
+    if (p is! NativePlayer) return;
+
+    double? fps;
+    for (var i = 0; i < 40 && !_disposed; i++) {
       try {
         var v = await p.getProperty('container-fps');
-        var fps = _parseMpvFps(v);
+        fps = _parseMpvFps(v);
         if (fps == null || fps < 10 || fps > 240) {
           v = await p.getProperty('estimated-vf-fps');
           fps = _parseMpvFps(v);
         }
-        if (fps != null && fps >= 10 && fps <= 240) {
-          final ok = await setPreferredVideoRefreshRate(fps);
-          if (ok) {
-            _appliedDisplayMode = true;
-            debugPrint(
-              '[Player] Android TV: matched display mode to ~${fps.toStringAsFixed(3)} Hz',
-            );
-            t.cancel();
-          }
-        }
+        if (fps != null && fps >= 10 && fps <= 240) break;
       } catch (_) {}
-    });
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (_disposed || fps == null) return;
+
+    final ok = await setPreferredVideoRefreshRate(fps);
+    if (ok) {
+      debugPrint(
+        '[Player] Android TV: display mode matched to content ~${fps.toStringAsFixed(3)} fps',
+      );
+      try {
+        // After the panel switches, sync to display vsync (works with matched Hz).
+        await p.setProperty('video-sync', 'display-vdrop');
+      } catch (_) {}
+    }
+    // Let the panel finish mode switch before starting decode pressure.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
   }
 
   /// Movie-style session + focus so audio keeps running when the screen locks
@@ -815,7 +807,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   /// so the details page never sees stale landscape dimensions.
   Future<void> _exitPlayer() async {
     _saveWatchHistory();
-    _displayModeProbeTimer?.cancel();
     await clearPreferredVideoDisplayMode();
     AutoOrientation.fullAutoMode(forceSensor: true);
     await SystemChrome.setPreferredOrientations([]);
@@ -1018,7 +1009,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
-          await _player.open(Media(source.url, httpHeaders: srcHeaders));
+          await _player.open(
+            Media(source.url, httpHeaders: srcHeaders),
+            play: !_openMediaPausedForTv,
+          );
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
             final ref = source.headers!['Referer'] ?? source.headers!['referer'];
@@ -1029,6 +1023,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             _currentUrl = source.url;
           });
           await _afterVideoSourceOpened();
+          if (_openMediaPausedForTv) {
+            await _applyAndroidTvDisplayModeBeforePlayback();
+            if (!_disposed) await _player.play();
+          }
           return; // Opened successfully (might still error out during buffering)
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -1047,9 +1045,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         try {
           _subscribeToStreams();
           await _configureMpvProperties();
-          await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          await _player.open(
+            Media(widget.mediaPath, httpHeaders: widget.headers),
+            play: !_openMediaPausedForTv,
+          );
           _player.setVolume(_volume);
           await _afterVideoSourceOpened();
+          if (_openMediaPausedForTv) {
+            await _applyAndroidTvDisplayModeBeforePlayback();
+            if (!_disposed) await _player.play();
+          }
           return;
         } catch (e) {
           retryCount++;
@@ -1139,9 +1144,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
-        await _player.open(Media(streamUrl, httpHeaders: headers));
+        await _player.open(
+          Media(streamUrl, httpHeaders: headers),
+          play: !_openMediaPausedForTv,
+        );
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
-        
+
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
@@ -1151,6 +1159,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _errorMessage = '';
         });
         await _afterVideoSourceOpened();
+        if (_openMediaPausedForTv) {
+          await _applyAndroidTvDisplayModeBeforePlayback();
+          if (!_disposed) await _player.play();
+        }
         return true;
       }
     } catch (e) {
@@ -1999,6 +2011,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         await _player.open(
                           Media(result.url, httpHeaders: result.headers),
+                          play: !_openMediaPausedForTv,
                         );
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
@@ -2021,6 +2034,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         await _player.open(
                           Media(source.url, httpHeaders: srcHeaders),
+                          play: !_openMediaPausedForTv,
                         );
                         setState(() {
                           _currentUrl = source.url;
@@ -2034,7 +2048,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       if (currentPos.inSeconds > 0) {
                         await _player.seek(currentPos);
                       }
-                      
+                      if (_openMediaPausedForTv) {
+                        await _applyAndroidTvDisplayModeBeforePlayback();
+                        if (mounted && !_disposed) await _player.play();
+                      }
+
                       if (mounted) {
                         messenger.showSnackBar(SnackBar(
                           content: Text('Switched to ${source.title}'),
@@ -2173,12 +2191,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         await _player.open(
           Media(streamUrl, httpHeaders: headers),
+          play: !_openMediaPausedForTv,
         );
-        
+
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);
         }
-        
+
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
@@ -2187,7 +2206,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
-        
+        await _afterVideoSourceOpened();
+        if (_openMediaPausedForTv) {
+          await _applyAndroidTvDisplayModeBeforePlayback();
+          if (!_disposed) await _player.play();
+        }
+
         if (mounted) {
           messenger.showSnackBar(SnackBar(
             content: Text('Switched to ${provider['name']}'),

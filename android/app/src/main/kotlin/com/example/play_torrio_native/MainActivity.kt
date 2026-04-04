@@ -72,16 +72,18 @@ class MainActivity : AudioServiceActivity() {
         }
 
     /**
-     * Picks the supported [Display.Mode] whose refresh rate is closest to [fps]
-     * (e.g. 23.976 → 24 Hz), like frame-rate matching on Google TV / Stremio.
+     * Picks a [Display.Mode] that **divides evenly** into [contentFps] (within tolerance),
+     * like Stremio / frame-rate match: e.g. 23.976 fps → prefer 24 Hz, 48 Hz, 120 Hz over 60 Hz
+     * (60/23.976 ≈ 2.5 → heavy judder; 120/5 ≈ 24 → clean).
      */
-    private fun setPreferredVideoRefreshRate(fps: Double): Boolean {
+    private fun setPreferredVideoRefreshRate(contentFps: Double): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        if (contentFps < 10.0 || contentFps > 240.0) return false
         return try {
             val display = displayCompat() ?: return false
             val modes = display.supportedModes ?: return false
             if (modes.isEmpty()) return false
-            val best = modes.minByOrNull { abs(it.refreshRate.toDouble() - fps) } ?: return false
+            val best = bestDisplayModeForContentFps(modes, contentFps) ?: return false
             val attrs = window.attributes
             attrs.preferredDisplayModeId = best.modeId
             window.attributes = attrs
@@ -89,6 +91,32 @@ class MainActivity : AudioServiceActivity() {
         } catch (_: Throwable) {
             false
         }
+    }
+
+    /** Minimize |refreshRate/n - contentFps| over n in 1..6; tie-break higher refresh rate. */
+    private fun bestDisplayModeForContentFps(
+        modes: Array<Display.Mode>,
+        contentFps: Double,
+    ): Display.Mode? {
+        var best: Display.Mode? = null
+        var bestRelErr = Double.MAX_VALUE
+        for (mode in modes) {
+            val r = mode.refreshRate.toDouble()
+            if (r < 20.0) continue
+            var minAbsErr = Double.MAX_VALUE
+            for (n in 1..6) {
+                val err = abs(r / n.toDouble() - contentFps)
+                if (err < minAbsErr) minAbsErr = err
+            }
+            val relErr = minAbsErr / contentFps
+            if (relErr < bestRelErr - 1e-5) {
+                best = mode
+                bestRelErr = relErr
+            } else if (abs(relErr - bestRelErr) <= 1e-5 && best != null && r > best.refreshRate) {
+                best = mode
+            }
+        }
+        return best
     }
 
     private fun clearPreferredDisplayMode() {
