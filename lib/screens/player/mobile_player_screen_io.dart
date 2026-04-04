@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
-import 'package:android_pip/android_pip.dart';
-import 'package:audio_session/audio_session.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:google_fonts/google_fonts.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -25,15 +26,12 @@ import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
 import '../../api/settings_service.dart';
-import '../../services/built_in_video_media_session.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
-import '../../utils/android_display_mode.dart';
-import '../../utils/device_profile.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -112,20 +110,6 @@ class _BlurGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (DeviceProfile.isAndroidTv) {
-      return Container(
-        padding: padding,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withValues(alpha: 0.88),
-          borderRadius: BorderRadius.circular(radius),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.16),
-            width: 0.8,
-          ),
-        ),
-        child: child,
-      );
-    }
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
@@ -407,7 +391,7 @@ class MobilePlayerScreen extends StatefulWidget {
   final List<Map<String, dynamic>>? externalSubtitles;
   final String? stremioId;
   final String? stremioAddonBaseUrl;
-  /// Stremio `/stream/{type}/...` segment (e.g. `tv` for live channel addons).
+  /// Stremio `/stream/{type}/...` segment (e.g. `tv` for live channels).
   final String stremioStreamType;
   final Map<String, dynamic>? providers;
 
@@ -442,6 +426,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   late final Player _player;
   late final VideoController _controller;
   bool _disposed = false;
+  bool _historySaved = false;
   bool _hasError = false;
   String _errorMessage = '';
 
@@ -502,32 +487,25 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   String? _selectedExternalSubUrl;
 
   // ── Feature State ─────────────────────────────────────────────────────────
-  /// TV: default to copy-back hwdec — `auto-safe` + direct rendering can yield
-  /// ~1–2 FPS (slideshow) on some Amlogic/MediaTek Android TV SoCs.
-  _HwDecMode _hwDecMode =
-      DeviceProfile.isAndroidTv ? _HwDecMode.autoCopy : _HwDecMode.autoSafe;
+  _HwDecMode _hwDecMode = _HwDecMode.autoSafe;
   bool _loopEnabled = false;
   double _subtitleDelay = 0.0;
   double _subtitleSize = 24.0;
-  final double _subtitleBottomPadding = 24.0;
+  double _subtitleBottomPadding = 24.0;
+  Color _subtitleColor = Colors.white;
+  double _subtitleBgOpacity = 0.67;
+  bool _subtitleBold = false;
+  String _subtitleFont = 'Default';
 
   // ── Next Episode State ────────────────────────────────────────────────────
   bool _isLoadingNextEp = false;
   bool _nearEndOfEpisode = false;
 
-  /// When controls are hidden, throttling position/buffer notifier updates
-  /// avoids rebuilding the overlay every ~16ms (hurts Android TV SoCs).
-  int _lastPositionUiPushMs = 0;
-  int _lastBufferedUiPushMs = 0;
-
-  /// Android TV: `null` = use default cap (~12 Mbps); `0` = mpv `hls-bitrate=max`.
-  int? _androidTvStreamBitrateCapKbps;
-
-  bool _continuePlaybackInBackground = true;
-
-  bool get _openMediaPausedForTv =>
-      Platform.isAndroid && DeviceProfile.isAndroidTv;
-  bool _showAndroidPipInToolbar = false;
+  // ── Skip Segments (IntroDB) ───────────────────────────────────────────────
+  IntroDbResponse? _introDbData;
+  String? _activeSkipLabel;
+  Duration? _activeSkipTarget;
+  bool _skipDismissed = false;
 
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
@@ -555,7 +533,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     Future.delayed(const Duration(milliseconds: 800), () {
       if (!_disposed) {
         AutoOrientation.fullAutoMode(forceSensor: true);
-        SystemChrome.setPreferredOrientations([]);
       }
     });
     WakelockPlus.enable();
@@ -597,31 +574,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
     });
 
-    SettingsService.builtinPlayerSubtitlesEnabledNotifier
-        .addListener(_onBuiltinSubtitlesSettingChanged);
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      await SettingsService().getBuiltinPlayerSubtitlesEnabled();
-      _continuePlaybackInBackground =
-          await SettingsService().continuePlaybackInBackground();
-      await _configureVideoAudioSession();
-      if (Platform.isAndroid) {
-        if (DeviceProfile.isAndroidTv) {
-          _androidTvStreamBitrateCapKbps =
-              await SettingsService().getAndroidTvMaxStreamBitrateKbps();
-        }
-        _showAndroidPipInToolbar =
-            await SettingsService().showAndroidPipButton();
-        final autoPip = await SettingsService().autoEnterPipAndroid();
-        if (autoPip && await AndroidPIP.isAutoPipAvailable) {
-          try {
-            await AndroidPIP().setAutoPipMode();
-          } catch (_) {}
-        }
-      }
-      if (!mounted) return;
-      setState(() {});
+      _loadSubtitlePrefs();
       _initPlayback();
       _startHideTimer();
       _fetchSubtitles();
@@ -649,7 +604,21 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           episode: widget.selectedEpisode,
         );
       }
+      // Fetch skip segments from IntroDB
+      _fetchIntroDbTimestamps();
     });
+  }
+
+  Future<void> _fetchIntroDbTimestamps() async {
+    if (widget.movie == null) return;
+    final data = await IntroDbService().getTimestamps(
+      tmdbId: widget.movie!.id,
+      season: widget.selectedSeason,
+      episode: widget.selectedEpisode,
+    );
+    if (mounted && data != null && data.hasAnySegments) {
+      setState(() => _introDbData = data);
+    }
   }
 
   @override
@@ -661,17 +630,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // Restore free rotation when leaving the player.
     AutoOrientation.fullAutoMode(forceSensor: true);
-    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _disposed = true;
-    SettingsService.builtinPlayerSubtitlesEnabledNotifier
-        .removeListener(_onBuiltinSubtitlesSettingChanged);
-    detachBuiltInVideoMediaSession();
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
-    clearPreferredVideoDisplayMode();
     _rippleController.dispose();
 
     _positionSub?.cancel();
@@ -700,178 +664,45 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     super.dispose();
   }
 
-  void _onBuiltinSubtitlesSettingChanged() {
-    if (!mounted || _disposed) return;
-    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
-      _player.setSubtitleTrack(SubtitleTrack.no());
-    }
-    setState(() {});
-  }
-
-  Future<void> _afterVideoSourceOpened() async {
-    if (_disposed) return;
-    if (!SettingsService.builtinPlayerSubtitlesEnabledNotifier.value) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
-    }
-    attachBuiltInVideoMediaSession(
-      _player,
-      title: widget.title,
-      posterPath: widget.movie?.posterPath,
-    );
-    await _activateVideoAudioSession();
-  }
-
-  /// Parses mpv properties like `23.976` or `24000/1001`.
-  static double? _parseMpvFps(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return null;
-    final slash = s.indexOf('/');
-    if (slash >= 0) {
-      final a = double.tryParse(s.substring(0, slash).trim());
-      final b = double.tryParse(s.substring(slash + 1).trim());
-      if (a != null && b != null && b != 0) return a / b;
-      return null;
-    }
-    return double.tryParse(s);
-  }
-
-  /// Stremio-style: load stream **paused**, read fps, switch [Display.Mode] for
-  /// clean cadence (e.g. 24 fps → 24/48/120 Hz not 60 Hz), brief settle, then play.
-  Future<void> _applyAndroidTvDisplayModeBeforePlayback() async {
-    if (!_openMediaPausedForTv || _disposed) return;
-    final p = _player.platform;
-    if (p is! NativePlayer) return;
-
-    double? fps;
-    for (var i = 0; i < 40 && !_disposed; i++) {
-      try {
-        var v = await p.getProperty('container-fps');
-        fps = _parseMpvFps(v);
-        if (fps == null || fps < 10 || fps > 240) {
-          v = await p.getProperty('estimated-vf-fps');
-          fps = _parseMpvFps(v);
-        }
-        if (fps != null && fps >= 10 && fps <= 240) break;
-      } catch (_) {}
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    if (_disposed || fps == null) return;
-
-    final ok = await setPreferredVideoRefreshRate(fps);
-    if (ok) {
-      debugPrint(
-        '[Player] Android TV: display mode matched to content ~${fps.toStringAsFixed(3)} fps',
-      );
-      try {
-        // After the panel switches, sync to display vsync (works with matched Hz).
-        await p.setProperty('video-sync', 'display-vdrop');
-      } catch (_) {}
-    }
-    // Let the panel finish mode switch before starting decode pressure.
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-  }
-
-  /// Movie-style session + focus so audio keeps running when the screen locks
-  /// (works with [Video.pauseUponEnteringBackgroundMode] when background play is on).
-  Future<void> _configureVideoAudioSession() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-    try {
-      final session = await AudioSession.instance;
-      await session.configure(
-        const AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playback,
-          avAudioSessionMode: AVAudioSessionMode.moviePlayback,
-          androidAudioAttributes: AndroidAudioAttributes(
-            contentType: AndroidAudioContentType.movie,
-            usage: AndroidAudioUsage.media,
-          ),
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-        ),
-      );
-    } catch (e) {
-      debugPrint('[Player] Audio session configure: $e');
-    }
-  }
-
-  Future<void> _activateVideoAudioSession() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-    try {
-      final session = await AudioSession.instance;
-      await session.setActive(true);
-    } catch (e) {
-      debugPrint('[Player] Audio session activate: $e');
-    }
-  }
-
   /// Rotate back to portrait & restore system UI BEFORE popping,
   /// so the details page never sees stale landscape dimensions.
   Future<void> _exitPlayer() async {
     _saveWatchHistory();
-    await clearPreferredVideoDisplayMode();
     AutoOrientation.fullAutoMode(forceSensor: true);
-    await SystemChrome.setPreferredOrientations([]);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) Navigator.of(context).pop(_positionNotifier.value);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.paused ||
+    if (state == AppLifecycleState.paused || 
         state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      _saveWatchHistory();
-    }
-    if (state == AppLifecycleState.paused &&
-        !_continuePlaybackInBackground &&
-        !_disposed) {
-      _player.pause();
-    }
-    // Re-assert audio focus when locking the screen while background play is on.
-    if (state == AppLifecycleState.paused &&
-        _continuePlaybackInBackground &&
-        !_disposed &&
-        _isPlayingNotifier.value) {
-      _activateVideoAudioSession();
-    }
-    if (state == AppLifecycleState.resumed &&
-        _continuePlaybackInBackground &&
-        !_disposed &&
-        _isPlayingNotifier.value) {
-      _activateVideoAudioSession();
-    }
-  }
-
-  Future<void> _enterPictureInPicture() async {
-    if (!Platform.isAndroid) return;
-    try {
-      if (!await AndroidPIP.isPipAvailable) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Picture-in-picture is not available here.')),
-          );
-        }
-        return;
-      }
-      final ok = await AndroidPIP().enterPipMode();
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Could not enter PiP. Try starting playback first, or enable PiP for this app in system settings.')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PiP error: $e')),
+      // Save local history + send scrobblePause (not stop — user may return)
+      _saveWatchHistory(isBgPause: true);
+    } else if (state == AppLifecycleState.resumed) {
+      // Tell Trakt we're back
+      _historySaved = false; // allow re-save on next exit
+      if (widget.movie != null && _isPlayingNotifier.value) {
+        final pos = _positionNotifier.value.inMilliseconds;
+        final dur = _durationNotifier.value.inMilliseconds;
+        final pct = dur > 0 ? (pos / dur * 100) : 0.0;
+        TraktService().scrobbleStart(
+          tmdbId: widget.movie!.id,
+          mediaType: widget.movie!.mediaType,
+          season: widget.selectedSeason,
+          episode: widget.selectedEpisode,
+          progressPercent: pct,
         );
       }
     }
   }
 
-  void _saveWatchHistory() {
+  void _saveWatchHistory({bool isBgPause = false}) {
+    if (_historySaved && !isBgPause) return; // prevent double stop
+    _historySaved = true;
     final pos = _positionNotifier.value.inMilliseconds;
     final dur = _durationNotifier.value.inMilliseconds;
 
@@ -931,13 +762,24 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
       // Trakt + Simkl scrobble — fire and forget
       final progressPercent = dur > 0 ? (pos / dur * 100) : 0.0;
-      TraktService().scrobbleStop(
-        tmdbId: widget.movie!.id,
-        mediaType: widget.movie!.mediaType,
-        season: widget.selectedSeason,
-        episode: widget.selectedEpisode,
-        progressPercent: progressPercent,
-      );
+      if (isBgPause) {
+        // App backgrounded — pause, don't stop (user may return)
+        TraktService().scrobblePause(
+          tmdbId: widget.movie!.id,
+          mediaType: widget.movie!.mediaType,
+          season: widget.selectedSeason,
+          episode: widget.selectedEpisode,
+          progressPercent: progressPercent,
+        );
+      } else {
+        TraktService().scrobbleStop(
+          tmdbId: widget.movie!.id,
+          mediaType: widget.movie!.mediaType,
+          season: widget.selectedSeason,
+          episode: widget.selectedEpisode,
+          progressPercent: progressPercent,
+        );
+      }
       SimklService().scrobbleStop(
         tmdbId: widget.movie!.id,
         mediaType: widget.movie!.mediaType,
@@ -1009,10 +851,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
-          await _player.open(
-            Media(source.url, httpHeaders: srcHeaders),
-            play: !_openMediaPausedForTv,
-          );
+          await _player.open(Media(source.url, httpHeaders: srcHeaders));
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
             final ref = source.headers!['Referer'] ?? source.headers!['referer'];
@@ -1022,11 +861,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           setState(() {
             _currentUrl = source.url;
           });
-          await _afterVideoSourceOpened();
-          if (_openMediaPausedForTv) {
-            await _applyAndroidTvDisplayModeBeforePlayback();
-            if (!_disposed) await _player.play();
-          }
           return; // Opened successfully (might still error out during buffering)
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -1045,16 +879,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         try {
           _subscribeToStreams();
           await _configureMpvProperties();
-          await _player.open(
-            Media(widget.mediaPath, httpHeaders: widget.headers),
-            play: !_openMediaPausedForTv,
-          );
+          await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
           _player.setVolume(_volume);
-          await _afterVideoSourceOpened();
-          if (_openMediaPausedForTv) {
-            await _applyAndroidTvDisplayModeBeforePlayback();
-            if (!_disposed) await _player.play();
-          }
           return;
         } catch (e) {
           retryCount++;
@@ -1144,12 +970,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
-        await _player.open(
-          Media(streamUrl, httpHeaders: headers),
-          play: !_openMediaPausedForTv,
-        );
+        await _player.open(Media(streamUrl, httpHeaders: headers));
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
-
+        
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
@@ -1158,11 +981,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
-        await _afterVideoSourceOpened();
-        if (_openMediaPausedForTv) {
-          await _applyAndroidTvDisplayModeBeforePlayback();
-          if (!_disposed) await _player.play();
-        }
         return true;
       }
     } catch (e) {
@@ -1172,18 +990,18 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _subscribeToStreams() {
+    // Cancel any existing subscriptions to prevent duplicate listeners
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _bufferSub?.cancel();
+    _playingSub?.cancel();
+    _bufferingSub?.cancel();
+    _errorSub?.cancel();
+    _completedSub?.cancel();
+
     _positionSub = _player.stream.position.listen((pos) {
       if (_disposed) return;
-
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final overlayActive = _showControls && !_isLocked;
-      final minIntervalMs = DeviceProfile.isAndroidTv ? 500 : 0;
-      if (overlayActive ||
-          minIntervalMs == 0 ||
-          now - _lastPositionUiPushMs >= minIntervalMs) {
-        _lastPositionUiPushMs = now;
-        _positionNotifier.value = pos;
-      }
+      _positionNotifier.value = pos;
 
       // Near-end detection for next episode button
       if (_isNextEpisodeAvailable && !_nearEndOfEpisode) {
@@ -1198,6 +1016,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           }
         }
       }
+
+      // Skip segment detection (IntroDB)
+      _updateActiveSkipSegment(pos);
     });
 
     _durationSub = _player.stream.duration.listen((dur) {
@@ -1232,14 +1053,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     _bufferSub = _player.stream.buffer.listen((buf) {
       if (_disposed) return;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final overlayActive = _showControls && !_isLocked;
-      if (DeviceProfile.isAndroidTv &&
-          !overlayActive &&
-          now - _lastBufferedUiPushMs < 800) {
-        return;
-      }
-      _lastBufferedUiPushMs = now;
       _bufferedNotifier.value = buf;
     });
 
@@ -1247,12 +1060,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (_disposed) return;
       _isPlayingNotifier.value = playing;
       if (playing) {
-        attachBuiltInVideoMediaSession(
-          _player,
-          title: widget.title,
-          posterPath: widget.movie?.posterPath,
-        );
-        _activateVideoAudioSession();
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
@@ -1314,8 +1121,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       debugPrint('🔴 [MobilePlayer] $err');
       
       if (err.contains('Failed') || err.contains('No such file')) {
-        if (_isInitPlaybackRunning) {
-          debugPrint('[Player] Ignoring stale error — _initPlayback already running');
+        // Don't retry if we've already given up or are currently retrying
+        if (_hasError || _isInitPlaybackRunning) {
+          if (_isInitPlaybackRunning) {
+            debugPrint('[Player] Ignoring stale error — _initPlayback already running');
+          }
           return;
         }
         debugPrint('[Player] Fatal error detected on source $_currentFallbackSourceIndex, progressing fallback...');
@@ -1341,19 +1151,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('hwdec', _hwDecMode.mpvValue);
 
     // Zero-copy direct rendering — decoder writes straight to GPU texture.
-    // On phones this often helps; on Android TV it can stall the texture path
-    // badly (slideshow / ~2 FPS). Copy-back hwdec + dr=no is safer there.
-    await mpv.setProperty(
-      'vd-lavc-dr',
-      DeviceProfile.isAndroidTv ? 'no' : 'yes',
-    );
+    // Big win on mobile for battery + throughput on H.265/4K content.
+    await mpv.setProperty('vd-lavc-dr', 'yes');
 
-    // Decoder threads: TV SoCs are often memory-bandwidth limited; fewer
-    // threads can reduce stutter vs. default auto on low-end Google TV boxes.
-    await mpv.setProperty(
-      'vd-lavc-threads',
-      (Platform.isAndroid && DeviceProfile.isAndroidTv) ? '2' : '0',
-    );
+    // Auto thread count (0 = let mpv decide). On mobile 4–8 cores typical.
+    await mpv.setProperty('vd-lavc-threads', '0');
 
     // ── Audio Codec Fallback ──────────────────────────────────────────────
     // Continue playback even if audio codec is unsupported (e.g., TrueHD).
@@ -1373,40 +1175,21 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('video-sync', 'audio');
 
     // ── Adaptive Streaming (HLS/DASH) ─────────────────────────────────────
-    // Phones: max quality. Android TV: forcing max often picks 4K HEVC that
-    // this device cannot decode fast enough through Flutter → slideshow.
-    if (Platform.isAndroid && DeviceProfile.isAndroidTv) {
-      final cap = _androidTvStreamBitrateCapKbps;
-      if (cap == null) {
-        await mpv.setProperty('hls-bitrate', '12000'); // ~1080p SDR / good 1080p HDR
-      } else if (cap <= 0) {
-        await mpv.setProperty('hls-bitrate', 'max');
-      } else {
-        await mpv.setProperty('hls-bitrate', cap.clamp(500, 80000).toString());
-      }
-    } else {
-      await mpv.setProperty('hls-bitrate', 'max');
-    }
+    // Always pick the highest bitrate variant in multi-quality playlists.
+    await mpv.setProperty('hls-bitrate', 'max');
 
     // ── Network / Cache ───────────────────────────────────────────────────
     await mpv.setProperty('network-timeout', '30');
     await mpv.setProperty('tls-verify', 'no');
 
-    if (Platform.isAndroid && DeviceProfile.isAndroidTv) {
-      await mpv.setProperty('cache', 'yes');
-      await mpv.setProperty('cache-secs', '90');
-      await mpv.setProperty('demuxer-max-bytes', '80MiB');
-      await mpv.setProperty('demuxer-readahead-secs', '60');
-      await mpv.setProperty('demuxer-max-back-bytes', '20MiB');
-    } else {
-      // 150 MiB forward cache (less than desktop's 300 MiB — spare mobile RAM).
-      await mpv.setProperty('cache', 'yes');
-      await mpv.setProperty('cache-secs', '120');
-      await mpv.setProperty('demuxer-max-bytes', '150MiB');
-      await mpv.setProperty('demuxer-readahead-secs', '120');
-      // 30 MiB back-buffer so backward seeks don't require a full rebuffer.
-      await mpv.setProperty('demuxer-max-back-bytes', '30MiB');
-    }
+    // 150 MiB forward cache (less than desktop's 300 MiB — spare mobile RAM).
+    await mpv.setProperty('cache', 'yes');
+    await mpv.setProperty('cache-secs', '120');
+    await mpv.setProperty('demuxer-max-bytes', '150MiB');
+    await mpv.setProperty('demuxer-readahead-secs', '120');
+
+    // 30 MiB back-buffer so backward seeks don't require a full rebuffer.
+    await mpv.setProperty('demuxer-max-back-bytes', '30MiB');
 
     // We supply our own URL — no yt-dlp needed.
     await mpv.setProperty('ytdl', 'no');
@@ -1659,10 +1442,24 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                               fontWeight: FontWeight.bold)),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.settings_outlined,
-                          color: Colors.white54, size: 20),
+                      icon: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF7C3AED).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.4)),
+                        ),
+                        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.tune_rounded, color: Color(0xFF7C3AED), size: 20),
+                          SizedBox(width: 4),
+                          Text('Style', style: TextStyle(color: Color(0xFF7C3AED), fontSize: 12, fontWeight: FontWeight.w600)),
+                        ]),
+                      ),
                       tooltip: 'Subtitle settings',
-                      onPressed: _showSubtitleSettings,
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showSubtitleSettings();
+                      },
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                     ),
@@ -1711,6 +1508,25 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       _selectedExternalSubUrl = null;
                       _player.setSubtitleTrack(SubtitleTrack.no());
                       Navigator.pop(context);
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.file_upload_outlined, color: Colors.white70),
+                    title: const Text('Load from file', style: TextStyle(color: Colors.white)),
+                    onTap: () async {
+                      final result = await FilePicker.platform.pickFiles(
+                        type: FileType.custom,
+                        allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
+                      );
+                      if (result != null && result.files.single.path != null) {
+                        final file = File(result.files.single.path!);
+                        final content = await file.readAsString();
+                        final name = result.files.single.name;
+                        _selectedExternalSubUrl = null;
+                        _player.setSubtitleTrack(SubtitleTrack.data(
+                            content, title: name, language: 'und'));
+                        if (context.mounted) Navigator.pop(context);
+                      }
                     },
                   ),
                   if (embedded.isNotEmpty) ...[
@@ -1807,69 +1623,240 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _showSubtitleSettings() {
+    final fonts = ['Default', 'Poppins', 'Roboto', 'Roboto Mono', 'Montserrat', 'Open Sans', 'Lato'];
+    final colorOptions = <String, Color>{
+      'White': Colors.white,
+      'Yellow': const Color(0xFFFFEB3B),
+      'Cyan': const Color(0xFF00E5FF),
+      'Green': const Color(0xFF69F0AE),
+      'Orange': const Color(0xFFFFAB40),
+      'Pink': const Color(0xFFFF80AB),
+    };
+
     showDialog(
       context: context,
-      builder: (context) =>
-          StatefulBuilder(builder: (context, setDialog) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF121212),
-          title: const Text('Subtitle Settings',
-              style: TextStyle(color: Colors.white)),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Row(children: [
-              const SizedBox(
-                  width: 54,
-                  child:
-                      Text('Size', style: TextStyle(color: Colors.white70))),
-              Expanded(
-                child: Slider(
-                  value: _subtitleSize,
-                  min: 10, max: 50,
-                  thumbColor: const Color(0xFF7C3AED),
-                  onChanged: (v) {
-                    setDialog(() => _subtitleSize = v);
-                    setState(() {});
-                  },
+      builder: (context) {
+        final screenW = MediaQuery.of(context).size.width;
+        final dialogW = (screenW * 0.9).clamp(280.0, 420.0);
+        return StatefulBuilder(builder: (context, setDialog) {
+          return Dialog(
+            backgroundColor: const Color(0xFF121212),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: dialogW, maxHeight: MediaQuery.of(context).size.height * 0.8),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // Title
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Row(children: [
+                    const Icon(Icons.tune_rounded, color: Color(0xFF7C3AED), size: 20),
+                    const SizedBox(width: 8),
+                    const Text('Subtitle Settings', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () {
+                        SettingsService().setSubSize(_subtitleSize);
+                        SettingsService().setSubBgOpacity(_subtitleBgOpacity);
+                        SettingsService().setSubBottomPadding(_subtitleBottomPadding);
+                        Navigator.pop(context);
+                      },
+                      child: const Icon(Icons.close, color: Colors.white38, size: 20),
+                    ),
+                  ]),
                 ),
-              ),
-              Text('${_subtitleSize.toInt()}',
-                  style: const TextStyle(color: Colors.white)),
-            ]),
-            Row(children: [
-              const SizedBox(
-                  width: 54,
-                  child: Text('Delay',
-                      style: TextStyle(color: Colors.white70))),
-              Expanded(
-                child: Slider(
-                  value: _subtitleDelay,
-                  min: -10.0, max: 10.0,
-                  thumbColor: const Color(0xFF7C3AED),
-                  onChanged: (v) {
-                    setDialog(() => _subtitleDelay = v);
-                    if (_player.platform is NativePlayer) {
-                      (_player.platform as NativePlayer)
-                          .setProperty('sub-delay', v.toString());
-                    }
-                  },
+                const Divider(color: Colors.white10, height: 1),
+                // Content
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      // Size
+                      _subSlider('Size', _subtitleSize, 10, 50, '${_subtitleSize.toInt()}', (v) {
+                        setDialog(() => _subtitleSize = v); setState(() {});
+                      }),
+                      const SizedBox(height: 8),
+
+                      // Delay
+                      Row(children: [
+                        const Text('Delay', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.remove, color: Colors.white70, size: 20),
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () {
+                            final v = _subtitleDelay - 0.1;
+                            setDialog(() => _subtitleDelay = double.parse(v.toStringAsFixed(1)));
+                            if (_player.platform is NativePlayer) {
+                              (_player.platform as NativePlayer).setProperty('sub-delay', _subtitleDelay.toString());
+                            }
+                          },
+                        ),
+                        SizedBox(
+                          width: 54,
+                          child: Text('${_subtitleDelay.toStringAsFixed(1)}s',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add, color: Colors.white70, size: 20),
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () {
+                            final v = _subtitleDelay + 0.1;
+                            setDialog(() => _subtitleDelay = double.parse(v.toStringAsFixed(1)));
+                            if (_player.platform is NativePlayer) {
+                              (_player.platform as NativePlayer).setProperty('sub-delay', _subtitleDelay.toString());
+                            }
+                          },
+                        ),
+                      ]),
+                      const SizedBox(height: 12),
+
+                      // Text Color
+                      const Text('Text Color', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      Wrap(spacing: 10, runSpacing: 10, children: colorOptions.entries.map((e) {
+                        final selected = _subtitleColor.toARGB32() == e.value.toARGB32();
+                        return GestureDetector(
+                          onTap: () {
+                            setDialog(() => _subtitleColor = e.value);
+                            setState(() {});
+                            SettingsService().setSubColor(e.value.toARGB32());
+                          },
+                          child: Container(
+                            width: 34, height: 34,
+                            decoration: BoxDecoration(
+                              color: e.value,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: selected ? const Color(0xFF7C3AED) : Colors.white24,
+                                width: selected ? 3 : 1,
+                              ),
+                            ),
+                            child: selected ? const Icon(Icons.check, size: 16, color: Color(0xFF7C3AED)) : null,
+                          ),
+                        );
+                      }).toList()),
+                      const SizedBox(height: 16),
+
+                      // BG Opacity
+                      _subSlider('BG Opacity', _subtitleBgOpacity, 0.0, 1.0, '${(_subtitleBgOpacity * 100).toInt()}%', (v) {
+                        setDialog(() => _subtitleBgOpacity = v); setState(() {});
+                      }),
+                      const SizedBox(height: 8),
+
+                      // Position
+                      _subSlider('Position', _subtitleBottomPadding, 0, 120, '${_subtitleBottomPadding.toInt()}', (v) {
+                        setDialog(() => _subtitleBottomPadding = v); setState(() {});
+                      }),
+                      const SizedBox(height: 8),
+
+                      // Bold
+                      Row(children: [
+                        const Text('Bold', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        const Spacer(),
+                        Switch(
+                          value: _subtitleBold,
+                          activeThumbColor: const Color(0xFF7C3AED),
+                          onChanged: (v) { setDialog(() => _subtitleBold = v); setState(() {}); SettingsService().setSubBold(v); },
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+
+                      // Font
+                      const Text('Font', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      Wrap(spacing: 6, runSpacing: 6, children: fonts.map((f) {
+                        final selected = _subtitleFont == f;
+                        return GestureDetector(
+                          onTap: () { setDialog(() => _subtitleFont = f); setState(() {}); SettingsService().setSubFont(f); },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: selected ? const Color(0xFF7C3AED).withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: selected ? const Color(0xFF7C3AED) : Colors.white12),
+                            ),
+                            child: Text(f, style: TextStyle(color: selected ? Colors.white : Colors.white54, fontSize: 12, fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
+                          ),
+                        );
+                      }).toList()),
+                    ]),
+                  ),
                 ),
-              ),
-              SizedBox(
-                  width: 44,
-                  child: Text('${_subtitleDelay.toStringAsFixed(1)}s',
-                      style: const TextStyle(
-                          color: Colors.white, fontSize: 12))),
-            ]),
-          ]),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close',
-                    style: TextStyle(color: Color(0xFF7C3AED)))),
-          ],
-        );
-      }),
+              ]),
+            ),
+          );
+        });
+      },
     );
+  }
+
+  Widget _subSlider(String label, double value, double min, double max, String trailing, ValueChanged<double> onChanged) {
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        const Spacer(),
+        Text(trailing, style: const TextStyle(color: Colors.white, fontSize: 12)),
+      ]),
+      SliderTheme(
+        data: SliderThemeData(
+          trackHeight: 3,
+          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+          overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+          activeTrackColor: const Color(0xFF7C3AED),
+          inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+          thumbColor: const Color(0xFF7C3AED),
+        ),
+        child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+      ),
+    ]);
+  }
+
+  Future<void> _loadSubtitlePrefs() async {
+    final s = SettingsService();
+    final size = await s.getSubSize();
+    final color = await s.getSubColor();
+    final bgOp = await s.getSubBgOpacity();
+    final bold = await s.getSubBold();
+    final padding = await s.getSubBottomPadding();
+    final font = await s.getSubFont();
+    if (mounted) {
+      setState(() {
+        _subtitleSize = size;
+        _subtitleColor = Color(color);
+        _subtitleBgOpacity = bgOp;
+        _subtitleBold = bold;
+        _subtitleBottomPadding = padding;
+        _subtitleFont = font;
+      });
+    }
+  }
+
+  TextStyle _buildSubtitleTextStyle() {
+    final base = TextStyle(
+      height: 1.4,
+      fontSize: _subtitleSize,
+      letterSpacing: 0.0,
+      wordSpacing: 0.0,
+      color: _subtitleColor,
+      fontWeight: _subtitleBold ? FontWeight.bold : FontWeight.normal,
+      backgroundColor: Colors.black.withValues(alpha: _subtitleBgOpacity),
+      shadows: const [
+        Shadow(blurRadius: 10, color: Colors.black, offset: Offset.zero),
+      ],
+    );
+    if (_subtitleFont == 'Default') return base;
+    final fontMap = <String, TextStyle Function({TextStyle? textStyle})>{
+      'Poppins': GoogleFonts.poppins,
+      'Roboto': GoogleFonts.roboto,
+      'Roboto Mono': GoogleFonts.robotoMono,
+      'Montserrat': GoogleFonts.montserrat,
+      'Open Sans': GoogleFonts.openSans,
+      'Lato': GoogleFonts.lato,
+    };
+    final fn = fontMap[_subtitleFont];
+    if (fn != null) return fn(textStyle: base);
+    return base;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2011,7 +1998,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         await _player.open(
                           Media(result.url, httpHeaders: result.headers),
-                          play: !_openMediaPausedForTv,
                         );
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
@@ -2034,7 +2020,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         await _player.open(
                           Media(source.url, httpHeaders: srcHeaders),
-                          play: !_openMediaPausedForTv,
                         );
                         setState(() {
                           _currentUrl = source.url;
@@ -2048,11 +2033,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       if (currentPos.inSeconds > 0) {
                         await _player.seek(currentPos);
                       }
-                      if (_openMediaPausedForTv) {
-                        await _applyAndroidTvDisplayModeBeforePlayback();
-                        if (mounted && !_disposed) await _player.play();
-                      }
-
+                      
                       if (mounted) {
                         messenger.showSnackBar(SnackBar(
                           content: Text('Switched to ${source.title}'),
@@ -2191,13 +2172,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         await _player.open(
           Media(streamUrl, httpHeaders: headers),
-          play: !_openMediaPausedForTv,
         );
-
+        
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);
         }
-
+        
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
@@ -2206,12 +2186,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _hasError = false;
           _errorMessage = '';
         });
-        await _afterVideoSourceOpened();
-        if (_openMediaPausedForTv) {
-          await _applyAndroidTvDisplayModeBeforePlayback();
-          if (!_disposed) await _player.play();
-        }
-
+        
         if (mounted) {
           messenger.showSnackBar(SnackBar(
             content: Text('Switched to ${provider['name']}'),
@@ -2251,6 +2226,84 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Loop: ${_loopEnabled ? "ON" : "OFF"}'),
         duration: const Duration(seconds: 1)));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  SKIP SEGMENTS (IntroDB)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _updateActiveSkipSegment(Duration pos) {
+    if (_introDbData == null) return;
+
+    final posMs = pos.inMilliseconds;
+    String? label;
+    Duration? target;
+
+    for (final seg in _introDbData!.recap) {
+      final s = seg.startMs ?? 0;
+      final e = seg.endMs;
+      if (e != null && posMs >= s && posMs < e) {
+        label = 'Skip Recap';
+        target = Duration(milliseconds: e);
+        break;
+      }
+    }
+    if (label == null) {
+      for (final seg in _introDbData!.intro) {
+        final s = seg.startMs ?? 0;
+        final e = seg.endMs;
+        if (e != null && posMs >= s && posMs < e) {
+          label = 'Skip Intro';
+          target = Duration(milliseconds: e);
+          break;
+        }
+      }
+    }
+    if (label == null) {
+      for (final seg in _introDbData!.credits) {
+        final s = seg.startMs;
+        final e = seg.endMs;
+        if (s != null && posMs >= s) {
+          final end = e ?? _durationNotifier.value.inMilliseconds;
+          if (posMs < end) {
+            label = 'Skip Credits';
+            target = Duration(milliseconds: end);
+            break;
+          }
+        }
+      }
+    }
+    if (label == null) {
+      for (final seg in _introDbData!.preview) {
+        final s = seg.startMs;
+        final e = seg.endMs;
+        if (s != null && posMs >= s) {
+          final end = e ?? _durationNotifier.value.inMilliseconds;
+          if (posMs < end) {
+            label = 'Skip Preview';
+            target = Duration(milliseconds: end);
+            break;
+          }
+        }
+      }
+    }
+
+    if (label != _activeSkipLabel) {
+      setState(() {
+        _activeSkipLabel = label;
+        _activeSkipTarget = target;
+        _skipDismissed = false;
+      });
+    }
+  }
+
+  void _performSkip() {
+    if (_activeSkipTarget == null) return;
+    _player.seek(_activeSkipTarget!);
+    setState(() {
+      _activeSkipLabel = null;
+      _activeSkipTarget = null;
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2557,37 +2610,33 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             fit: StackFit.expand,
             children: [
               // ── 1. Video ─────────────────────────────────────────────────
-              ValueListenableBuilder<bool>(
-                valueListenable:
-                    SettingsService.builtinPlayerSubtitlesEnabledNotifier,
-                builder: (context, subsOn, _) {
-                  return Video(
-                    controller: _controller,
-                    controls: NoVideoControls,
-                    fit: _videoFit,
-                    fill: Colors.black,
-                    pauseUponEnteringBackgroundMode:
-                        !_continuePlaybackInBackground,
-                    subtitleViewConfiguration: SubtitleViewConfiguration(
-                      visible: subsOn,
-                      style: TextStyle(
-                        height: 1.4,
-                        fontSize: _subtitleSize,
-                        letterSpacing: 0.0,
-                        wordSpacing: 0.0,
-                        color: Colors.white,
-                        fontWeight: FontWeight.normal,
-                        backgroundColor: const Color(0xAA000000),
-                        shadows: const [
-                          Shadow(
-                              blurRadius: 10,
-                              color: Colors.black,
-                              offset: Offset.zero)
-                        ],
+              Video(
+                controller: _controller,
+                controls: NoVideoControls,
+                fit: _videoFit,
+                fill: Colors.black,
+                subtitleViewConfiguration: const SubtitleViewConfiguration(
+                  visible: false,
+                ),
+              ),
+
+              // ── 1b. Custom subtitle overlay ─────────────────────────────
+              StreamBuilder<List<String>>(
+                stream: _player.stream.subtitle,
+                initialData: _player.state.subtitle,
+                builder: (context, snap) {
+                  final lines = snap.data ?? [];
+                  final text = lines.where((l) => l.trim().isNotEmpty).join('\n');
+                  if (text.isEmpty) return const SizedBox.shrink();
+                  return Positioned(
+                    left: 24, right: 24,
+                    bottom: _subtitleBottomPadding,
+                    child: IgnorePointer(
+                      child: Text(
+                        text,
+                        style: _buildSubtitleTextStyle(),
+                        textAlign: TextAlign.center,
                       ),
-                      textAlign: TextAlign.center,
-                      padding: EdgeInsets.fromLTRB(
-                          24, 0, 24, _subtitleBottomPadding),
                     ),
                   );
                 },
@@ -2700,6 +2749,41 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       child: _SideIndicator(
                           icon: Icons.light_mode_rounded,
                           value: _brightness)),
+                ),
+
+              // ── 7.5 Skip Segment Overlay (IntroDB) ─────────────────────
+              if (_activeSkipLabel != null && !_skipDismissed)
+                Positioned(
+                  bottom: _showNextEpButton ? 170 : 120,
+                  right: 16,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _performSkip,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text(
+                            _activeSkipLabel!,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Icon(Icons.skip_next_rounded,
+                              color: Colors.white, size: 18),
+                        ]),
+                      ),
+                    ),
+                  ),
                 ),
 
               // ── 8. Next Episode Overlay ──────────────────────────────
@@ -2872,14 +2956,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 onPressed: _showSubtitlesMenu,
                 size: btnSize, iconSize: iconSz,
               ),
-              if (Platform.isAndroid && _showAndroidPipInToolbar) ...[
-                SizedBox(width: gap),
-                _GlassIconButton(
-                  icon: Icons.picture_in_picture_alt_outlined,
-                  onPressed: _enterPictureInPicture,
-                  size: btnSize, iconSize: iconSz,
-                ),
-              ],
               // Show sources button for providers with multiple sources
               if ((_currentProvider == 'amri' || _currentProvider == 'webstreamr' || _currentProvider == 'arabic') && _currentSources != null && _currentSources!.isNotEmpty) ...[
                 SizedBox(width: gap),

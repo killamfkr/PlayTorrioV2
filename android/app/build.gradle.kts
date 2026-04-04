@@ -30,12 +30,6 @@ android {
         versionName = flutter.versionName
     }
 
-    packaging {
-        jniLibs {
-            pickFirsts += "lib/**/libc++_shared.so"
-        }
-    }
-
     buildTypes {
         release {
             // Enable minification and resource shrinking
@@ -64,14 +58,6 @@ android {
             keyPassword = project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
         }
     }
-}
-
-dependencies {
-    val media3 = "1.4.1"
-    implementation("androidx.media3:media3-exoplayer:$media3")
-    implementation("androidx.media3:media3-ui:$media3")
-    implementation("androidx.media3:media3-exoplayer-hls:$media3")
-    implementation("androidx.media3:media3-exoplayer-dash:$media3")
 }
 
 flutter {

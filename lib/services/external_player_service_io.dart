@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../api/settings_service.dart';
-import '../screens/player/native_exo_player_screen.dart';
 import 'android_player_launcher.dart';
 import 'external_player_model.dart';
 
@@ -38,14 +37,8 @@ class ExternalPlayerService {
   }
 
   /// The full list including "Built-in Player" as first option.
-  static List<String> get playerNames {
-    final out = <String>['Built-in Player'];
-    if (Platform.isAndroid) {
-      out.add(NativeExoPlayerScreen.playerSettingsName);
-    }
-    out.addAll(availablePlayers.map((p) => p.displayName));
-    return out;
-  }
+  static List<String> get playerNames =>
+      ['Built-in Player', ...availablePlayers.map((p) => p.displayName)];
 
   // ── Mobile (Android / iOS) ─────────────────────────────────────────────
 
@@ -249,8 +242,7 @@ class ExternalPlayerService {
 
   static Future<bool> isExternalPlayerSelected() async {
     final player = await SettingsService().getExternalPlayer();
-    return player != 'Built-in Player' &&
-        player != NativeExoPlayerScreen.playerSettingsName;
+    return player != 'Built-in Player';
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -267,7 +259,6 @@ class ExternalPlayerService {
   }) async {
     final selectedName = await SettingsService().getExternalPlayer();
     if (selectedName == 'Built-in Player') return false;
-    if (selectedName == NativeExoPlayerScreen.playerSettingsName) return false;
 
     final players = availablePlayers;
     if (players.isEmpty) return false;

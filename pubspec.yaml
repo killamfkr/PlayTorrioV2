@@ -50,7 +50,6 @@ dependencies:
   auto_orientation_v2: ^2.3.7
   file_picker: ^8.0.0+1
   android_pip: ^2.0.2
-  flutter_vlc_player: ^7.4.4
 
 dev_dependencies:
   flutter_test:

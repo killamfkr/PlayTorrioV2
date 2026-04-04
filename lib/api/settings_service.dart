@@ -308,7 +308,13 @@ class SettingsService {
 
   Future<String> getExternalPlayer() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_externalPlayerKey) ?? 'Built-in Player';
+    final v = prefs.getString(_externalPlayerKey) ?? 'Built-in Player';
+    // Removed in-app native Exo option — map old installs back to built-in.
+    if (v == 'Native ExoPlayer (TV)') {
+      await prefs.setString(_externalPlayerKey, 'Built-in Player');
+      return 'Built-in Player';
+    }
+    return v;
   }
 
   Future<void> setExternalPlayer(String player) async {
