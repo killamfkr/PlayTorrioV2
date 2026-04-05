@@ -35,6 +35,20 @@ class TvSettingsRemoteService {
 
   bool get isRunning => _server != null;
 
+  /// Re-read LAN IPv4 (e.g. after resume or DHCP change) so the QR URL stays correct.
+  Future<void> refreshLanIp() async {
+    if (_server == null || kIsWeb || !platformIsAndroid) return;
+    try {
+      final ip = await _deviceChannel.invokeMethod<String>('getLanIpv4');
+      if (ip != null && ip.isNotEmpty) {
+        _lanIp = ip;
+        debugPrint('[TvSettingsRemote] LAN IP refreshed: $ip');
+      }
+    } catch (e) {
+      debugPrint('[TvSettingsRemote] refreshLanIp: $e');
+    }
+  }
+
   Future<void> ensureStarted() async {
     if (_server != null) return;
     if (kIsWeb || !platformIsAndroid) return;

@@ -23,6 +23,7 @@ import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
+import '../widgets/hero_banner.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -80,8 +81,11 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     _popularTvFuture = _api.getPopularTv();
     _topRatedFuture = _api.getTopRated();
     _nowPlayingFuture = _api.getNowPlaying();
-    
-    _startHeroTimer();
+
+    // TV hero uses HeroBanner (carousel); mobile/tablet use PageView + this timer.
+    if (!DeviceProfile.isAndroidTv) {
+      _startHeroTimer();
+    }
     _loadStremioCatalogs();
 
     // Reload catalogs whenever addons are added/removed in Settings
@@ -655,10 +659,13 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    if (DeviceProfile.isAndroidTv) {
+      return _buildAndroidTvHome(context);
+    }
+
     final mq = MediaQuery.of(context);
     final isLandscape = mq.orientation == Orientation.landscape;
     final heroHeight = isLandscape ? mq.size.height * 0.65 : mq.size.height * 0.82;
-    final pinHero = DeviceProfile.isAndroidTv;
 
     final heroLayer = RepaintBoundary(
       child: FutureBuilder<List<Movie>>(
@@ -673,80 +680,119 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     );
 
     final scrollView = CustomScrollView(
-        cacheExtent: 500,
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          if (!pinHero)
-            SliverToBoxAdapter(child: heroLayer)
-          else
-            SliverToBoxAdapter(child: SizedBox(height: heroHeight)),
-          ..._sliversBelowHero(),
-        ],
-      );
+      cacheExtent: 500,
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(child: heroLayer),
+        ..._sliversBelowHero(),
+      ],
+    );
 
     return Scaffold(
       extendBodyBehindAppBar: true,
       backgroundColor: AppTheme.bgDark,
       body: Stack(
         children: [
-          // Atmospheric ambient glow spots (skipped in light mode / Android TV)
           if (!PerformanceTuning.skipHomeAmbientGlows) ...[
-          Positioned(
-            top: MediaQuery.of(context).size.height * 0.6,
-            left: -80,
-            child: Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            top: MediaQuery.of(context).size.height * 1.2,
-            right: -60,
-            child: Container(
-              width: 200,
-              height: 200,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [AppTheme.accentColor.withValues(alpha: 0.04), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-          ],
-          if (pinHero)
-            Stack(
-              fit: StackFit.expand,
-              children: [
-                scrollView,
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: heroHeight,
-                  child: Material(
-                    type: MaterialType.transparency,
-                    child: heroLayer,
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.6,
+              left: -80,
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
                   ),
                 ),
-              ],
-            )
-          else
-            scrollView,
-      ],
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).size.height * 1.2,
+              right: -60,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.accentColor.withValues(alpha: 0.04), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          scrollView,
+        ],
       ),
     );
   }
 
-  Widget _buildHeroShimmer() {
+  /// Leanback layout: fork-style top carousel (focus-friendly) + scrollable rows (your sections).
+  Widget _buildAndroidTvHome(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final heroH = mq.size.height * 0.42;
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      backgroundColor: AppTheme.bgDark,
+      body: Stack(
+        children: [
+          if (!PerformanceTuning.skipHomeAmbientGlows) ...[
+            Positioned(
+              top: mq.size.height * 0.55,
+              left: -80,
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: heroH,
+                child: RepaintBoundary(
+                  child: FutureBuilder<List<Movie>>(
+                    future: _trendingFuture,
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return _buildHeroShimmer(height: heroH);
+                      }
+                      return HeroBanner(
+                        movies: snapshot.data!.take(5).toList(),
+                        height: heroH,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Expanded(
+                child: CustomScrollView(
+                  cacheExtent: 500,
+                  physics: const BouncingScrollPhysics(),
+                  slivers: _sliversBelowHero(),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeroShimmer({double? height}) {
     final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-    final h = isLandscape ? MediaQuery.of(context).size.height * 0.65 : MediaQuery.of(context).size.height * 0.82;
+    final h = height ??
+        (isLandscape ? MediaQuery.of(context).size.height * 0.65 : MediaQuery.of(context).size.height * 0.82);
     final placeholder = Container(height: h, color: AppTheme.bgCard);
     if (AppTheme.isLightMode) return placeholder;
     return Shimmer.fromColors(

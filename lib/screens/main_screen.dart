@@ -22,6 +22,7 @@ import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../utils/performance_tuning.dart';
 import '../utils/tv_guide_refresh.dart';
+import '../utils/tv_settings_remote_service.dart';
 import '../api/settings_service.dart';
 import '../platform_flags.dart';
 
@@ -157,6 +158,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         SystemChrome.setPreferredOrientations([]);
       }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      if (DeviceProfile.isAndroidTv) {
+        TvSettingsRemoteService().refreshLanIp();
+      }
     }
   }
 

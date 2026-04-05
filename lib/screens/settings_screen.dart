@@ -231,6 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (platformIsAndroid && DeviceProfile.isAndroidTv) {
       await TvSettingsRemoteService().ensureStarted();
+      await TvSettingsRemoteService().refreshLanIp();
     }
 
     if (mounted) {
@@ -299,7 +300,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Scan the QR code with your phone (same Wi‑Fi). Paste exported JSON to import — the link includes a one-time style token.',
+              'Scan with your phone on the same Wi‑Fi. The QR encodes this TV’s real LAN address (not a placeholder). Paste exported settings JSON to import; the URL includes a secret token.',
               style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
             ),
             const SizedBox(height: 16),
