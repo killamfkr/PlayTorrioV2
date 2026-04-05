@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'music_storage_service.dart';
+import 'trakt_service.dart';
 
 class SettingsService {
   static final SettingsService _instance = SettingsService._internal();
@@ -33,12 +35,25 @@ class SettingsService {
   static const String _builtinPlayerSubtitlesEnabledKey =
       'playback_builtin_subtitles_enabled';
 
+  /// Android TV: max HLS/DASH variant bitrate (Kbps) for mpv `hls-bitrate`. `0` = no cap (max).
+  /// When unset, the player uses a safe default cap on TV only.
+  static const String _androidTvMaxStreamBitrateKbpsKey =
+      'playback_android_tv_max_stream_bitrate_kbps';
+
   /// Keeps the built-in player UI in sync when the user toggles subtitles in Settings.
   static final ValueNotifier<bool> builtinPlayerSubtitlesEnabledNotifier =
       ValueNotifier<bool>(true);
 
   // External player setting
   static const String _externalPlayerKey = 'external_player';
+
+  // Built-in player subtitle appearance (fork player)
+  static const String _subSizeKey = 'sub_size';
+  static const String _subColorKey = 'sub_color';
+  static const String _subBgOpacityKey = 'sub_bg_opacity';
+  static const String _subBoldKey = 'sub_bold';
+  static const String _subBottomPaddingKey = 'sub_bottom_padding';
+  static const String _subFontKey = 'sub_font';
 
   // Jackett settings
   static const String _jackettBaseUrlKey = 'jackett_base_url';
@@ -57,6 +72,73 @@ class SettingsService {
   // Torrent cache settings
   static const String _torrentCacheTypeKey = 'torrent_cache_type';
   static const String _torrentRamCacheMbKey = 'torrent_ram_cache_mb';
+
+  /// Optional XMLTV URL for TV Guide when Stremio addons do not embed schedules.
+  static const String _xmltvEpgUrlKey = 'xmltv_epg_url';
+
+  Future<String?> getXmltvEpgUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_xmltvEpgUrlKey);
+    if (v == null || v.trim().isEmpty) return null;
+    return v.trim();
+  }
+
+  Future<void> setXmltvEpgUrl(String? url) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (url == null || url.trim().isEmpty) {
+      await prefs.remove(_xmltvEpgUrlKey);
+    } else {
+      await prefs.setString(_xmltvEpgUrlKey, url.trim());
+    }
+  }
+
+  /// XMLTV `<programme channel="...">` id → match a live Stremio channel (same addon baseUrl + meta id).
+  static const String _xmltvChannelMapKey = 'xmltv_epg_channel_map_json';
+
+  /// Keys are JSON: `{"b":"<addonBaseUrl>","i":"<stremioChannelId>"}` → EPG channel id string.
+  Future<Map<String, String>> getXmltvChannelMap() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_xmltvChannelMapKey);
+    if (raw == null || raw.trim().isEmpty) return {};
+    try {
+      final decoded = json.decode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static String xmltvChannelMapKeyFor({required String addonBaseUrl, required String stremioChannelId}) {
+    return json.encode({'b': addonBaseUrl, 'i': stremioChannelId});
+  }
+
+  Future<void> setXmltvChannelMap(Map<String, String> map) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (map.isEmpty) {
+      await prefs.remove(_xmltvChannelMapKey);
+    } else {
+      await prefs.setString(_xmltvChannelMapKey, json.encode(map));
+    }
+  }
+
+  Future<void> setXmltvChannelMapping({
+    required String addonBaseUrl,
+    required String stremioChannelId,
+    required String epgChannelId,
+  }) async {
+    final map = await getXmltvChannelMap();
+    final k = xmltvChannelMapKeyFor(
+      addonBaseUrl: addonBaseUrl,
+      stremioChannelId: stremioChannelId,
+    );
+    if (epgChannelId.trim().isEmpty) {
+      map.remove(k);
+    } else {
+      map[k] = epgChannelId.trim();
+    }
+    await setXmltvChannelMap(map);
+  }
 
   Future<List<Map<String, dynamic>>> getStremioAddons() async {
     final prefs = await SharedPreferences.getInstance();
@@ -170,6 +252,24 @@ class SettingsService {
     builtinPlayerSubtitlesEnabledNotifier.value = value;
   }
 
+  /// `null` if the user never changed TV stream cap (player uses built-in default).
+  /// `0` means unlimited (mpv `hls-bitrate=max`).
+  Future<int?> getAndroidTvMaxStreamBitrateKbps() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_androidTvMaxStreamBitrateKbpsKey)) return null;
+    return prefs.getInt(_androidTvMaxStreamBitrateKbpsKey);
+  }
+
+  Future<void> setAndroidTvMaxStreamBitrateKbps(int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_androidTvMaxStreamBitrateKbpsKey, value);
+  }
+
+  Future<void> clearAndroidTvMaxStreamBitrateKbps() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_androidTvMaxStreamBitrateKbpsKey);
+  }
+
   Future<bool> isStreamingModeEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_streamingModeKey) ?? false;
@@ -216,12 +316,82 @@ class SettingsService {
 
   Future<String> getExternalPlayer() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_externalPlayerKey) ?? 'Built-in Player';
+    final v = prefs.getString(_externalPlayerKey) ?? 'Built-in Player';
+    // Removed in-app native Exo option — map old installs back to built-in.
+    if (v == 'Native ExoPlayer (TV)') {
+      await prefs.setString(_externalPlayerKey, 'Built-in Player');
+      return 'Built-in Player';
+    }
+    return v;
   }
 
   Future<void> setExternalPlayer(String player) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_externalPlayerKey, player);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Built-in player subtitle style (SharedPreferences)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<double> getSubSize({bool isDesktop = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subSizeKey) ?? (isDesktop ? 44.0 : 24.0);
+  }
+
+  Future<void> setSubSize(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subSizeKey, v);
+  }
+
+  Future<int> getSubColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_subColorKey) ?? 0xFFFFFFFF;
+  }
+
+  Future<void> setSubColor(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_subColorKey, v);
+  }
+
+  Future<double> getSubBgOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBgOpacityKey) ?? 0.67;
+  }
+
+  Future<void> setSubBgOpacity(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBgOpacityKey, v);
+  }
+
+  Future<bool> getSubBold() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_subBoldKey) ?? false;
+  }
+
+  Future<void> setSubBold(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_subBoldKey, v);
+  }
+
+  Future<double> getSubBottomPadding() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBottomPaddingKey) ?? 24.0;
+  }
+
+  Future<void> setSubBottomPadding(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBottomPaddingKey, v);
+  }
+
+  Future<String> getSubFont() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_subFontKey) ?? 'Default';
+  }
+
+  Future<void> setSubFont(String v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_subFontKey, v);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -344,20 +514,33 @@ class SettingsService {
   static final ValueNotifier<int> navbarChangeNotifier = ValueNotifier<int>(0);
 
   /// All available nav items in default order. 'settings' is always last and locked.
+  /// Search, My List, and Magnet are intentionally last (before Settings in the UI).
   static const List<String> allNavIds = [
-    'home', 'discover', 'search', 'mylist', 'magnet', 'live_matches',
+    'home', 'discover', 'live_matches',
     'iptv', 'audiobooks', 'books', 'music', 'comics', 'manga',
-    'jellyfin', 'anime', 'arabic',
+    'jellyfin', 'anime', 'search', 'mylist', 'magnet',
   ];
+
+  static const List<String> _navTailIds = ['search', 'mylist', 'magnet'];
 
   /// Returns the ordered list of visible nav item IDs.
   /// Settings is NOT stored — it's always appended by the consumer.
   Future<List<String>> getNavbarConfig() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_navbarConfigKey);
-    if (raw == null) return List.from(allNavIds); // default: all visible
-    // Filter out any stale IDs that no longer exist
-    return raw.where((id) => allNavIds.contains(id)).toList();
+    if (raw == null) return List.from(allNavIds);
+
+    // Drop stale / removed ids; keep user order except tail ids always last.
+    final filtered = raw.where((id) => allNavIds.contains(id)).toList();
+    final middle = <String>[];
+    for (final id in filtered) {
+      if (!_navTailIds.contains(id)) middle.add(id);
+    }
+    final tail = <String>[];
+    for (final id in _navTailIds) {
+      if (filtered.contains(id)) tail.add(id);
+    }
+    return [...middle, ...tail];
   }
 
   /// Save the ordered list of visible nav item IDs (excluding 'settings').
@@ -402,6 +585,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _subBoldKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -417,17 +601,40 @@ class SettingsService {
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
+      _xmltvEpgUrlKey,
+      _xmltvChannelMapKey,
+      TraktService.prefsClientIdKey,
+      TraktService.prefsClientSecretKey,
+      _subFontKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
     }
     // Int keys
-    for (final key in [_torrentRamCacheMbKey]) {
+    for (final key in [
+      _torrentRamCacheMbKey,
+      _androidTvMaxStreamBitrateKbpsKey,
+      _subColorKey,
+    ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
     }
+    // Double keys
+    for (final key in [
+      _subSizeKey,
+      _subBgOpacityKey,
+      _subBottomPaddingKey,
+    ]) {
+      final v = prefs.getDouble(key);
+      if (v != null) prefsMap[key] = v;
+    }
     // StringList keys
-    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+    for (final key in [
+      _stremioAddonsKey,
+      _navbarConfigKey,
+      MusicStorageService.prefsLikedSongsKey,
+      MusicStorageService.prefsPlaylistsKey,
+    ]) {
       final v = prefs.getStringList(key);
       if (v != null) prefsMap[key] = v;
     }
@@ -464,6 +671,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _subBoldKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -480,19 +688,43 @@ class SettingsService {
       _prowlarrApiKeyKey,
       _torrentCacheTypeKey,
       _defaultStremioAddonBaseUrlKey,
+      _xmltvEpgUrlKey,
+      _xmltvChannelMapKey,
+      TraktService.prefsClientIdKey,
+      TraktService.prefsClientSecretKey,
+      _subFontKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);
       }
     }
     // Int keys
-    for (final key in [_torrentRamCacheMbKey]) {
+    for (final key in [
+      _torrentRamCacheMbKey,
+      _androidTvMaxStreamBitrateKbpsKey,
+      _subColorKey,
+    ]) {
       if (prefsMap.containsKey(key)) {
-        await prefs.setInt(key, prefsMap[key] as int);
+        await prefs.setInt(key, (prefsMap[key] as num).toInt());
+      }
+    }
+    // Double keys
+    for (final key in [
+      _subSizeKey,
+      _subBgOpacityKey,
+      _subBottomPaddingKey,
+    ]) {
+      if (prefsMap.containsKey(key)) {
+        await prefs.setDouble(key, (prefsMap[key] as num).toDouble());
       }
     }
     // StringList keys
-    for (final key in [_stremioAddonsKey, _navbarConfigKey]) {
+    for (final key in [
+      _stremioAddonsKey,
+      _navbarConfigKey,
+      MusicStorageService.prefsLikedSongsKey,
+      MusicStorageService.prefsPlaylistsKey,
+    ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setStringList(
             key, (prefsMap[key] as List).cast<String>());
@@ -510,5 +742,8 @@ class SettingsService {
     // Notify listeners so UI refreshes
     addonChangeNotifier.value++;
     navbarChangeNotifier.value++;
+
+    final music = MusicStorageService();
+    music.likedSongs.value = await music.getLikedSongs();
   }
 }

@@ -283,7 +283,7 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
           Text('Failed to load channels', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: _loadCategories,
+            onPressed: () => _loadCategories(),
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Retry'),
             style: ElevatedButton.styleFrom(

@@ -1,0 +1,18 @@
+# PlayTorrio web UI — build from source (local clone required).
+#
+# To run a pre-built image from GitHub Container Registry instead (no build):
+#   docker compose -f docker/web/docker-compose.ghcr.yml pull && docker compose -f docker/web/docker-compose.ghcr.yml up -d
+#
+# From repository root:
+#   docker compose -f docker/web/docker-compose.yml up -d --build
+
+services:
+  playtorrio-web:
+    build:
+      context: ../..
+      dockerfile: docker/web/Dockerfile
+    image: playtorrio-web:latest
+    container_name: playtorrio-web
+    ports:
+      - "8089:80"
+    restart: unless-stopped

@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -9,6 +9,10 @@ import '../api/music_player_service.dart';
 import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/performance_tuning.dart';
+import '../platform_flags.dart';
+import '../widgets/local_file_image.dart';
+import '../utils/music_file_ops.dart';
 import 'music_player_screen.dart';
 
 class MusicScreen extends StatefulWidget {
@@ -53,7 +57,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     return 'Late Night Vibes';
   }
 
-  bool get _isDesktop => (Platform.isWindows || Platform.isLinux || Platform.isMacOS) && MediaQuery.of(context).size.width > 900;
+  bool get _isDesktop => platformIsDesktop && MediaQuery.of(context).size.width > 900;
 
   @override
   void initState() {
@@ -133,7 +137,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
   void _openFullPlayer() {
     _playerService.isFullScreenVisible.value = true;
-    if (Platform.isWindows || MediaQuery.of(context).size.width > 900) {
+    if (platformIsWindows || MediaQuery.of(context).size.width > 900) {
       showDialog(
         context: context,
         builder: (context) => Dialog(
@@ -1049,23 +1053,36 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               child: _buildCoverImage(coverUrl),
             ),
           Positioned.fill(
-            child: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withValues(alpha: 0.4),
-                        const Color(0xFF0D0D1A),
-                      ],
+            child: PerformanceTuning.skipBackdropBlur
+                ? Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.55),
+                          const Color(0xFF0D0D1A),
+                        ],
+                      ),
+                    ),
+                  )
+                : ClipRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.4),
+                              const Color(0xFF0D0D1A),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-            ),
           ),
           // Content
           Padding(
@@ -1503,6 +1520,132 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   //  MINI PLAYER
   // ─────────────────────────────────────────────
 
+  Widget _miniPlayerTrackColumn(MusicTrack track) {
+    return Column(
+      children: [
+        ValueListenableBuilder<Duration>(
+          valueListenable: _playerService.position,
+          builder: (context, pos, _) {
+            return ValueListenableBuilder<Duration>(
+              valueListenable: _playerService.duration,
+              builder: (context, dur, _) {
+                final progress = dur.inMilliseconds > 0
+                    ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
+                    : 0.0;
+                return Container(
+                  height: 3,
+                  decoration: const BoxDecoration(
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 3,
+                      backgroundColor: Colors.white.withValues(alpha: 0.05),
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.2), blurRadius: 10)],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: _buildCoverImage(track.cover, width: 48, height: 48),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        track.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.4)),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.skip_previous_rounded, color: Colors.white.withValues(alpha: 0.6), size: 24),
+                  onPressed: () => _playerService.previous(),
+                  visualDensity: VisualDensity.compact,
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _playerService.isBuffering,
+                  builder: (context, buffering, _) {
+                    if (buffering) {
+                      return const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor),
+                        ),
+                      );
+                    }
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: _playerService.isPlaying,
+                      builder: (context, playing, _) => Container(
+                        width: 40,
+                        height: 40,
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF9C6FFF)]),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: Icon(
+                            playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                          onPressed: () => _playerService.togglePlay(),
+                          padding: EdgeInsets.zero,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                IconButton(
+                  icon: Icon(Icons.skip_next_rounded, color: Colors.white.withValues(alpha: 0.6), size: 24),
+                  onPressed: () => _playerService.next(),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  icon: Icon(Icons.close_rounded, color: Colors.white.withValues(alpha: 0.25), size: 18),
+                  onPressed: () => _playerService.stop(),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMiniPlayer() {
     return ValueListenableBuilder<bool>(
       valueListenable: _playerService.isFullScreenVisible,
@@ -1514,6 +1657,22 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
           builder: (context, track, _) {
             if (track == null) return const SizedBox.shrink();
 
+            final shell = Container(
+              height: 72,
+              decoration: BoxDecoration(
+                color: const Color(0xFF140E24).withValues(
+                  alpha: PerformanceTuning.skipBackdropBlur ? 0.98 : 0.92,
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 8)),
+                  BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.08), blurRadius: 30),
+                ],
+              ),
+              child: _miniPlayerTrackColumn(track),
+            );
+
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 700),
@@ -1523,135 +1682,12 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     onTap: _openFullPlayer,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(18),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                        child: Container(
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF140E24).withValues(alpha: 0.92),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-                            boxShadow: [
-                              BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 8)),
-                              BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.08), blurRadius: 30),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              // Progress bar
-                              ValueListenableBuilder<Duration>(
-                                valueListenable: _playerService.position,
-                                builder: (context, pos, _) {
-                                  return ValueListenableBuilder<Duration>(
-                                    valueListenable: _playerService.duration,
-                                    builder: (context, dur, _) {
-                                      final progress = dur.inMilliseconds > 0
-                                          ? pos.inMilliseconds / dur.inMilliseconds
-                                          : 0.0;
-                                      return Container(
-                                        height: 3,
-                                        decoration: BoxDecoration(
-                                          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-                                        ),
-                                        child: ClipRRect(
-                                          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-                                          child: LinearProgressIndicator(
-                                            value: progress,
-                                            minHeight: 3,
-                                            backgroundColor: Colors.white.withValues(alpha: 0.05),
-                                            valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                              // Player content
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                                  child: Row(
-                                    children: [
-                                      // Album art
-                                      Container(
-                                        decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(12),
-                                          boxShadow: [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.2), blurRadius: 10)],
-                                        ),
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(12),
-                                          child: _buildCoverImage(track.cover, width: 48, height: 48),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 14),
-                                      // Track info
-                                      Expanded(
-                                        child: Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                                            const SizedBox(height: 1),
-                                            Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.4))),
-                                          ],
-                                        ),
-                                      ),
-                                      // Controls
-                                      IconButton(
-                                        icon: Icon(Icons.skip_previous_rounded, color: Colors.white.withValues(alpha: 0.6), size: 24),
-                                        onPressed: () => _playerService.previous(),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      ValueListenableBuilder<bool>(
-                                        valueListenable: _playerService.isBuffering,
-                                        builder: (context, buffering, _) {
-                                          if (buffering) {
-                                            return const Padding(
-                                              padding: EdgeInsets.all(8),
-                                              child: SizedBox(
-                                                width: 24, height: 24,
-                                                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor),
-                                              ),
-                                            );
-                                          }
-                                          return ValueListenableBuilder<bool>(
-                                            valueListenable: _playerService.isPlaying,
-                                            builder: (context, playing, _) => Container(
-                                              width: 40, height: 40,
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF9C6FFF)]),
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: IconButton(
-                                                icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: 22),
-                                                onPressed: () => _playerService.togglePlay(),
-                                                padding: EdgeInsets.zero,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.skip_next_rounded, color: Colors.white.withValues(alpha: 0.6), size: 24),
-                                        onPressed: () => _playerService.next(),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.close_rounded, color: Colors.white.withValues(alpha: 0.25), size: 18),
-                                        onPressed: () => _playerService.stop(),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                      child: PerformanceTuning.skipBackdropBlur
+                          ? shell
+                          : BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                              child: shell,
+                            ),
                     ),
                   ),
                 ),
@@ -1963,12 +1999,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     if (isDownloaded) {
                       final downloadedTrack = downloaded.firstWhere((s) => s.id == track.id);
                       if (downloadedTrack.localPath != null) {
-                        final file = File(downloadedTrack.localPath!);
-                        if (await file.exists()) await file.delete();
+                        await deleteFileIfExists(downloadedTrack.localPath!);
                       }
                       if (!downloadedTrack.cover.startsWith('http')) {
-                        final coverFile = File(downloadedTrack.cover);
-                        if (await coverFile.exists()) await coverFile.delete();
+                        await deleteFileIfExists(downloadedTrack.cover);
                       }
                       await _storageService.removeDownloadedTrack(track.id);
                     } else {
@@ -2200,7 +2234,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       return;
     }
     final path = downloaded.first.localPath ?? 'Android/media/com.example.play_torrio_native/Music';
-    final dirPath = File(path).parent.path;
+    final dirPath = parentDirectoryPath(path) ?? path;
 
     showDialog(
       context: context,
@@ -2309,15 +2343,11 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         ),
       );
     }
-    return Image.file(
-      File(cover),
-      width: width, height: height,
+    return localFileImageOrFallback(
+      path: cover,
+      width: width,
+      height: height,
       fit: BoxFit.cover,
-      errorBuilder: (c, e, s) => Container(
-        width: width, height: height,
-        color: Colors.white.withValues(alpha: 0.05),
-        child: const Icon(Icons.music_note_rounded, color: Colors.white24),
-      ),
     );
   }
 

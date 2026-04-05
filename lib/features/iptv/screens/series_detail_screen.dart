@@ -218,7 +218,7 @@ class _SeriesDetailScreenState extends State<SeriesDetailScreen> {
                           const Icon(Icons.error_outline, color: Colors.redAccent),
                           const SizedBox(height: 8),
                           Text('Failed to load series info', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
-                          TextButton(onPressed: _loadSeriesInfo, child: const Text('Retry')),
+                          TextButton(onPressed: () => _loadSeriesInfo(), child: const Text('Retry')),
                         ],
                       ),
                     ),

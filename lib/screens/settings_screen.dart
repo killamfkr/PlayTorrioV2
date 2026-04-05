@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../services/external_player_service.dart';
@@ -15,10 +17,15 @@ import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
-import '../services/app_updater_service.dart';
-import '../widgets/update_dialog.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
+import '../utils/settings_backup_download.dart';
+import '../utils/read_file_path.dart';
+import '../utils/tv_settings_remote_service.dart';
+import '../platform_flags.dart';
 import 'lists_screen.dart';
+import 'epg_channel_mapping_screen.dart';
+import 'settings_export.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -43,6 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _useDebrid = false;
   String _debridService = 'None';
   final TextEditingController _addonController = TextEditingController();
+  final TextEditingController _xmltvEpgUrlController = TextEditingController();
   final TextEditingController _torboxController = TextEditingController();
   
   // Jackett
@@ -63,6 +71,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   
   // Trakt
   final TraktService _trakt = TraktService();
+  final TextEditingController _traktClientIdController = TextEditingController();
+  final TextEditingController _traktClientSecretController = TextEditingController();
   bool _isTraktLoggedIn = false;
   String? _traktUserCode;
   String? _traktVerifyUrl;
@@ -86,9 +96,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _mdblistApiKeyController = TextEditingController();
   String? _mdblistUsername;
 
-  bool _isCheckingUpdate = false;
-  final AppUpdaterService _updater = AppUpdaterService();
-
   // Torrent cache
   String _torrentCacheType = 'ram';
   int _torrentRamCacheMb = 200;
@@ -107,10 +114,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoEnterPipAndroid = false;
   bool _builtinPlayerSubtitlesEnabled = true;
 
+  /// `null` = player default (~12 Mbps on TV); `0` = unlimited.
+  int? _androidTvMaxStreamBitrateKbps;
+
+  /// LAN URL with token for phone → TV settings import (Android TV).
+  String? _tvRemoteSettingsUrl;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
+  }
+
+  String _androidTvStreamBitrateLabel() {
+    final c = _androidTvMaxStreamBitrateKbps;
+    if (c == null) return 'Auto (~12 Mbps, recommended)';
+    if (c == 0) return 'Unlimited (4K — heavy)';
+    if (c == 8000) return '8 Mbps';
+    if (c == 15000) return '15 Mbps';
+    if (c == 25000) return '25 Mbps';
+    if (c == 40000) return '40 Mbps';
+    final mbps = c / 1000.0;
+    return '${mbps == mbps.roundToDouble() ? mbps.toInt() : mbps.toStringAsFixed(1)} Mbps (custom)';
   }
 
   Future<void> _loadSettings() async {
@@ -123,6 +148,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final torboxKey = await _debrid.getTorBoxKey();
     final rdToken = await _debrid.getRDAccessToken();
     
+    // Trakt API app credentials (local / sideload builds)
+    final traktPrefs = await SharedPreferences.getInstance();
+    _traktClientIdController.text =
+        traktPrefs.getString(TraktService.prefsClientIdKey) ?? '';
+    _traktClientSecretController.text =
+        traktPrefs.getString(TraktService.prefsClientSecretKey) ?? '';
+
     // Load Trakt status
     final traktLoggedIn = await _trakt.isLoggedIn();
     String? traktUser;
@@ -165,11 +197,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load light mode
     final lightMode = await _settings.isLightModeEnabled();
 
+    final xmltvEpg = await _settings.getXmltvEpgUrl();
     final defaultAddonUrl = await _settings.getDefaultStremioAddonBaseUrl();
     final bgPlay = await _settings.continuePlaybackInBackground();
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
     final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
+    final tvBitrateCap = platformIsAndroid && DeviceProfile.isAndroidTv
+        ? await _settings.getAndroidTvMaxStreamBitrateKbps()
+        : null;
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -191,6 +227,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         !addons.any((a) => a['baseUrl'] == streamKey)) {
       streamKey = '__auto__';
       await _settings.setDefaultStremioAddonBaseUrl(null);
+    }
+
+    if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+      await TvSettingsRemoteService().ensureStarted();
+      await TvSettingsRemoteService().refreshLanIp();
     }
 
     if (mounted) {
@@ -226,13 +267,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _isLightMode = lightMode;
         _navbarVisible = navVisible;
         _navbarOrder = navOrder;
+        _xmltvEpgUrlController.text = xmltvEpg ?? '';
         _defaultStremioStreamKey = streamKey;
         _continuePlaybackInBackground = bgPlay;
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
         _builtinPlayerSubtitlesEnabled = builtinSubs;
+        if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+          _androidTvMaxStreamBitrateKbps = tvBitrateCap;
+        }
+        _tvRemoteSettingsUrl = platformIsAndroid && DeviceProfile.isAndroidTv
+            ? TvSettingsRemoteService().remoteUrl
+            : null;
       });
     }
+  }
+
+  Widget _buildTvRemoteSettingsCard() {
+    final url = _tvRemoteSettingsUrl;
+    if (url == null) return const SizedBox.shrink();
+    return FocusableControl(
+      onTap: () {},
+      scaleOnFocus: 1.0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Edit settings from your phone',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Scan with your phone on the same Wi‑Fi. The QR encodes this TV’s real LAN address (not a placeholder). Paste exported settings JSON to import; the URL includes a secret token.',
+              style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: QrImageView(
+                    data: url,
+                    version: QrVersions.auto,
+                    size: 200,
+                    gapless: true,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              url,
+              style: const TextStyle(fontSize: 11, color: Colors.white38),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _installAddon() async {
@@ -267,12 +364,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _addonController.dispose();
+    _xmltvEpgUrlController.dispose();
     _torboxController.dispose();
     _jackettUrlController.dispose();
     _jackettApiKeyController.dispose();
     _prowlarrUrlController.dispose();
     _prowlarrApiKeyController.dispose();
     _mdblistApiKeyController.dispose();
+    _traktClientIdController.dispose();
+    _traktClientSecretController.dispose();
     _rdPollTimer?.cancel();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
@@ -332,11 +432,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: AppTheme.backgroundDecoration,
-        child: SafeArea(
-          child: CustomScrollView(
+    final scrollView = CustomScrollView(
             slivers: [
               const SliverAppBar(
                 backgroundColor: Colors.transparent,
@@ -433,7 +529,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           setState(() => _builtinPlayerSubtitlesEnabled = val);
                         },
                       ),
-                      if (Platform.isAndroid) ...[
+                      if (platformIsAndroid) ...[
                         _buildFocusableToggle(
                           'Picture-in-picture button',
                           'Shows a PiP icon in the player toolbar (Android 8+).',
@@ -452,6 +548,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             setState(() => _autoEnterPipAndroid = val);
                           },
                         ),
+                      ],
+                      if (platformIsAndroid && DeviceProfile.isAndroidTv) ...[
+                        const SizedBox(height: 16),
+                        _buildFocusableDropdown(
+                          'Android TV stream bitrate cap',
+                          'Built-in player only. Limits HLS/DASH quality so the box is not forced into 4K variants (often unwatchable on Google TV / ONN).',
+                          _androidTvStreamBitrateLabel(),
+                          const [
+                            'Auto (~12 Mbps, recommended)',
+                            '8 Mbps',
+                            '15 Mbps',
+                            '25 Mbps',
+                            '40 Mbps',
+                            'Unlimited (4K — heavy)',
+                          ],
+                          (val) async {
+                            if (val == null) return;
+                            int? k;
+                            if (val == 'Auto (~12 Mbps, recommended)') {
+                              await _settings.clearAndroidTvMaxStreamBitrateKbps();
+                              k = null;
+                            } else if (val == 'Unlimited (4K — heavy)') {
+                              await _settings.setAndroidTvMaxStreamBitrateKbps(0);
+                              k = 0;
+                            } else if (val == '8 Mbps') {
+                              k = 8000;
+                            } else if (val == '15 Mbps') {
+                              k = 15000;
+                            } else if (val == '25 Mbps') {
+                              k = 25000;
+                            } else if (val == '40 Mbps') {
+                              k = 40000;
+                            }
+                            if (k != null || val == 'Auto (~12 Mbps, recommended)') {
+                              if (k != null && k > 0) {
+                                await _settings.setAndroidTvMaxStreamBitrateKbps(k);
+                              }
+                              setState(() => _androidTvMaxStreamBitrateKbps = k);
+                            }
+                          },
+                        ),
+                        if (_tvRemoteSettingsUrl != null) ...[
+                          const SizedBox(height: 24),
+                          _buildTvRemoteSettingsCard(),
+                        ],
                       ],
                     ] else ...[
                       const Padding(
@@ -493,6 +634,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     _buildDefaultStremioStreamSource(),
+                    const SizedBox(height: 24),
+                    _buildXmltvEpgSection(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -580,9 +723,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('Lists'),
                     _buildListsSection(),
                     const SizedBox(height: 32),
-                    _buildSectionHeader('App Updates'),
-                    _buildUpdateChecker(),
-                    const SizedBox(height: 32),
                     _buildSectionHeader('Navigation Bar'),
                     _buildNavbarConfig(),
                     const SizedBox(height: 64),
@@ -597,7 +737,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
-          ),
+          );
+
+    return Scaffold(
+      body: Container(
+        decoration: AppTheme.backgroundDecoration,
+        child: SafeArea(
+          child: DeviceProfile.isAndroidTv
+              ? FocusTraversalGroup(
+                  policy: OrderedTraversalPolicy(),
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      scrollbars: false,
+                      physics: const ClampingScrollPhysics(),
+                    ),
+                    child: scrollView,
+                  ),
+                )
+              : scrollView,
         ),
       ),
     );
@@ -619,32 +776,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
       final fileName = 'playtorrio_settings_$timestamp.json';
 
-      // Write to a temp file first, then let the user pick where to save
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/$fileName');
-      await tempFile.writeAsString(jsonStr);
-
-      final result = await FilePicker.platform.saveFile(
-        dialogTitle: 'Export Settings',
-        fileName: fileName,
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-        bytes: Uint8List.fromList(utf8.encode(jsonStr)),
-      );
-
-      if (result != null) {
-        // On desktop, saveFile() returns a path but doesn't write — we must do it ourselves
-        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-          await File(result).writeAsString(jsonStr);
+      if (kIsWeb) {
+        triggerJsonDownload(fileName, jsonStr);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings download started.')),
+          );
         }
-      }
-
-      await tempFile.delete();
-
-      if (result != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings exported successfully!')),
-        );
+      } else {
+        final ok = await runNativeSettingsExport(jsonStr, fileName);
+        if (ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Settings exported successfully!')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -670,7 +815,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (file.bytes != null) {
       jsonStr = utf8.decode(file.bytes!);
     } else if (file.path != null) {
-      jsonStr = await File(file.path!).readAsString();
+      jsonStr = await readFilePathAsString(file.path!);
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -739,7 +884,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Export or import all your settings, addons, API keys, and preferences as a JSON file.',
+            'Export or import all your settings, addons, API keys, music liked songs and playlists, and preferences as a JSON file.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
           ),
           const SizedBox(height: 16),
@@ -747,7 +892,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _isExporting ? null : _exportSettings,
+                  onPressed: _isExporting ? null : () => _exportSettings(),
                   icon: _isExporting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.upload_rounded, size: 20),
@@ -763,7 +908,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _isImporting ? null : _importSettings,
+                  onPressed: _isImporting ? null : () => _importSettings(),
                   icon: _isImporting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                       : const Icon(Icons.download_rounded, size: 20),
@@ -808,7 +953,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'search':       {'icon': Icons.search,                     'label': 'Search'},
     'mylist':       {'icon': Icons.bookmark,                   'label': 'My List'},
     'magnet':       {'icon': Icons.link_rounded,               'label': 'Magnet'},
-    'live_matches': {'icon': Icons.sports_soccer_rounded,      'label': 'Live Matches'},
+    'live_matches': {'icon': Icons.live_tv_rounded,           'label': 'TV Channels'},
     'iptv':         {'icon': Icons.live_tv,                    'label': 'IPTV'},
     'audiobooks':   {'icon': Icons.menu_book,                  'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,    'label': 'Books'},
@@ -817,7 +962,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'manga':        {'icon': Icons.book,                       'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_rounded,                'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_filled,         'label': 'Anime'},
-    'arabic':       {'icon': Icons.movie_filter,               'label': 'Arabic'},
   };
 
   void _saveNavbarConfig() {
@@ -826,93 +970,214 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildNavbarConfig() {
+    final tvHint = DeviceProfile.isAndroidTv
+        ? 'Show, hide, and reorder tabs with the arrow buttons. Settings is always visible.'
+        : 'Show, hide, and reorder navigation tabs. Drag to reorder. Settings is always visible.';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 4, bottom: 12),
           child: Text(
-            'Show, hide, and reorder navigation tabs. Drag to reorder. Settings is always visible.',
+            tvHint,
             style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 13),
           ),
         ),
-        ReorderableListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          buildDefaultDragHandles: false,
-          itemCount: _navbarOrder.length,
-          proxyDecorator: (child, index, animation) {
-            return Material(
-              color: Colors.transparent,
-              child: child,
-            );
-          },
-          onReorder: (oldIndex, newIndex) {
-            setState(() {
-              if (newIndex > oldIndex) newIndex--;
-              final item = _navbarOrder.removeAt(oldIndex);
-              _navbarOrder.insert(newIndex, item);
-            });
-            _saveNavbarConfig();
-          },
-          itemBuilder: (context, index) {
-            final id = _navbarOrder[index];
-            final meta = _navMeta[id]!;
-            final isVisible = _navbarVisible.contains(id);
-
-            return Container(
-              key: ValueKey(id),
-              margin: const EdgeInsets.only(bottom: 2),
-              decoration: BoxDecoration(
-                color: isVisible
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : Colors.white.withValues(alpha: 0.02),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ListTile(
-                leading: Icon(
-                  meta['icon'] as IconData,
-                  color: isVisible ? Colors.white : Colors.white24,
-                  size: 22,
+        if (DeviceProfile.isAndroidTv)
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _navbarOrder.length,
+            itemBuilder: (context, index) {
+              final id = _navbarOrder[index];
+              final meta = _navMeta[id]!;
+              final isVisible = _navbarVisible.contains(id);
+              return Container(
+                key: ValueKey(id),
+                margin: const EdgeInsets.only(bottom: 2),
+                decoration: BoxDecoration(
+                  color: isVisible
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : Colors.white.withValues(alpha: 0.02),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                title: Text(
-                  meta['label'] as String,
-                  style: TextStyle(
-                    color: isVisible ? Colors.white : Colors.white38,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                child: ListTile(
+                  leading: Icon(
+                    meta['icon'] as IconData,
+                    color: isVisible ? Colors.white : Colors.white24,
+                    size: 22,
+                  ),
+                  title: Text(
+                    meta['label'] as String,
+                    style: TextStyle(
+                      color: isVisible ? Colors.white : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (index > 0)
+                        FocusableControl(
+                          onTap: () {
+                            setState(() {
+                              final item = _navbarOrder.removeAt(index);
+                              _navbarOrder.insert(index - 1, item);
+                            });
+                            _saveNavbarConfig();
+                          },
+                          borderRadius: 8,
+                          scaleOnFocus: 1.0,
+                          child: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(
+                              Icons.arrow_upward_rounded,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          ),
+                        )
+                      else
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.arrow_upward_rounded,
+                            color: Colors.white12,
+                            size: 22,
+                          ),
+                        ),
+                      if (index < _navbarOrder.length - 1)
+                        FocusableControl(
+                          onTap: () {
+                            setState(() {
+                              final item = _navbarOrder.removeAt(index);
+                              _navbarOrder.insert(index + 1, item);
+                            });
+                            _saveNavbarConfig();
+                          },
+                          borderRadius: 8,
+                          scaleOnFocus: 1.0,
+                          child: const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(
+                              Icons.arrow_downward_rounded,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          ),
+                        )
+                      else
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.arrow_downward_rounded,
+                            color: Colors.white12,
+                            size: 22,
+                          ),
+                        ),
+                      Focus(
+                        skipTraversal: true,
+                        canRequestFocus: false,
+                        child: Switch(
+                          value: isVisible,
+                          activeTrackColor: AppTheme.primaryColor,
+                          onChanged: (val) {
+                            setState(() {
+                              if (val) {
+                                _navbarVisible.add(id);
+                              } else {
+                                _navbarVisible.remove(id);
+                              }
+                            });
+                            _saveNavbarConfig();
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Switch(
-                      value: isVisible,
-                      activeTrackColor: AppTheme.primaryColor,
-                      onChanged: (val) {
-                        setState(() {
-                          if (val) {
-                            _navbarVisible.add(id);
-                          } else {
-                            _navbarVisible.remove(id);
-                          }
-                        });
-                        _saveNavbarConfig();
-                      },
-                    ),
-                    ReorderableDragStartListener(
-                      index: index,
-                      child: const Padding(
-                        padding: EdgeInsets.only(left: 4),
-                        child: Icon(Icons.drag_handle, color: Colors.white24, size: 20),
-                      ),
-                    ),
-                  ],
+              );
+            },
+          )
+        else
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: _navbarOrder.length,
+            proxyDecorator: (child, index, animation) {
+              return Material(
+                color: Colors.transparent,
+                child: child,
+              );
+            },
+            onReorder: (oldIndex, newIndex) {
+              setState(() {
+                if (newIndex > oldIndex) newIndex--;
+                final item = _navbarOrder.removeAt(oldIndex);
+                _navbarOrder.insert(newIndex, item);
+              });
+              _saveNavbarConfig();
+            },
+            itemBuilder: (context, index) {
+              final id = _navbarOrder[index];
+              final meta = _navMeta[id]!;
+              final isVisible = _navbarVisible.contains(id);
+
+              return Container(
+                key: ValueKey(id),
+                margin: const EdgeInsets.only(bottom: 2),
+                decoration: BoxDecoration(
+                  color: isVisible
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : Colors.white.withValues(alpha: 0.02),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              ),
-            );
-          },
-        ),
+                child: ListTile(
+                  leading: Icon(
+                    meta['icon'] as IconData,
+                    color: isVisible ? Colors.white : Colors.white24,
+                    size: 22,
+                  ),
+                  title: Text(
+                    meta['label'] as String,
+                    style: TextStyle(
+                      color: isVisible ? Colors.white : Colors.white38,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Switch(
+                        value: isVisible,
+                        activeTrackColor: AppTheme.primaryColor,
+                        onChanged: (val) {
+                          setState(() {
+                            if (val) {
+                              _navbarVisible.add(id);
+                            } else {
+                              _navbarVisible.remove(id);
+                            }
+                          });
+                          _saveNavbarConfig();
+                        },
+                      ),
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child: Icon(Icons.drag_handle, color: Colors.white24, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         // Settings row — always visible, not reorderable
         Container(
           margin: const EdgeInsets.only(top: 2),
@@ -941,9 +1206,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  String _defaultStremioStreamLabel() {
+    if (_defaultStremioStreamKey == '__auto__') {
+      return 'Auto — Stremio addon first';
+    }
+    if (_defaultStremioStreamKey == '__playtorrio__') {
+      return 'PlayTorrio (built-in / torrents)';
+    }
+    for (final a in _installedAddons) {
+      if (a['baseUrl'] == _defaultStremioStreamKey) {
+        return a['name']?.toString() ?? 'Addon';
+      }
+    }
+    return 'Auto — Stremio addon first';
+  }
+
+  Future<void> _pickDefaultStremioStreamSource() async {
+    final entries = <MapEntry<String, String>>[
+      const MapEntry('__auto__', 'Auto — Stremio addon first'),
+      const MapEntry('__playtorrio__', 'PlayTorrio (built-in / torrents)'),
+      ..._installedAddons.map(
+        (a) => MapEntry(
+          a['baseUrl'] as String,
+          a['name']?.toString() ?? 'Addon',
+        ),
+      ),
+    ];
+    final chosen = await _showTvChoiceSheet(
+      title: 'Default stream source',
+      entries: entries,
+      selectedValue: (_defaultStremioStreamKey == '__auto__' ||
+              _defaultStremioStreamKey == '__playtorrio__' ||
+              _installedAddons.any((a) => a['baseUrl'] == _defaultStremioStreamKey))
+          ? _defaultStremioStreamKey
+          : '__auto__',
+    );
+    if (chosen == null || !mounted) return;
+    await _settings.setDefaultStremioAddonBaseUrl(
+      chosen == '__auto__' ? null : chosen,
+    );
+    setState(() => _defaultStremioStreamKey = chosen);
+  }
+
   Widget _buildDefaultStremioStreamSource() {
+    final padding = const EdgeInsets.symmetric(horizontal: 16);
+    if (DeviceProfile.isAndroidTv) {
+      return Padding(
+        padding: padding,
+        child: FocusableControl(
+          onTap: _pickDefaultStremioStreamSource,
+          borderRadius: 12,
+          scaleOnFocus: 1.0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _defaultStremioStreamLabel(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: AppTheme.primaryColor),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: padding,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
@@ -994,6 +1337,109 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildXmltvEpgSection() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'TV Guide EPG (XMLTV)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Optional. When Stremio channels have no built-in schedule, the TV Guide loads programmes from this URL (XML or gzipped XML). Channel ids in the file should match each channel\'s tvgId when possible.',
+            style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _xmltvEpgUrlController,
+            decoration: InputDecoration(
+              hintText: 'https://example.com/epg.xml',
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+            onSubmitted: (_) => _saveXmltvEpgUrl(),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _saveXmltvEpgUrl(),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.primaryColor,
+                    side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.5)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Save EPG URL'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () async {
+                    await _settings.setXmltvEpgUrl(null);
+                    if (mounted) {
+                      setState(() => _xmltvEpgUrlController.clear());
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('EPG URL cleared')),
+                      );
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white54,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Clear'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const EpgChannelMappingScreen()),
+                );
+              },
+              icon: const Icon(Icons.link_rounded, size: 20),
+              label: const Text('Match EPG channels to Live TV'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.4)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _saveXmltvEpgUrl() async {
+    final url = _xmltvEpgUrlController.text.trim();
+    await _settings.setXmltvEpgUrl(url.isEmpty ? null : url);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(url.isEmpty ? 'EPG URL cleared' : 'TV Guide EPG URL saved')),
+      );
+    }
+  }
+
   Widget _buildAddonInput() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1021,7 +1467,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(width: 12),
               ElevatedButton(
-                onPressed: _isInstalling ? null : _installAddon,
+                onPressed: _isInstalling ? null : () => _installAddon(),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.white,
@@ -1195,7 +1641,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _isTestingJackett ? null : _testJackettConnection,
+                  onPressed: _isTestingJackett ? null : () => _testJackettConnection(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
@@ -1210,7 +1656,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _saveJackettSettings,
+                  onPressed: () => _saveJackettSettings(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primaryColor,
                     foregroundColor: Colors.white,
@@ -1290,7 +1736,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _isTestingProwlarr ? null : _testProwlarrConnection,
+                  onPressed: _isTestingProwlarr ? null : () => _testProwlarrConnection(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white.withValues(alpha: 0.1),
                     foregroundColor: Colors.white,
@@ -1305,7 +1751,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _saveProwlarrSettings,
+                  onPressed: () => _saveProwlarrSettings(),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primaryColor,
                     foregroundColor: Colors.white,
@@ -1442,12 +1888,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Trakt
   // ═══════════════════════════════════════════════════════════════════════
 
+  Future<void> _saveTraktApiCredentials() async {
+    final id = _traktClientIdController.text.trim();
+    final secret = _traktClientSecretController.text.trim();
+    if (id.isEmpty || secret.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter both Trakt Client ID and Client Secret'),
+          ),
+        );
+      }
+      return;
+    }
+    await _trakt.setApiCredentials(clientId: id, clientSecret: secret);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Trakt API credentials saved')),
+      );
+    }
+  }
+
   void _startTraktLogin() async {
+    if (!await _trakt.hasApiCredentials()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Add your Trakt Client ID and Secret above (from trakt.tv/oauth/apps), then tap Login again.',
+            ),
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+      return;
+    }
     final data = await _trakt.startDeviceAuth();
     if (data == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to start Trakt login')),
+          const SnackBar(
+            content: Text(
+              'Trakt did not return a device code. Check your Client ID and network, or try again.',
+            ),
+            duration: Duration(seconds: 4),
+          ),
         );
       }
       return;
@@ -1625,7 +2110,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Sync your watchlist and watch history with Trakt.tv',
             style: TextStyle(fontSize: 13, color: Colors.white54),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          Text(
+            'Create an app at trakt.tv/oauth/apps (Redirect: urn:ietf:wg:oauth:2.0:oob), then paste Client ID and Secret below. Official builds may already include these.',
+            style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.35), height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _traktClientIdController,
+            decoration: InputDecoration(
+              labelText: 'Trakt Client ID',
+              hintText: 'From your Trakt API app',
+              labelStyle: const TextStyle(color: Colors.white54),
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.2)),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _traktClientSecretController,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: 'Trakt Client Secret',
+              labelStyle: const TextStyle(color: Colors.white54),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _saveTraktApiCredentials,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primaryColor,
+                side: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Save Trakt API credentials'),
+            ),
+          ),
+          const SizedBox(height: 20),
 
           if (_isTraktLoggedIn) ...[
             // ── Logged in ──
@@ -1668,7 +2199,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isTraktSyncing ? null : _syncTrakt,
+                onPressed: _isTraktSyncing ? null : () => _syncTrakt(),
                 icon: _isTraktSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
@@ -1924,7 +2455,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isSimklSyncing ? null : _syncSimkl,
+                onPressed: _isSimklSyncing ? null : () => _syncSimkl(),
                 icon: _isSimklSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
@@ -2141,7 +2672,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              onPressed: _saveMdblistApiKey,
+              onPressed: () => _saveMdblistApiKey(),
               icon: const Icon(Icons.save),
               label: const Text('Save API Key'),
               style: ElevatedButton.styleFrom(
@@ -2189,98 +2720,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildUpdateChecker() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Check for new versions of PlayTorrio',
-            style: TextStyle(fontSize: 14, color: Colors.white70),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _isCheckingUpdate ? null : _checkForUpdates,
-              icon: _isCheckingUpdate
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.system_update_rounded),
-              label: Text(
-                _isCheckingUpdate ? 'Checking...' : 'Check for Updates',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
+  /// D-pad friendly choice list (Android TV); returns the selected entry [key].
+  Future<String?> _showTvChoiceSheet({
+    required String title,
+    required List<MapEntry<String, String>> entries,
+    required String selectedValue,
+  }) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A0B2E),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final e in entries)
+                FocusableControl(
+                  onTap: () => Navigator.pop(ctx, e.key),
+                  borderRadius: 10,
+                  scaleOnFocus: 1.0,
+                  child: ListTile(
+                    title: Text(
+                      e.value,
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                    ),
+                    trailing: e.key == selectedValue
+                        ? const Icon(Icons.check_rounded, color: AppTheme.primaryColor)
+                        : null,
+                  ),
                 ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryColor,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
-  }
-  
-  Future<void> _checkForUpdates() async {
-    setState(() => _isCheckingUpdate = true);
-    
-    try {
-      final updateInfo = await _updater.checkForUpdates();
-      
-      if (mounted) {
-        setState(() => _isCheckingUpdate = false);
-        
-        if (updateInfo != null) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => UpdateDialog(updateInfo: updateInfo),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.green),
-                  SizedBox(width: 12),
-                  Text('You\'re running the latest version!'),
-                ],
-              ),
-              backgroundColor: Colors.green.withValues(alpha: 0.2),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isCheckingUpdate = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to check for updates: $e'),
-            backgroundColor: Colors.red.withValues(alpha: 0.2),
-          ),
-        );
-      }
-    }
   }
 
   Widget _buildFocusableToggle(String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
@@ -2313,6 +2788,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildFocusableDropdown(String title, String subtitle, String value, List<String> options, ValueChanged<String?> onChanged) {
+    Future<void> openPicker() async {
+      final entries = options.map((o) => MapEntry(o, o)).toList();
+      final next = await _showTvChoiceSheet(
+        title: title,
+        entries: entries,
+        selectedValue: value,
+      );
+      if (next != null) onChanged(next);
+    }
+
+    if (DeviceProfile.isAndroidTv) {
+      return FocusableControl(
+        onTap: openPicker,
+        scaleOnFocus: 1.0,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: const TextStyle(fontSize: 13, color: Colors.white54)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 200),
+                      child: Text(
+                        value,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chevron_right_rounded, color: AppTheme.primaryColor),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return FocusableControl(
       onTap: () {},
       scaleOnFocus: 1.0, // Disable scaling

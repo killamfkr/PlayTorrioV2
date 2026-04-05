@@ -1,0 +1,8 @@
+{
+  "name": "PlayTorrio",
+  "short_name": "PlayTorrio",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0a0a12",
+  "theme_color": "#7C4DFF"
+}

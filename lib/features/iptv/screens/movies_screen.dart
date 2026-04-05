@@ -275,7 +275,7 @@ class _IptvMoviesScreenState extends State<IptvMoviesScreen> {
           Text('Failed to load movies', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: _loadCategories,
+            onPressed: () => _loadCategories(),
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Retry'),
             style: ElevatedButton.styleFrom(

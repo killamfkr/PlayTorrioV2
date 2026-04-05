@@ -178,7 +178,7 @@ class _ArabicPlayerScreenState extends State<ArabicPlayerScreen> {
           ),
           const SizedBox(height: 24),
           TextButton(
-            onPressed: _loadAndPlay,
+            onPressed: () => _loadAndPlay(),
             child: const Text(
               'إعادة المحاولة',
               style: TextStyle(color: AppTheme.primaryColor),

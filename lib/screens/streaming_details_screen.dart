@@ -965,7 +965,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
               )
             else if (_stremioStreams.isEmpty)
               TextButton.icon(
-                onPressed: _startStremioExtraction,
+                onPressed: () => _startStremioExtraction(),
                 icon: const Icon(Icons.cloud_download_outlined, color: Colors.white70),
                 label: const Text('Load streams', style: TextStyle(color: Colors.white70)),
               )
