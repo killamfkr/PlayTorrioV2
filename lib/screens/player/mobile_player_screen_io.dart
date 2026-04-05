@@ -13,6 +13,10 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import 'package:screen_brightness/screen_brightness.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:android_pip/android_pip.dart';
+
+import '../../utils/device_profile.dart';
 
 import '../../api/subtitle_api.dart';
 import '../../services/watch_history_service.dart';
@@ -508,6 +512,15 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   Duration? _activeSkipTarget;
   bool _skipDismissed = false;
 
+  // ── Settings (background / PiP / global subtitles) ───────────────────────
+  AndroidPIP? _androidPip;
+  bool _continuePlaybackInBackground = true;
+  bool _showAndroidPipButton = true;
+  bool _autoEnterPipAndroid = false;
+  bool _builtinSubtitlesEnabled = true;
+  VoidCallback? _builtinSubsListener;
+  bool _audioSessionConfigured = false;
+
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
   // ─────────────────────────────────────────────────────────────────────────
@@ -515,6 +528,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   @override
   void initState() {
     super.initState();
+    _builtinSubtitlesEnabled =
+        SettingsService.builtinPlayerSubtitlesEnabledNotifier.value;
 
     // ── Provider initialization ──────────────────────────────────────────
     _currentProvider = widget.activeProvider;
@@ -558,6 +573,20 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       ),
     );
 
+    _builtinSubsListener = () {
+      if (!mounted) return;
+      final v = SettingsService.builtinPlayerSubtitlesEnabledNotifier.value;
+      if (v == _builtinSubtitlesEnabled) return;
+      setState(() => _builtinSubtitlesEnabled = v);
+      if (!v) {
+        _player.setSubtitleTrack(SubtitleTrack.no());
+      } else {
+        unawaited(_fetchSubtitles());
+      }
+    };
+    SettingsService.builtinPlayerSubtitlesEnabledNotifier
+        .addListener(_builtinSubsListener!);
+
     // ── Ripple animation ─────────────────────────────────────────────────
     _rippleController = AnimationController(
       vsync: this,
@@ -575,12 +604,41 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
     });
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      final s = SettingsService();
+      _continuePlaybackInBackground = await s.continuePlaybackInBackground();
+      _showAndroidPipButton = await s.showAndroidPipButton();
+      _autoEnterPipAndroid = await s.autoEnterPipAndroid();
+      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        _androidPip = AndroidPIP(
+          onPipEntered: () {
+            if (mounted) setState(() {});
+          },
+          onPipExited: () {
+            if (mounted) setState(() {});
+          },
+          onPipMaximised: () {
+            if (mounted) setState(() {});
+          },
+        );
+        try {
+          if (_autoEnterPipAndroid &&
+              await AndroidPIP.isAutoPipAvailable == true) {
+            await _androidPip!.setAutoPipMode(autoEnter: true);
+          }
+        } catch (e) {
+          debugPrint('[Player] setAutoPipMode: $e');
+        }
+      }
+      if (mounted) setState(() {});
+      await _configureAudioSessionIfNeeded();
       _loadSubtitlePrefs();
       _initPlayback();
       _startHideTimer();
-      _fetchSubtitles();
+      if (_builtinSubtitlesEnabled) {
+        _fetchSubtitles();
+      }
       // Initialize brightness from current screen level
       ScreenBrightness().application.then((b) {
         if (mounted) setState(() => _brightness = b);
@@ -634,6 +692,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _disposed = true;
+    if (_builtinSubsListener != null) {
+      SettingsService.builtinPlayerSubtitlesEnabledNotifier
+          .removeListener(_builtinSubsListener!);
+    }
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _indicatorHideTimer?.cancel();
@@ -677,12 +739,26 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.paused || 
+    final goingBackground = state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached) {
+        state == AppLifecycleState.detached;
+
+    if (goingBackground) {
       // Save local history + send scrobblePause (not stop — user may return)
       _saveWatchHistory(isBgPause: true);
+
+      if (Platform.isAndroid &&
+          !DeviceProfile.isAndroidTv &&
+          _autoEnterPipAndroid &&
+          _isPlayingNotifier.value &&
+          _androidPip != null) {
+        unawaited(_enterPipIfPossible());
+      }
+
+      if (!_continuePlaybackInBackground && _isPlayingNotifier.value) {
+        _player.pause();
+      }
     } else if (state == AppLifecycleState.resumed) {
       // Tell Trakt we're back
       _historySaved = false; // allow re-save on next exit
@@ -698,6 +774,57 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           progressPercent: pct,
         );
       }
+    }
+  }
+
+  Future<bool> _enterPipIfPossible() async {
+    if (_androidPip == null || !Platform.isAndroid) return false;
+    try {
+      final avail = await AndroidPIP.isPipAvailable;
+      if (avail != true) return false;
+      final entered = await _androidPip!.enterPipMode();
+      return entered == true;
+    } catch (e) {
+      debugPrint('[Player] enterPipMode: $e');
+      return false;
+    }
+  }
+
+  Future<void> _configureAudioSessionIfNeeded() async {
+    if (_audioSessionConfigured) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.movie,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      ));
+      _audioSessionConfigured = true;
+    } catch (e) {
+      debugPrint('[Player] AudioSession.configure: $e');
+    }
+  }
+
+  void _applyBuiltinSubtitleState() {
+    if (!_builtinSubtitlesEnabled) {
+      _player.setSubtitleTrack(SubtitleTrack.no());
+    }
+  }
+
+  Future<void> _onPipButtonPressed() async {
+    if (_androidPip == null) return;
+    final ok = await _enterPipIfPossible();
+    if (mounted && !ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is not available on this device.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -853,6 +980,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
           await _player.open(Media(source.url, httpHeaders: srcHeaders));
+          _applyBuiltinSubtitleState();
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
             final ref = source.headers!['Referer'] ?? source.headers!['referer'];
@@ -881,6 +1009,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          _applyBuiltinSubtitleState();
           _player.setVolume(_volume);
           return;
         } catch (e) {
@@ -972,6 +1101,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
         await _player.open(Media(streamUrl, httpHeaders: headers));
+        _applyBuiltinSubtitleState();
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
         
         setState(() {
@@ -1060,7 +1190,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _playingSub = _player.stream.playing.listen((playing) {
       if (_disposed) return;
       _isPlayingNotifier.value = playing;
+      if (Platform.isAndroid && _androidPip != null) {
+        unawaited(_androidPip!.setIsPlaying(playing));
+      }
       if (playing) {
+        unawaited(_configureAudioSessionIfNeeded());
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
@@ -1364,6 +1498,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _fetchSubtitles() async {
+    if (!_builtinSubtitlesEnabled) return;
     // Pre-populate with Jellyfin subtitles if provided
     final jellyfinSubs = widget.externalSubtitles ?? [];
     if (jellyfinSubs.isNotEmpty) {
@@ -1387,6 +1522,15 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _showSubtitlesMenu() {
+    if (!_builtinSubtitlesEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Subtitles are disabled in Settings → Playback.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     String searchQuery = '';
     showModalBottomSheet(
       context: context,
@@ -2000,6 +2144,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         await _player.open(
                           Media(result.url, httpHeaders: result.headers),
                         );
+                        _applyBuiltinSubtitleState();
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
                           url: result.url,
@@ -2022,6 +2167,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         await _player.open(
                           Media(source.url, httpHeaders: srcHeaders),
                         );
+                        _applyBuiltinSubtitleState();
                         setState(() {
                           _currentUrl = source.url;
                           _currentFallbackSourceIndex = 0;
@@ -2174,11 +2320,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         await _player.open(
           Media(streamUrl, httpHeaders: headers),
         );
-        
+        _applyBuiltinSubtitleState();
+
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);
         }
-        
+
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
@@ -2622,26 +2769,29 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
               ),
 
               // ── 1b. Custom subtitle overlay ─────────────────────────────
-              StreamBuilder<List<String>>(
-                stream: _player.stream.subtitle,
-                initialData: _player.state.subtitle,
-                builder: (context, snap) {
-                  final lines = snap.data ?? [];
-                  final text = lines.where((l) => l.trim().isNotEmpty).join('\n');
-                  if (text.isEmpty) return const SizedBox.shrink();
-                  return Positioned(
-                    left: 24, right: 24,
-                    bottom: _subtitleBottomPadding,
-                    child: IgnorePointer(
-                      child: Text(
-                        text,
-                        style: _buildSubtitleTextStyle(),
-                        textAlign: TextAlign.center,
+              if (_builtinSubtitlesEnabled)
+                StreamBuilder<List<String>>(
+                  stream: _player.stream.subtitle,
+                  initialData: _player.state.subtitle,
+                  builder: (context, snap) {
+                    final lines = snap.data ?? [];
+                    final text =
+                        lines.where((l) => l.trim().isNotEmpty).join('\n');
+                    if (text.isEmpty) return const SizedBox.shrink();
+                    return Positioned(
+                      left: 24,
+                      right: 24,
+                      bottom: _subtitleBottomPadding,
+                      child: IgnorePointer(
+                        child: Text(
+                          text,
+                          style: _buildSubtitleTextStyle(),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
 
               // ── 2. Gesture layer ─────────────────────────────────────────
               LayoutBuilder(builder: (context, constraints) {
@@ -2952,6 +3102,17 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 size: btnSize, iconSize: iconSz,
               ),
               SizedBox(width: gap),
+              if (Platform.isAndroid &&
+                  !DeviceProfile.isAndroidTv &&
+                  _showAndroidPipButton) ...[
+                _GlassIconButton(
+                  icon: Icons.picture_in_picture_alt_outlined,
+                  onPressed: _onPipButtonPressed,
+                  size: btnSize,
+                  iconSize: iconSz,
+                ),
+                SizedBox(width: gap),
+              ],
               _GlassIconButton(
                 icon: Icons.subtitles_outlined,
                 onPressed: _showSubtitlesMenu,
