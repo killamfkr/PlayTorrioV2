@@ -579,8 +579,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (v == _builtinSubtitlesEnabled) return;
       setState(() => _builtinSubtitlesEnabled = v);
       if (!v) {
-        _player.setSubtitleTrack(SubtitleTrack.no());
+        _applyBuiltinSubtitleState();
       } else {
+        unawaited(_applyBuiltinSubtitleStateAsync());
         unawaited(_fetchSubtitles());
       }
     };
@@ -810,8 +811,33 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   }
 
   void _applyBuiltinSubtitleState() {
-    if (!_builtinSubtitlesEnabled) {
+    unawaited(_applyBuiltinSubtitleStateAsync());
+  }
+
+  /// mpv may (re)select subtitles after `open` when tracks appear — reassert off.
+  Future<void> _applyBuiltinSubtitleStateAsync() async {
+    if (_builtinSubtitlesEnabled) {
+      if (_player.platform is NativePlayer) {
+        final mpv = _player.platform as NativePlayer;
+        await mpv.setProperty('sub-visibility', 'no');
+        await mpv.setProperty('sub-auto', 'all');
+      }
+      return;
+    }
+    void turnOff() {
+      if (_disposed) return;
       _player.setSubtitleTrack(SubtitleTrack.no());
+      if (_player.platform is NativePlayer) {
+        final mpv = _player.platform as NativePlayer;
+        unawaited(mpv.setProperty('sub-visibility', 'no'));
+        unawaited(mpv.setProperty('sub-auto', 'no'));
+        unawaited(mpv.setProperty('sid', 'no'));
+      }
+    }
+
+    turnOff();
+    for (final ms in [120, 400, 1200]) {
+      Future.delayed(Duration(milliseconds: ms), turnOff);
     }
   }
 
@@ -1298,9 +1324,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('ad-lavc-downmix', 'no');
     await mpv.setProperty('audio-fallback-to-null', 'yes');
 
-    // Flutter renders subtitles — kill mpv's own OSD overlay.
+    // Flutter renders text — keep mpv OSD off. Sub loading follows Settings toggle.
     await mpv.setProperty('sub-visibility', 'no');
-    await mpv.setProperty('sub-auto', 'all');
+    if (_builtinSubtitlesEnabled) {
+      await mpv.setProperty('sub-auto', 'all');
+    } else {
+      await mpv.setProperty('sub-auto', 'no');
+      await mpv.setProperty('sid', 'no');
+    }
 
     // ── Video Sync ────────────────────────────────────────────────────────
     // On mobile we use audio sync (not display-resample).
