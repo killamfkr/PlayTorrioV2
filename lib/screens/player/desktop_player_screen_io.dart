@@ -540,6 +540,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      unawaited(SettingsService().continuePlaybackInBackground());
       _autoAdvanceNextEpisode =
           await SettingsService().getAutoAdvanceNextEpisode();
       if (mounted) setState(() {});
@@ -2537,14 +2538,21 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
               fit: StackFit.expand,
               children: [
                 // ── Video ────────────────────────────────────────────────
-                Video(
-                  controller: _controller,
-                  controls: NoVideoControls,
-                  fit: _videoFit,
-                  fill: Colors.black,
-                  subtitleViewConfiguration: const SubtitleViewConfiguration(
-                    visible: false,
-                  ),
+                ValueListenableBuilder<bool>(
+                  valueListenable:
+                      SettingsService.continuePlaybackInBackgroundNotifier,
+                  builder: (context, allowBg, _) {
+                    return Video(
+                      controller: _controller,
+                      controls: NoVideoControls,
+                      fit: _videoFit,
+                      fill: Colors.black,
+                      pauseUponEnteringBackgroundMode: !allowBg,
+                      subtitleViewConfiguration: const SubtitleViewConfiguration(
+                        visible: false,
+                      ),
+                    );
+                  },
                 ),
 
                 // ── Custom subtitle overlay ──────────────────────────────

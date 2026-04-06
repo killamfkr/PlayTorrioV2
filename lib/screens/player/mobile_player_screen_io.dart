@@ -612,6 +612,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final s = SettingsService();
+      unawaited(s.continuePlaybackInBackground());
       _showAndroidPipButton = await s.showAndroidPipButton();
       _autoEnterPipAndroid = await s.autoEnterPipAndroid();
       _autoAdvanceNextEpisode = await s.getAutoAdvanceNextEpisode();
@@ -2860,14 +2861,23 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             fit: StackFit.expand,
             children: [
               // ── 1. Video ─────────────────────────────────────────────────
-              Video(
-                controller: _controller,
-                controls: NoVideoControls,
-                fit: _videoFit,
-                fill: Colors.black,
-                subtitleViewConfiguration: const SubtitleViewConfiguration(
-                  visible: false,
-                ),
+              // media_kit_video's Video pauses on AppLifecycleState.paused unless
+              // pauseUponEnteringBackgroundMode is false — tie that to Settings.
+              ValueListenableBuilder<bool>(
+                valueListenable:
+                    SettingsService.continuePlaybackInBackgroundNotifier,
+                builder: (context, allowBg, _) {
+                  return Video(
+                    controller: _controller,
+                    controls: NoVideoControls,
+                    fit: _videoFit,
+                    fill: Colors.black,
+                    pauseUponEnteringBackgroundMode: !allowBg,
+                    subtitleViewConfiguration: const SubtitleViewConfiguration(
+                      visible: false,
+                    ),
+                  );
+                },
               ),
 
               // ── 1b. Custom subtitle overlay ─────────────────────────────

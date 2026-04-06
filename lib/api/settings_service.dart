@@ -47,6 +47,10 @@ class SettingsService {
   static final ValueNotifier<bool> builtinPlayerSubtitlesEnabledNotifier =
       ValueNotifier<bool>(true);
 
+  /// Keeps [media_kit_video] `Video` in sync: it pauses on background unless this is true.
+  static final ValueNotifier<bool> continuePlaybackInBackgroundNotifier =
+      ValueNotifier<bool>(true);
+
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
@@ -212,12 +216,17 @@ class SettingsService {
 
   Future<bool> continuePlaybackInBackground() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_continuePlaybackInBackgroundKey) ?? true;
+    final v = prefs.getBool(_continuePlaybackInBackgroundKey) ?? true;
+    if (continuePlaybackInBackgroundNotifier.value != v) {
+      continuePlaybackInBackgroundNotifier.value = v;
+    }
+    return v;
   }
 
   Future<void> setContinuePlaybackInBackground(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_continuePlaybackInBackgroundKey, value);
+    continuePlaybackInBackgroundNotifier.value = value;
   }
 
   Future<bool> showAndroidPipButton() async {
@@ -692,6 +701,8 @@ class SettingsService {
         await prefs.setBool(key, prefsMap[key] as bool);
       }
     }
+    continuePlaybackInBackgroundNotifier.value =
+        prefs.getBool(_continuePlaybackInBackgroundKey) ?? true;
     // String keys
     for (final key in [
       _sortPreferenceKey,
