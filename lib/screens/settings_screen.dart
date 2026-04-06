@@ -113,6 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showAndroidPipButton = true;
   bool _autoEnterPipAndroid = false;
   bool _builtinPlayerSubtitlesEnabled = true;
+  bool _autoAdvanceNextEpisode = false;
 
   /// `null` = player default (~12 Mbps on TV); `0` = unlimited.
   int? _androidTvMaxStreamBitrateKbps;
@@ -203,6 +204,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
     final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
+    final autoNextEp = await _settings.getAutoAdvanceNextEpisode();
     final tvBitrateCap = platformIsAndroid && DeviceProfile.isAndroidTv
         ? await _settings.getAndroidTvMaxStreamBitrateKbps()
         : null;
@@ -273,6 +275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
         _builtinPlayerSubtitlesEnabled = builtinSubs;
+        _autoAdvanceNextEpisode = autoNextEp;
         if (platformIsAndroid && DeviceProfile.isAndroidTv) {
           _androidTvMaxStreamBitrateKbps = tvBitrateCap;
         }
@@ -527,6 +530,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         (val) async {
                           await _settings.setBuiltinPlayerSubtitlesEnabled(val);
                           setState(() => _builtinPlayerSubtitlesEnabled = val);
+                        },
+                      ),
+                      _buildFocusableToggle(
+                        'Auto-advance next episode (10s)',
+                        'When the “Next episode” prompt appears near the end of a TV episode, count down 10 seconds then play the next episode. Tap Cancel on the prompt to stay on this episode.',
+                        _autoAdvanceNextEpisode,
+                        (val) async {
+                          await _settings.setAutoAdvanceNextEpisode(val);
+                          setState(() => _autoAdvanceNextEpisode = val);
                         },
                       ),
                       if (platformIsAndroid) ...[

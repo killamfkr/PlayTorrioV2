@@ -34,6 +34,9 @@ class SettingsService {
   /// Built-in player: show embedded / external subtitles (Flutter overlay + mpv track).
   static const String _builtinPlayerSubtitlesEnabledKey =
       'playback_builtin_subtitles_enabled';
+  /// Built-in player: after end-of-episode prompt, auto-play next episode after 10s (cancel in overlay).
+  static const String _autoAdvanceNextEpisodeKey =
+      'playback_auto_advance_next_episode';
 
   /// Android TV: max HLS/DASH variant bitrate (Kbps) for mpv `hls-bitrate`. `0` = no cap (max).
   /// When unset, the player uses a safe default cap on TV only.
@@ -250,6 +253,16 @@ class SettingsService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_builtinPlayerSubtitlesEnabledKey, value);
     builtinPlayerSubtitlesEnabledNotifier.value = value;
+  }
+
+  Future<bool> getAutoAdvanceNextEpisode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_autoAdvanceNextEpisodeKey) ?? false;
+  }
+
+  Future<void> setAutoAdvanceNextEpisode(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoAdvanceNextEpisodeKey, value);
   }
 
   /// `null` if the user never changed TV stream cap (player uses built-in default).
@@ -585,6 +598,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _autoAdvanceNextEpisodeKey,
       _subBoldKey,
     ]) {
       final v = prefs.getBool(key);
@@ -671,6 +685,7 @@ class SettingsService {
       _showAndroidPipButtonKey,
       _autoEnterPipAndroidKey,
       _builtinPlayerSubtitlesEnabledKey,
+      _autoAdvanceNextEpisodeKey,
       _subBoldKey,
     ]) {
       if (prefsMap.containsKey(key)) {

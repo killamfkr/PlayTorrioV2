@@ -490,6 +490,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   // ── Next Episode State ────────────────────────────────────────────────────
   bool _isLoadingNextEp = false;
   bool _nearEndOfEpisode = false;
+  static const int _nextEpisodeAutoSeconds = 10;
+  bool _autoAdvanceNextEpisode = false;
+  int? _nextEpCountdownRemaining;
+  Timer? _nextEpCountdownTimer;
+  int _nextEpCountdownToken = 0;
 
   // ── Skip Segments (IntroDB) ───────────────────────────────────────────────
   IntroDbResponse? _introDbData;
@@ -533,8 +538,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      _autoAdvanceNextEpisode =
+          await SettingsService().getAutoAdvanceNextEpisode();
+      if (mounted) setState(() {});
       _loadSubtitlePrefs();
       _initPlayback();
       _startHideTimer();
@@ -572,8 +580,51 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     }
   }
 
+  void _cancelNextEpisodeCountdown() {
+    _nextEpCountdownTimer?.cancel();
+    _nextEpCountdownTimer = null;
+    _nextEpCountdownToken++;
+    if (_nextEpCountdownRemaining != null && mounted) {
+      setState(() => _nextEpCountdownRemaining = null);
+    } else {
+      _nextEpCountdownRemaining = null;
+    }
+  }
+
+  void _startNextEpisodeCountdownIfNeeded() {
+    if (!_autoAdvanceNextEpisode ||
+        !_isNextEpisodeAvailable ||
+        _isLoadingNextEp ||
+        _nextEpCountdownRemaining != null) {
+      return;
+    }
+    _nextEpCountdownTimer?.cancel();
+    final token = ++_nextEpCountdownToken;
+    if (!mounted) return;
+    setState(() => _nextEpCountdownRemaining = _nextEpisodeAutoSeconds);
+    _nextEpCountdownTimer =
+        Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted || _disposed || token != _nextEpCountdownToken) {
+        t.cancel();
+        return;
+      }
+      final r = (_nextEpCountdownRemaining ?? 0) - 1;
+      if (r <= 0) {
+        t.cancel();
+        _nextEpCountdownTimer = null;
+        setState(() => _nextEpCountdownRemaining = null);
+        if (_isNextEpisodeAvailable && !_isLoadingNextEp) {
+          _nextEpisode();
+        }
+      } else {
+        setState(() => _nextEpCountdownRemaining = r);
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _cancelNextEpisodeCountdown();
     // ── Save watch history before anything else ───────────────────────────
     _saveWatchHistory();
 
@@ -934,15 +985,19 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       _positionNotifier.value = pos;
 
       // Near-end detection for next episode button
-      if (_isNextEpisodeAvailable && !_nearEndOfEpisode) {
+      if (_isNextEpisodeAvailable) {
         final dur = _durationNotifier.value;
         if (dur.inSeconds > 0) {
           final remaining = dur - pos;
           final threshold = dur.inMinutes < 10
               ? Duration(seconds: (dur.inSeconds * 0.05).round())
               : const Duration(minutes: 2);
-          if (remaining <= threshold) {
+          if (_nearEndOfEpisode && remaining > threshold) {
+            setState(() => _nearEndOfEpisode = false);
+            _cancelNextEpisodeCountdown();
+          } else if (!_nearEndOfEpisode && remaining <= threshold) {
             setState(() => _nearEndOfEpisode = true);
+            _startNextEpisodeCountdownIfNeeded();
           }
         }
       }
@@ -1925,6 +1980,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
   Future<void> _nextEpisode() async {
     if (!_isNextEpisodeAvailable || _isLoadingNextEp) return;
+    _cancelNextEpisodeCountdown();
 
     setState(() => _isLoadingNextEp = true);
 
@@ -2725,37 +2781,93 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           right: 24,
           child: Material(
             color: Colors.transparent,
-            child: InkWell(
-              onTap: _isLoadingNextEp ? null : _nextEpisode,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (_isLoadingNextEp)
-                    const SizedBox(
-                      width: 18, height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                    )
-                  else
-                    const Text(
-                      'Next Episode',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_nextEpCountdownRemaining != null && !_isLoadingNextEp)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: Text(
+                            'Next in ${_nextEpCountdownRemaining}s',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        InkWell(
+                          onTap: _cancelNextEpisodeCountdown,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.arrow_forward_rounded,
-                      color: Colors.white, size: 20),
-                ]),
-              ),
+                  ),
+                InkWell(
+                  onTap: _isLoadingNextEp ? null : _nextEpisode,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (_isLoadingNextEp)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      else
+                        const Text(
+                          'Next Episode',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.arrow_forward_rounded,
+                          color: Colors.white, size: 20),
+                    ]),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
