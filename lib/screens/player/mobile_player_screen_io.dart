@@ -519,7 +519,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   // ── Settings (background / PiP / global subtitles) ───────────────────────
   AndroidPIP? _androidPip;
-  bool _continuePlaybackInBackground = true;
   bool _showAndroidPipButton = true;
   bool _autoEnterPipAndroid = false;
   bool _builtinSubtitlesEnabled = true;
@@ -613,7 +612,6 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final s = SettingsService();
-      _continuePlaybackInBackground = await s.continuePlaybackInBackground();
       _showAndroidPipButton = await s.showAndroidPipButton();
       _autoEnterPipAndroid = await s.autoEnterPipAndroid();
       _autoAdvanceNextEpisode = await s.getAutoAdvanceNextEpisode();
@@ -789,15 +787,18 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    final goingBackground = state == AppLifecycleState.paused ||
+    // `inactive` fires for transient focus loss (dialogs, PiP transition, etc.).
+    // Only treat true background as paused/hidden so background playback keeps working.
+    final saveBgProgress = state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached;
 
-    if (goingBackground) {
-      // Save local history + send scrobblePause (not stop — user may return)
+    if (saveBgProgress) {
       _saveWatchHistory(isBgPause: true);
+    }
 
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
       if (Platform.isAndroid &&
           !DeviceProfile.isAndroidTv &&
           _autoEnterPipAndroid &&
@@ -806,8 +807,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         unawaited(_enterPipIfPossible());
       }
 
-      if (!_continuePlaybackInBackground && _isPlayingNotifier.value) {
-        _player.pause();
+      if (_isPlayingNotifier.value) {
+        unawaited(SettingsService().continuePlaybackInBackground().then((allow) {
+          if (!mounted || _disposed) return;
+          if (!allow && _isPlayingNotifier.value) {
+            _player.pause();
+          }
+        }));
       }
     } else if (state == AppLifecycleState.resumed) {
       // Tell Trakt we're back
@@ -854,8 +860,18 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
       ));
       _audioSessionConfigured = true;
+      await session.setActive(true);
     } catch (e) {
       debugPrint('[Player] AudioSession.configure: $e');
+    }
+  }
+
+  Future<void> _ensureAudioSessionActive() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[Player] AudioSession.setActive: $e');
     }
   }
 
@@ -1274,6 +1290,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
       if (playing) {
         unawaited(_configureAudioSessionIfNeeded());
+        unawaited(_ensureAudioSessionActive());
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
