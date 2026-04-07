@@ -427,6 +427,27 @@ class MobilePlayerScreen extends StatefulWidget {
 
 class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  /// `Navigator.pushReplacement` builds the next player before the previous
+  /// `dispose()` runs. A single global enable/disable pair races: the old route
+  /// disables the wakelock after the new route enabled it → screen can lock
+  /// during next-episode transitions.
+  static int _playerWakelockRefs = 0;
+
+  static void _acquirePlayerWakelock() {
+    _playerWakelockRefs++;
+    if (_playerWakelockRefs == 1) {
+      WakelockPlus.enable();
+    }
+  }
+
+  static void _releasePlayerWakelock() {
+    if (_playerWakelockRefs <= 0) return;
+    _playerWakelockRefs--;
+    if (_playerWakelockRefs == 0) {
+      WakelockPlus.disable();
+    }
+  }
+
   // ── Player ──────────────────────────────────────────────────────────────
   late final Player _player;
   late final VideoController _controller;
@@ -555,7 +576,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         AutoOrientation.fullAutoMode(forceSensor: true);
       }
     });
-    WakelockPlus.enable();
+    _acquirePlayerWakelock();
 
     // ── Player ───────────────────────────────────────────────────────────
     _player = Player(
@@ -771,7 +792,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     final torrentId = widget.magnetLink ?? widget.mediaPath;
     TorrentStreamService().removeTorrent(torrentId);
 
-    WakelockPlus.disable();
+    _releasePlayerWakelock();
 
     super.dispose();
   }
