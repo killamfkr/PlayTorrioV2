@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../api/settings_service.dart';
+import 'device_profile.dart';
 
 class AppTheme {
   // Cinematic Dark Theme
@@ -111,6 +112,41 @@ class _FocusableControlState extends State<FocusableControl> with SingleTickerPr
   @override
   Widget build(BuildContext context) {
     final lightMode = AppTheme.isLightMode;
+    final tv = DeviceProfile.isAndroidTv;
+    // TV D-pad: cheap border focus only (no blur-radius shadows or scale).
+    if (tv) {
+      return Focus(
+        autofocus: widget.autoFocus,
+        onFocusChange: (f) => setState(() => _isFocused = f),
+        onKeyEvent: (node, event) {
+          if (widget.onTap != null &&
+              event is KeyDownEvent &&
+              (event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.select)) {
+            widget.onTap!();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(widget.borderRadius),
+              border: Border.all(
+                color: _isFocused
+                    ? (widget.glowColor ?? AppTheme.primaryColor)
+                        .withValues(alpha: 0.95)
+                    : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            child: widget.child,
+          ),
+        ),
+      );
+    }
 
     return Focus(
       autofocus: widget.autoFocus,

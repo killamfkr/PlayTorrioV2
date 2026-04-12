@@ -5,6 +5,7 @@ import 'package:path/path.dart' as path;
 class WebViewCleanup {
   /// Deletes the WebView cache folder to save disk space (cross-platform)
   static Future<void> cleanupWebView2Cache() async {
+    if (kIsWeb) return;
     try {
       // Wait for WebView to fully release file locks
       await Future.delayed(const Duration(seconds: 2));

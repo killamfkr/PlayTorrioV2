@@ -1,0 +1,22 @@
+PlayTorrioTV — apply these patches on your PC (Flutter not available in the cloud agent).
+
+1) Clone or open your repo:
+   git clone https://github.com/killamfkr/PlayTorrioTV.git
+   cd PlayTorrioTV
+
+2) Apply both patches in order (from this folder):
+   git am /path/to/patches-playtorriotv/0001-Add-Stremio-Live-TV-with-XMLTV-EPG-and-fix-QR-LAN-IP.patch
+   git am /path/to/patches-playtorriotv/0002-Refresh-TV-Guide-EPG-when-app-resumes.patch
+
+   If git am fails (e.g. diverged main), try:
+   git apply --3way 0001-*.patch && git apply --3way 0002-*.patch
+   then commit manually.
+
+3) Run:
+   flutter pub get
+   flutter analyze
+   flutter run
+   # or: flutter build apk --release
+
+4) Push (needs your GitHub credentials, not the bot):
+   git push -u origin main

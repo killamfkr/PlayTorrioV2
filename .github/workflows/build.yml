@@ -1,7 +1,12 @@
 # ──────────────────────────────────────────────────────────────────────────────
 #  PlayTorrio — Multi-Platform CI/CD
-#  Builds: Android (split APK, CI), Windows (installer), Linux x64 (AppImage),
-#          macOS ARM64 (Apple Silicon), iOS (IPA — sideload)
+#  Builds: Android (2 workers: per-ABI split APKs + single universal APK, both
+#          release-signed when repo secrets are set), Windows (installer),
+#          macOS ARM64 / Intel, iOS (IPA — sideload)
+#
+#  Signed Android APKs: add secrets ANDROID_KEYSTORE_BASE64 (keystore as base64),
+#  PLAYTORRIO_KEYSTORE_PASSWORD, PLAYTORRIO_KEY_PASSWORD, optional PLAYTORRIO_KEY_ALIAS.
+#  Without them, release builds use the debug keystore (installable but not store-ready).
 # ──────────────────────────────────────────────────────────────────────────────
 name: Build PlayTorrio
 
@@ -22,10 +27,14 @@ env:
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
 
-  # ─── Android ──────────────────────────────────────────────────────────────
+  # ─── Android (matrix: two workers — split per-ABI + universal signed APK) ───
   android:
-    name:  Android (split APK)
+    name:  Android (${{ matrix.apk_kind }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        apk_kind: [split, universal]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,18 +75,42 @@ jobs:
             echo "PLAYTORRIO_KEY_ALIAS=${PLAYTORRIO_KEY_ALIAS:-playtorrio}"
           } >> gradle.properties
 
-      - name: Build APKs (per-ABI)
-        run: >
-          flutter build apk --release --split-per-abi
-          --dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}
-          --dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}
-          --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
-          --dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}
+      - name: Build release APK (signed when keystore secrets are set)
+        run: |
+          DART_DEFINES=(
+            "--dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}"
+            "--dart-define=TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}"
+            "--dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}"
+            "--dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}"
+          )
+          if [ "${{ matrix.apk_kind }}" = "split" ]; then
+            flutter build apk --release --split-per-abi "${DART_DEFINES[@]}"
+          else
+            flutter build apk --release "${DART_DEFINES[@]}"
+          fi
 
-      - uses: actions/upload-artifact@v4
+      # Same binary as universal APK; distinct filename for Android TV / leanback installs.
+      - name: Label Android TV universal copy
+        if: matrix.apk_kind == 'universal'
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            build/app/outputs/flutter-apk/PlayTorrio-AndroidTV-universal.apk
+
+      - name: Upload split per-ABI APKs
+        if: matrix.apk_kind == 'split'
+        uses: actions/upload-artifact@v4
         with:
-          name: PlayTorrio-Android
-          path: build/app/outputs/flutter-apk/*.apk
+          name: PlayTorrio-Android-split
+          path: build/app/outputs/flutter-apk/app-*-release.apk
+
+      - name: Upload universal APK
+        if: matrix.apk_kind == 'universal'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlayTorrio-Android-universal
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/flutter-apk/PlayTorrio-AndroidTV-universal.apk
 
   # ─── Windows ──────────────────────────────────────────────────────────────
   windows:
@@ -443,7 +476,8 @@ jobs:
           name: ${{ github.ref_type == 'tag' && github.ref_name || format('CI build {0}', github.run_number) }}
           generate_release_notes: true
           files: |
-            PlayTorrio-Android/*.apk
+            PlayTorrio-Android-split/*.apk
+            PlayTorrio-Android-universal/*.apk
             PlayTorrio-Windows-Installer/*.exe
             PlayTorrio-macOS-arm64/*.dmg
             PlayTorrio-macOS-arm64/*.zip

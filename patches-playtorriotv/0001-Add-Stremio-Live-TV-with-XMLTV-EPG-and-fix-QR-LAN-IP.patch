@@ -1,0 +1,3866 @@
+From 3e7b06adcc3470c88cb4ae4d9bb82bb154ae9f8b Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 5 Apr 2026 01:14:52 +0000
+Subject: [PATCH 1/2] Add Stremio Live TV with XMLTV EPG and fix QR LAN IP
+
+- New Live TV tab: channel-only Stremio browser with lazy EPG now-playing
+  bars, TV Guide screen, and EPG channel mapping (ported from PlayTorrioV2).
+- Settings: XMLTV URL field, Open TV Guide, Match EPG channels; prefs sync
+  via existing remote settings JSON.
+- QR code URL: detect LAN IP via interfaces and WiFi first; routing socket
+  only as last resort; refresh IP on resume and after server start.
+---
+ lib/api/stremio_service.dart                |   60 +
+ lib/api/tmdb_api.dart                       |   38 +
+ lib/main.dart                               |   23 +-
+ lib/models/movie.dart                       |   92 ++
+ lib/screens/epg_channel_mapping_screen.dart |  475 ++++++
+ lib/screens/settings_screen.dart            |   94 +-
+ lib/screens/stremio_live_tv_screen.dart     | 1641 +++++++++++++++++++
+ lib/screens/stremio_tv_guide_screen.dart    |  423 +++++
+ lib/services/settings_service.dart          |  170 +-
+ lib/services/xmltv_epg_service.dart         |  281 ++++
+ lib/utils/app_theme.dart                    |   62 +
+ lib/utils/stremio_tv_schedule.dart          |  219 +++
+ lib/utils/tv_guide_refresh.dart             |   13 +
+ pubspec.yaml                                |    3 +
+ 14 files changed, 3553 insertions(+), 41 deletions(-)
+ create mode 100644 lib/api/stremio_service.dart
+ create mode 100644 lib/api/tmdb_api.dart
+ create mode 100644 lib/models/movie.dart
+ create mode 100644 lib/screens/epg_channel_mapping_screen.dart
+ create mode 100644 lib/screens/stremio_live_tv_screen.dart
+ create mode 100644 lib/screens/stremio_tv_guide_screen.dart
+ create mode 100644 lib/services/xmltv_epg_service.dart
+ create mode 100644 lib/utils/app_theme.dart
+ create mode 100644 lib/utils/stremio_tv_schedule.dart
+ create mode 100644 lib/utils/tv_guide_refresh.dart
+
+diff --git a/lib/api/stremio_service.dart b/lib/api/stremio_service.dart
+new file mode 100644
+index 0000000..14541c0
+--- /dev/null
++++ b/lib/api/stremio_service.dart
+@@ -0,0 +1,60 @@
++import '../services/stremio_addon_service.dart';
++/// Async Stremio API for live TV / EPG screens (wraps [StremioAddonService]).
++class StremioService {
++  static final StremioService _instance = StremioService._internal();
++  factory StremioService() => _instance;
++  StremioService._internal();
++
++  static bool isLiveTvCatalogType(Object? catalogType) {
++    final t = catalogType?.toString().toLowerCase() ?? '';
++    return t == 'channel' || t == 'tv';
++  }
++
++  Future<List<Map<String, dynamic>>> getAddonsForResource(
++    String resourceName, {
++    String? type,
++  }) async {
++    return StremioAddonService.getAddonsForResource(resourceName, type: type);
++  }
++
++  Future<List<Map<String, dynamic>>> getAllCatalogs() async {
++    return StremioAddonService.getAllCatalogs();
++  }
++
++  Future<List<Map<String, dynamic>>> getCatalog({
++    required String baseUrl,
++    required String type,
++    required String id,
++    String? genre,
++    int? skip,
++    String? search,
++  }) async {
++    return StremioAddonService.getCatalog(
++      baseUrl: baseUrl,
++      type: type,
++      id: id,
++      genre: genre,
++      skip: skip,
++      search: search,
++    );
++  }
++
++  Future<Map<String, dynamic>?> getMeta({
++    required String baseUrl,
++    required String type,
++    required String id,
++  }) async {
++    return StremioAddonService.getMeta(
++      baseUrl: baseUrl,
++      type: type,
++      id: id,
++    );
++  }
++
++  Future<Map<String, dynamic>?> getMetaFromAny({
++    required String type,
++    required String id,
++  }) async {
++    return StremioAddonService.getMetaFromAny(type: type, id: id);
++  }
++}
+diff --git a/lib/api/tmdb_api.dart b/lib/api/tmdb_api.dart
+new file mode 100644
+index 0000000..a69202c
+--- /dev/null
++++ b/lib/api/tmdb_api.dart
+@@ -0,0 +1,38 @@
++import '../models/movie.dart';
++import '../services/tmdb_service.dart';
++
++/// TMDB helpers matching PlayTorrio V2 naming (used by live TV catalog).
++class TmdbApi {
++  static String getImageUrl(String path) {
++    if (path.isEmpty) return '';
++    if (path.startsWith('http')) return path;
++    return 'https://image.tmdb.org/t/p/w500$path';
++  }
++
++  static String getBackdropUrl(String path) {
++    if (path.isEmpty) return '';
++    if (path.startsWith('http')) return path;
++    return 'https://image.tmdb.org/t/p/w1280$path';
++  }
++
++  Future<Movie?> findByImdbId(String imdbId, {required String mediaType}) async {
++    final m = await TmdbService.findByImdbId(
++      imdbId,
++      mediaType: mediaType == 'tv' ? 'tv' : 'movie',
++    );
++    if (m == null) return null;
++    return Movie.fromJson(m, mediaType: m['media_type'] as String?);
++  }
++
++  Future<List<Movie>> searchMulti(String query) async {
++    final raw = await TmdbService.searchMulti(query);
++    final out = <Movie>[];
++    for (final e in raw) {
++      if (e is! Map<String, dynamic>) continue;
++      final mt = e['media_type'] as String?;
++      if (mt != 'movie' && mt != 'tv') continue;
++      out.add(Movie.fromJson(e, mediaType: mt));
++    }
++    return out;
++  }
++}
+diff --git a/lib/main.dart b/lib/main.dart
+index 5adde57..939b7f2 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -12,6 +12,7 @@ import 'screens/audiobook_screen.dart';
+ import 'screens/music_screen.dart';
+ 
+ import 'screens/stremio_catalog_screen.dart';
++import 'screens/stremio_live_tv_screen.dart';
+ import 'screens/update_dialog.dart';
+ import 'services/stream_service.dart';
+ import 'services/settings_service.dart';
+@@ -435,7 +436,8 @@ class MainShell extends StatefulWidget {
+   State<MainShell> createState() => MainShellState();
+ }
+ 
+-class MainShellState extends State<MainShell> with SingleTickerProviderStateMixin {
++class MainShellState extends State<MainShell>
++    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+   static MainShellState? instance;
+ 
+   /// Notifier for triggering a search from deep links.
+@@ -450,6 +452,7 @@ class MainShellState extends State<MainShell> with SingleTickerProviderStateMixi
+   @override
+   void initState() {
+     super.initState();
++    WidgetsBinding.instance.addObserver(this);
+     instance = this;
+     _enterCtrl = AnimationController(duration: const Duration(milliseconds: 700), vsync: this);
+     _navSlide = CurvedAnimation(parent: _enterCtrl, curve: const Interval(0.0, 0.6, curve: Curves.easeOutCubic));
+@@ -463,11 +466,19 @@ class MainShellState extends State<MainShell> with SingleTickerProviderStateMixi
+ 
+   @override
+   void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
+     if (instance == this) instance = null;
+     _enterCtrl.dispose();
+     super.dispose();
+   }
+ 
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    if (state == AppLifecycleState.resumed) {
++      SettingsService.instance.refreshLocalIpForQr();
++    }
++  }
++
+   /// Switch to the Search tab and trigger a search with the given query.
+   void switchToSearch(String query) {
+     setState(() => _selectedNavIndex = 1);
+@@ -478,6 +489,7 @@ class MainShellState extends State<MainShell> with SingleTickerProviderStateMixi
+     _NavItem(icon: Icons.home_rounded, label: 'Home'),
+     _NavItem(icon: Icons.search_rounded, label: 'Search'),
+     _NavItem(icon: Icons.extension_rounded, label: 'Catalogs'),
++    _NavItem(icon: Icons.live_tv_rounded, label: 'Live TV'),
+     _NavItem(icon: Icons.headphones_rounded, label: 'Audiobooks'),
+     _NavItem(icon: Icons.music_note_rounded, label: 'Music'),
+     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
+@@ -492,10 +504,15 @@ class MainShellState extends State<MainShell> with SingleTickerProviderStateMixi
+       case 2:
+         return const StremioCatalogScreen();
+       case 3:
+-        return const AudiobookScreen();
++        return const StremioLiveTvScreen(
++          tvChannelsOnly: true,
++          showCatalogBackButton: false,
++        );
+       case 4:
+-        return const MusicScreen();
++        return const AudiobookScreen();
+       case 5:
++        return const MusicScreen();
++      case 6:
+         return const SettingsScreen();
+       default:
+         return const HomeScreen(category: 'home');
+diff --git a/lib/models/movie.dart b/lib/models/movie.dart
+new file mode 100644
+index 0000000..74ccb80
+--- /dev/null
++++ b/lib/models/movie.dart
+@@ -0,0 +1,92 @@
++class Movie {
++  final int id;
++  final String? imdbId;
++  final String title;
++  final String posterPath;
++  final String backdropPath;
++  final String logoPath;
++  final double voteAverage;
++  final String releaseDate;
++  final String overview;
++  final List<String> genres;
++  final int runtime;
++  final List<String> screenshots;
++  final String mediaType; // 'movie' or 'tv'
++  final int numberOfSeasons;
++
++  Movie({
++    required this.id,
++    this.imdbId,
++    required this.title,
++    required this.posterPath,
++    required this.backdropPath,
++    this.logoPath = '',
++    required this.voteAverage,
++    required this.releaseDate,
++    this.overview = '',
++    this.genres = const [],
++    this.runtime = 0,
++    this.screenshots = const [],
++    this.mediaType = 'movie',
++    this.numberOfSeasons = 0,
++  });
++
++  factory Movie.fromJson(Map<String, dynamic> json, {String? mediaType}) {
++    // TMDB uses imdb_id for movies, but for TV it might be in external_ids
++    String? imdbId = json['imdb_id'];
++    if (imdbId == null && json['external_ids'] != null) {
++      imdbId = json['external_ids']['imdb_id'];
++    }
++
++    return Movie(
++      id: json['id'] ?? 0,
++      imdbId: imdbId,
++      title: json['title'] ?? json['name'] ?? 'Unknown',
++      posterPath: json['poster_path'] ?? '',
++      backdropPath: json['backdrop_path'] ?? '',
++      logoPath: '', 
++      voteAverage: (json['vote_average'] as num?)?.toDouble() ?? 0.0,
++      releaseDate: json['release_date'] ?? json['first_air_date'] ?? '',
++      overview: json['overview'] ?? '',
++      genres: (json['genres'] as List?)?.map((e) => e['name'] as String).toList() ?? [],
++      runtime: json['runtime'] ?? 0,
++      screenshots: [],
++      mediaType: mediaType ?? json['media_type'] ?? (json['title'] != null ? 'movie' : 'tv'),
++      numberOfSeasons: json['number_of_seasons'] ?? 0,
++    );
++  }
++
++  Movie copyWith({
++    int? id,
++    String? imdbId,
++    String? title,
++    String? posterPath,
++    String? backdropPath,
++    String? logoPath,
++    double? voteAverage,
++    String? releaseDate,
++    String? overview,
++    List<String>? genres,
++    int? runtime,
++    List<String>? screenshots,
++    String? mediaType,
++    int? numberOfSeasons,
++  }) {
++    return Movie(
++      id: id ?? this.id,
++      imdbId: imdbId ?? this.imdbId,
++      title: title ?? this.title,
++      posterPath: posterPath ?? this.posterPath,
++      backdropPath: backdropPath ?? this.backdropPath,
++      logoPath: logoPath ?? this.logoPath,
++      voteAverage: voteAverage ?? this.voteAverage,
++      releaseDate: releaseDate ?? this.releaseDate,
++      overview: overview ?? this.overview,
++      genres: genres ?? this.genres,
++      runtime: runtime ?? this.runtime,
++      screenshots: screenshots ?? this.screenshots,
++      mediaType: mediaType ?? this.mediaType,
++      numberOfSeasons: numberOfSeasons ?? this.numberOfSeasons,
++    );
++  }
++}
+diff --git a/lib/screens/epg_channel_mapping_screen.dart b/lib/screens/epg_channel_mapping_screen.dart
+new file mode 100644
+index 0000000..da0504b
+--- /dev/null
++++ b/lib/screens/epg_channel_mapping_screen.dart
+@@ -0,0 +1,475 @@
++import 'package:flutter/material.dart';
++import '../services/settings_service.dart';
++import '../api/stremio_service.dart';
++import '../services/xmltv_epg_service.dart';
++import '../utils/app_theme.dart';
++
++class _LiveChannel {
++  final String addonBaseUrl;
++  final String stremioId;
++  final String name;
++
++  const _LiveChannel({
++    required this.addonBaseUrl,
++    required this.stremioId,
++    required this.name,
++  });
++
++  String get mapKey => SettingsService.xmltvChannelMapKeyFor(
++        addonBaseUrl: addonBaseUrl,
++        stremioChannelId: stremioId,
++      );
++}
++
++/// Map XMLTV `<programme channel="...">` ids to Stremio live TV channels for the TV Guide.
++class EpgChannelMappingScreen extends StatefulWidget {
++  const EpgChannelMappingScreen({super.key});
++
++  @override
++  State<EpgChannelMappingScreen> createState() => _EpgChannelMappingScreenState();
++}
++
++class _EpgChannelMappingScreenState extends State<EpgChannelMappingScreen> {
++  final StremioService _stremio = StremioService();
++  final SettingsService _settings = SettingsService.instance;
++
++  bool _loading = true;
++  String? _error;
++  List<_LiveChannel> _channels = [];
++  Map<String, String> _map = {};
++  List<String> _epgIds = [];
++  bool _epgLoaded = false;
++
++  @override
++  void initState() {
++    super.initState();
++    _load();
++  }
++
++  Future<void> _load() async {
++    setState(() {
++      _loading = true;
++      _error = null;
++    });
++    try {
++      _map = _settings.getXmltvChannelMap();
++
++      final epgUrl = _settings.getXmltvEpgUrl();
++      final epg = XmltvEpgService.instance;
++      if (epgUrl != null && epgUrl.isNotEmpty) {
++        _epgLoaded = await epg.loadFromUrl(epgUrl);
++        _epgIds = epg.loadedChannelIds;
++      } else {
++        epg.clear();
++        _epgLoaded = false;
++        _epgIds = [];
++      }
++
++      _channels = await _loadLiveTvChannels(_stremio);
++      if (mounted) {
++        setState(() {
++          _loading = false;
++        });
++      }
++    } catch (e) {
++      if (mounted) {
++        setState(() {
++          _loading = false;
++          _error = e.toString();
++        });
++      }
++    }
++  }
++
++  static Future<List<_LiveChannel>> _loadLiveTvChannels(StremioService stremio) async {
++    var catalogs = await stremio.getAllCatalogs();
++    catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
++
++    final List<_LiveChannel> out = [];
++    final seen = <String>{};
++    const maxItems = 200;
++
++    for (final cat in catalogs) {
++      if (out.length >= maxItems) break;
++      final batch = await stremio.getCatalog(
++        baseUrl: cat['addonBaseUrl'],
++        type: cat['catalogType'],
++        id: cat['catalogId'],
++      );
++      for (final m in batch) {
++        if (out.length >= maxItems) break;
++        final base = cat['addonBaseUrl']?.toString() ?? '';
++        final id = m['id']?.toString() ?? '';
++        if (base.isEmpty || id.isEmpty) continue;
++        final key = '$base|$id';
++        if (!seen.add(key)) continue;
++        final name = m['name']?.toString() ?? 'Channel';
++        out.add(_LiveChannel(addonBaseUrl: base, stremioId: id, name: name));
++      }
++    }
++    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
++    return out;
++  }
++
++  Future<void> _saveMapping(_LiveChannel ch, String epgId) async {
++    final trimmed = epgId.trim();
++    await _settings.setXmltvChannelMapping(
++      addonBaseUrl: ch.addonBaseUrl,
++      stremioChannelId: ch.stremioId,
++      epgChannelId: trimmed,
++    );
++    _map = _settings.getXmltvChannelMap();
++    if (mounted) setState(() {});
++  }
++
++  Future<void> _openEpgPickerSheet(BuildContext sheetCtx, TextEditingController target) async {
++    final epg = XmltvEpgService.instance;
++    await showModalBottomSheet<void>(
++      context: sheetCtx,
++      backgroundColor: AppTheme.bgCard,
++      isScrollControlled: true,
++      shape: const RoundedRectangleBorder(
++        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
++      ),
++      builder: (pickerCtx) {
++        return DraggableScrollableSheet(
++          expand: false,
++          initialChildSize: 0.72,
++          minChildSize: 0.35,
++          maxChildSize: 0.92,
++          builder: (_, scrollController) {
++            var filter = '';
++            return StatefulBuilder(
++              builder: (pickerCtx, setPicker) {
++                final q = filter.toLowerCase().trim();
++                final ids = _epgIds.where((id) {
++                  if (q.isEmpty) return true;
++                  final dn = epg.displayNameForChannelId(id).toLowerCase();
++                  return dn.contains(q) || id.toLowerCase().contains(q);
++                }).toList();
++                return Padding(
++                  padding: EdgeInsets.only(
++                    top: 12,
++                    left: 16,
++                    right: 16,
++                    bottom: MediaQuery.of(pickerCtx).padding.bottom + 8,
++                  ),
++                  child: Column(
++                    crossAxisAlignment: CrossAxisAlignment.stretch,
++                    children: [
++                      Center(
++                        child: Container(
++                          width: 40,
++                          height: 4,
++                          decoration: BoxDecoration(
++                            color: Colors.white24,
++                            borderRadius: BorderRadius.circular(2),
++                          ),
++                        ),
++                      ),
++                      const SizedBox(height: 12),
++                      const Text(
++                        'EPG channels',
++                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700),
++                      ),
++                      const SizedBox(height: 12),
++                      TextField(
++                        autofocus: true,
++                        style: const TextStyle(color: Colors.white),
++                        decoration: InputDecoration(
++                          hintText: 'Search by name or id',
++                          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
++                          prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
++                          filled: true,
++                          fillColor: Colors.white.withValues(alpha: 0.06),
++                          border: OutlineInputBorder(
++                            borderRadius: BorderRadius.circular(12),
++                            borderSide: BorderSide.none,
++                          ),
++                        ),
++                        onChanged: (v) => setPicker(() => filter = v),
++                      ),
++                      const SizedBox(height: 8),
++                      Expanded(
++                        child: ids.isEmpty
++                            ? Center(
++                                child: Text(
++                                  'No matches',
++                                  style: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
++                                ),
++                              )
++                            : ListView.separated(
++                                controller: scrollController,
++                                itemCount: ids.length,
++                                separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white10),
++                                itemBuilder: (_, i) {
++                                  final id = ids[i];
++                                  final label = epg.displayNameForChannelId(id);
++                                  final showId = label != id;
++                                  return ListTile(
++                                    title: Text(
++                                      label,
++                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
++                                    ),
++                                    subtitle: showId
++                                        ? Text(
++                                            id,
++                                            style: TextStyle(
++                                              color: Colors.white.withValues(alpha: 0.35),
++                                              fontSize: 12,
++                                            ),
++                                          )
++                                        : null,
++                                    onTap: () {
++                                      target.text = id;
++                                      Navigator.pop(pickerCtx);
++                                    },
++                                  );
++                                },
++                              ),
++                      ),
++                    ],
++                  ),
++                );
++              },
++            );
++          },
++        );
++      },
++    );
++  }
++
++  void _openEditor(_LiveChannel ch) {
++    final current = _map[ch.mapKey] ?? '';
++    final controller = TextEditingController(text: current);
++    final norm = XmltvEpgService.normalizeKey(current);
++    String matchedRawId = '';
++    if (norm.isNotEmpty) {
++      for (final id in _epgIds) {
++        if (XmltvEpgService.normalizeKey(id) == norm) {
++          matchedRawId = id;
++          break;
++        }
++      }
++    }
++    if (matchedRawId.isNotEmpty && controller.text != matchedRawId) {
++      controller.text = matchedRawId;
++    }
++
++    showModalBottomSheet<void>(
++      context: context,
++      backgroundColor: AppTheme.bgCard,
++      isScrollControlled: true,
++      shape: const RoundedRectangleBorder(
++        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
++      ),
++      builder: (ctx) {
++        return Padding(
++          padding: EdgeInsets.only(
++            left: 20,
++            right: 20,
++            top: 16,
++            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
++          ),
++          child: StatefulBuilder(
++            builder: (ctx, setModal) {
++              return Column(
++                mainAxisSize: MainAxisSize.min,
++                crossAxisAlignment: CrossAxisAlignment.start,
++                children: [
++                  Text(
++                    ch.name,
++                    style: const TextStyle(
++                      color: Colors.white,
++                      fontSize: 18,
++                      fontWeight: FontWeight.w700,
++                    ),
++                  ),
++                  const SizedBox(height: 4),
++                  Text(
++                    ch.stremioId,
++                    style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
++                  ),
++                  const SizedBox(height: 16),
++                  if (_epgIds.isNotEmpty) ...[
++                    Text(
++                      'Pick from loaded EPG',
++                      style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
++                    ),
++                    const SizedBox(height: 8),
++                    OutlinedButton.icon(
++                      onPressed: () => _openEpgPickerSheet(ctx, controller).then((_) => setModal(() {})),
++                      icon: const Icon(Icons.list_rounded, color: Colors.white70),
++                      label: const Text('Browse & search EPG channels'),
++                      style: OutlinedButton.styleFrom(
++                        foregroundColor: Colors.white,
++                        side: const BorderSide(color: Colors.white24),
++                        minimumSize: const Size.fromHeight(48),
++                      ),
++                    ),
++                    const SizedBox(height: 16),
++                  ],
++                  Text(
++                    _epgIds.isEmpty
++                        ? 'EPG channel id (same as programme channel= in your XMLTV file)'
++                        : 'Or type / paste EPG channel id',
++                    style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
++                  ),
++                  const SizedBox(height: 8),
++                  TextField(
++                    controller: controller,
++                    style: const TextStyle(color: Colors.white),
++                    onChanged: (_) => setModal(() {}),
++                    decoration: InputDecoration(
++                      hintText: 'e.g. BBCOne.uk',
++                      hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.2)),
++                      filled: true,
++                      fillColor: Colors.white.withValues(alpha: 0.06),
++                      border: OutlineInputBorder(
++                        borderRadius: BorderRadius.circular(12),
++                        borderSide: BorderSide.none,
++                      ),
++                    ),
++                  ),
++                  const SizedBox(height: 20),
++                  Row(
++                    children: [
++                      Expanded(
++                        child: OutlinedButton(
++                          onPressed: () async {
++                            Navigator.pop(ctx);
++                            await _saveMapping(ch, '');
++                            if (mounted) {
++                              ScaffoldMessenger.of(context).showSnackBar(
++                                SnackBar(content: Text('Cleared mapping for ${ch.name}')),
++                              );
++                            }
++                          },
++                          style: OutlinedButton.styleFrom(
++                            foregroundColor: Colors.white54,
++                            side: const BorderSide(color: Colors.white24),
++                            padding: const EdgeInsets.symmetric(vertical: 14),
++                          ),
++                          child: const Text('Clear'),
++                        ),
++                      ),
++                      const SizedBox(width: 12),
++                      Expanded(
++                        flex: 2,
++                        child: ElevatedButton(
++                          onPressed: () async {
++                            Navigator.pop(ctx);
++                            await _saveMapping(ch, controller.text);
++                            if (mounted) {
++                              ScaffoldMessenger.of(context).showSnackBar(
++                                const SnackBar(content: Text('EPG mapping saved')),
++                              );
++                            }
++                          },
++                          style: ElevatedButton.styleFrom(
++                            backgroundColor: AppTheme.primaryColor,
++                            foregroundColor: Colors.white,
++                            padding: const EdgeInsets.symmetric(vertical: 14),
++                          ),
++                          child: const Text('Save'),
++                        ),
++                      ),
++                    ],
++                  ),
++                ],
++              );
++            },
++          ),
++        );
++      },
++    );
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      backgroundColor: AppTheme.bgDark,
++      appBar: AppBar(
++        backgroundColor: Colors.transparent,
++        elevation: 0,
++        title: const Text('EPG channel mapping'),
++        actions: [
++          IconButton(
++            tooltip: 'Reload',
++            icon: const Icon(Icons.refresh_rounded),
++            onPressed: _loading ? null : _load,
++          ),
++        ],
++      ),
++      body: _loading
++          ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor))
++          : _error != null
++              ? Center(child: Padding(
++                  padding: const EdgeInsets.all(24),
++                  child: Text(_error!, style: const TextStyle(color: Colors.white54), textAlign: TextAlign.center),
++                ))
++              : Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  children: [
++                    Padding(
++                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
++                      child: Text(
++                        _epgLoaded
++                            ? 'Tap a channel, then use Browse & search to pick from your XMLTV file (by display name or id).'
++                            : 'Set an XMLTV URL in Settings first to browse EPG channels. You can still type ids manually.',
++                        style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 13, height: 1.35),
++                      ),
++                    ),
++                    Expanded(
++                      child: _channels.isEmpty
++                          ? Center(
++                              child: Text(
++                                'No live TV channels found. Install a Stremio live TV addon.',
++                                style: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
++                              ),
++                            )
++                          : ListView.separated(
++                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
++                              itemCount: _channels.length,
++                              separatorBuilder: (_, __) => const SizedBox(height: 6),
++                              itemBuilder: (context, i) {
++                                final ch = _channels[i];
++                                final mapped = _map[ch.mapKey];
++                                final epg = XmltvEpgService.instance;
++                                late final String subtitleText;
++                                if (mapped == null || mapped.isEmpty) {
++                                  subtitleText = 'Auto-match or not set';
++                                } else {
++                                  final label = epg.displayNameForChannelId(mapped);
++                                  subtitleText =
++                                      label != mapped ? 'EPG: $label ($mapped)' : 'EPG: $mapped';
++                                }
++                                return Material(
++                                  color: AppTheme.bgCard,
++                                  borderRadius: BorderRadius.circular(12),
++                                  child: ListTile(
++                                    title: Text(
++                                      ch.name,
++                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
++                                    ),
++                                    subtitle: Text(
++                                      subtitleText,
++                                      style: TextStyle(
++                                        color: mapped != null && mapped.isNotEmpty
++                                            ? Colors.greenAccent.withValues(alpha: 0.8)
++                                            : Colors.white38,
++                                        fontSize: 12,
++                                      ),
++                                    ),
++                                    trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white24),
++                                    onTap: () => _openEditor(ch),
++                                  ),
++                                );
++                              },
++                            ),
++                    ),
++                  ],
++                ),
++    );
++  }
++}
+diff --git a/lib/screens/settings_screen.dart b/lib/screens/settings_screen.dart
+index 130b920..fd7d475 100644
+--- a/lib/screens/settings_screen.dart
++++ b/lib/screens/settings_screen.dart
+@@ -3,6 +3,8 @@ import 'package:dpad/dpad.dart';
+ import 'package:qr_flutter/qr_flutter.dart';
+ import '../constants.dart';
+ import '../services/settings_service.dart';
++import 'epg_channel_mapping_screen.dart';
++import 'stremio_tv_guide_screen.dart';
+ 
+ class SettingsScreen extends StatefulWidget {
+   const SettingsScreen({super.key});
+@@ -13,16 +15,20 @@ class SettingsScreen extends StatefulWidget {
+ 
+ class _SettingsScreenState extends State<SettingsScreen> {
+   final _settings = SettingsService.instance;
++  late final TextEditingController _xmltvEpgUrlController;
+ 
+   @override
+   void initState() {
+     super.initState();
+-    _settings.startServer();
++    _xmltvEpgUrlController =
++        TextEditingController(text: _settings.getXmltvEpgUrl() ?? '');
++    _settings.startServer().then((_) => _settings.refreshLocalIpForQr());
+     _settings.addListener(_onSettingsChanged);
+   }
+ 
+   @override
+   void dispose() {
++    _xmltvEpgUrlController.dispose();
+     _settings.removeListener(_onSettingsChanged);
+     super.dispose();
+   }
+@@ -31,6 +37,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
+     if (mounted) setState(() {});
+   }
+ 
++  Future<void> _saveXmltvEpgUrl() async {
++    final url = _xmltvEpgUrlController.text.trim();
++    await _settings.setXmltvEpgUrl(url.isEmpty ? null : url);
++    if (mounted) {
++      ScaffoldMessenger.of(context).showSnackBar(
++        SnackBar(
++          content: Text(url.isEmpty ? 'EPG URL cleared' : 'TV Guide EPG URL saved'),
++        ),
++      );
++    }
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     final url = _settings.settingsUrl;
+@@ -54,7 +72,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
+               ),
+               const SizedBox(height: 8),
+               const Text(
+-                'Scan with your phone to change settings',
++                'Scan with your phone (same Wi‑Fi). URL uses this device’s LAN IP.',
+                 style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+               ),
+               const SizedBox(height: 24),
+@@ -186,6 +204,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
+                         ? 'None — add via phone'
+                         : '${_settings.stremioAddons.length} addon${_settings.stremioAddons.length != 1 ? 's' : ''} configured',
+                   ),
++                  const SizedBox(height: 24),
++                  const Text(
++                    'Live TV — TV Guide (XMLTV)',
++                    style: TextStyle(
++                      color: AppColors.purpleLight,
++                      fontSize: 14,
++                      fontWeight: FontWeight.w600,
++                    ),
++                  ),
++                  const SizedBox(height: 8),
++                  TextField(
++                    controller: _xmltvEpgUrlController,
++                    style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
++                    decoration: const InputDecoration(
++                      hintText: 'https://example.com/epg.xml or .gz',
++                      hintStyle: TextStyle(color: AppColors.textDim),
++                      filled: true,
++                      fillColor: AppColors.surface,
++                      border: OutlineInputBorder(),
++                    ),
++                    onSubmitted: (_) => _saveXmltvEpgUrl(),
++                  ),
++                  const SizedBox(height: 8),
++                  Row(
++                    children: [
++                      ElevatedButton(
++                        onPressed: _saveXmltvEpgUrl,
++                        child: const Text('Save EPG URL'),
++                      ),
++                      const SizedBox(width: 12),
++                      OutlinedButton(
++                        onPressed: () async {
++                          await _settings.setXmltvEpgUrl(null);
++                          _xmltvEpgUrlController.clear();
++                          if (mounted) {
++                            ScaffoldMessenger.of(context).showSnackBar(
++                              const SnackBar(content: Text('EPG URL cleared')),
++                            );
++                          }
++                        },
++                        child: const Text('Clear'),
++                      ),
++                    ],
++                  ),
++                  const SizedBox(height: 12),
++                  Row(
++                    children: [
++                      ElevatedButton(
++                        onPressed: () {
++                          Navigator.push(
++                            context,
++                            MaterialPageRoute(
++                              builder: (_) => const StremioTvGuideScreen(),
++                            ),
++                          );
++                        },
++                        child: const Text('Open TV Guide'),
++                      ),
++                      const SizedBox(width: 12),
++                      OutlinedButton(
++                        onPressed: () {
++                          Navigator.push(
++                            context,
++                            MaterialPageRoute(
++                              builder: (_) => const EpgChannelMappingScreen(),
++                            ),
++                          );
++                        },
++                        child: const Text('Match EPG channels'),
++                      ),
++                    ],
++                  ),
+                 ],
+               ),
+             ),
+diff --git a/lib/screens/stremio_live_tv_screen.dart b/lib/screens/stremio_live_tv_screen.dart
+new file mode 100644
+index 0000000..110bd25
+--- /dev/null
++++ b/lib/screens/stremio_live_tv_screen.dart
+@@ -0,0 +1,1641 @@
++import 'dart:async';
++
++import 'package:flutter/foundation.dart';
++import 'package:flutter/material.dart';
++import 'package:cached_network_image/cached_network_image.dart';
++import 'package:shimmer/shimmer.dart';
++import '../api/stremio_service.dart';
++import '../api/tmdb_api.dart';
++import '../models/movie.dart';
++import '../services/xmltv_epg_service.dart';
++import '../services/settings_service.dart';
++import '../utils/app_theme.dart';
++import '../utils/stremio_tv_schedule.dart';
++import 'stremio_tv_guide_screen.dart';
++
++/// Full-screen catalog browser for Stremio addons.
++/// Shows all catalogs from installed addons, supports genre filtering,
++/// search within catalogs, and pagination.
++class StremioLiveTvScreen extends StatefulWidget {
++  /// If set, opens directly to this specific catalog.
++  final Map<String, dynamic>? initialCatalog;
++  /// If set, pre-fills the search field.
++  final String? initialSearch;
++  /// Only show catalogs whose Stremio type is `channel` (live TV from addons).
++  final bool tvChannelsOnly;
++  /// Set false when this screen is a root tab (no route to pop).
++  final bool showCatalogBackButton;
++  /// When this value changes (e.g. app resumed), TV channel EPG cache is cleared and refetched.
++  final ValueListenable<int>? tvGuideRefreshListenable;
++
++  const StremioLiveTvScreen({
++    super.key,
++    this.initialCatalog,
++    this.initialSearch,
++    this.tvChannelsOnly = false,
++    this.showCatalogBackButton = true,
++    this.tvGuideRefreshListenable,
++  });
++
++  @override
++  State<StremioLiveTvScreen> createState() => _StremioLiveTvScreenState();
++}
++
++class _StremioLiveTvScreenState extends State<StremioLiveTvScreen> {
++  final StremioService _stremio = StremioService();
++  final ScrollController _scrollController = ScrollController();
++  final TextEditingController _searchController = TextEditingController();
++
++  List<Map<String, dynamic>> _allCatalogs = [];
++  Map<String, dynamic>? _selectedCatalog;
++  List<Map<String, dynamic>> _items = [];
++  bool _isLoading = true;
++  bool _isLoadingMore = false;
++  bool _hasMore = true;
++  int _skip = 0;
++  String? _selectedGenre;
++  String _searchQuery = '';
++  String _filterType = 'all'; // 'all', 'movie', 'series'
++
++  /// Per-channel "now playing" for TV Channels tab (key: addon|type|id).
++  /// Missing key = not loaded yet; `null` value = loaded, no programme in the current window.
++  final Map<String, TvScheduleSlot?> _nowPlayingByKey = {};
++  Timer? _nowPlayingTicker;
++  int _nowPlayingFetchGen = 0;
++  Timer? _lazyEpgDebounce;
++  int _lazyEpgSession = 0;
++  int _lazyEpgPreparedSession = -1;
++  Map<String, String> _lazyEpgChannelMap = {};
++
++  @override
++  void initState() {
++    super.initState();
++    _scrollController.addListener(_onScroll);
++    widget.tvGuideRefreshListenable?.addListener(_onTvGuideRefreshSignal);
++    if (widget.initialSearch != null) {
++      _searchController.text = widget.initialSearch!;
++      _searchQuery = widget.initialSearch!;
++    }
++    _loadCatalogs();
++    if (widget.tvChannelsOnly) {
++      _nowPlayingTicker = Timer.periodic(const Duration(seconds: 5), (_) {
++        if (mounted && _nowPlayingByKey.isNotEmpty) setState(() {});
++      });
++    }
++  }
++
++  @override
++  void didUpdateWidget(StremioLiveTvScreen oldWidget) {
++    super.didUpdateWidget(oldWidget);
++    if (oldWidget.tvGuideRefreshListenable != widget.tvGuideRefreshListenable) {
++      oldWidget.tvGuideRefreshListenable?.removeListener(_onTvGuideRefreshSignal);
++      widget.tvGuideRefreshListenable?.addListener(_onTvGuideRefreshSignal);
++    }
++  }
++
++  void _onTvGuideRefreshSignal() {
++    if (!widget.tvChannelsOnly || !mounted) return;
++    setState(() {
++      _nowPlayingByKey.clear();
++      _nowPlayingFetchGen++;
++      _lazyEpgSession++;
++      _lazyEpgPreparedSession = -1;
++    });
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (mounted) _scheduleLazyNowPlayingPrefetch();
++    });
++  }
++
++  @override
++  void dispose() {
++    widget.tvGuideRefreshListenable?.removeListener(_onTvGuideRefreshSignal);
++    _lazyEpgDebounce?.cancel();
++    _nowPlayingTicker?.cancel();
++    _scrollController.dispose();
++    _searchController.dispose();
++    super.dispose();
++  }
++
++  static String _channelRowKey(Map<String, dynamic> item, String catalogType) {
++    final base = item['_addonBaseUrl']?.toString() ?? '';
++    final id = item['id']?.toString() ?? '';
++    final type = item['type']?.toString() ?? catalogType;
++    return '$base|$type|$id';
++  }
++
++  /// Same cross-axis layout math as [_buildContentGrid] (for visible-index range).
++  ({int crossAxisCount, double aspectRatio}) _gridLayoutForItems(double width) {
++    final shape = _items.firstOrNull?['posterShape']?.toString() ?? 'poster';
++    final double aspectRatio;
++    final int crossAxisCount;
++
++    if (shape == 'landscape') {
++      aspectRatio = widget.tvChannelsOnly ? 16 / 11.2 : 16 / 9;
++      crossAxisCount = width > 1200 ? 5 : (width > 900 ? 4 : (width > 600 ? 3 : 2));
++    } else if (shape == 'square') {
++      aspectRatio = 1.0;
++      crossAxisCount = width > 1200 ? 6 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
++    } else {
++      aspectRatio = 2 / 3;
++      crossAxisCount = width > 1200 ? 7 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
++    }
++    return (crossAxisCount: crossAxisCount, aspectRatio: aspectRatio);
++  }
++
++  /// Approximate grid indices currently visible (plus buffer rows) for lazy EPG fetch.
++  ({int start, int end})? _visibleItemIndexRange({
++    required int crossAxisCount,
++    required double aspectRatio,
++  }) {
++    if (!mounted || _items.isEmpty) return null;
++    if (!_scrollController.hasClients) return null;
++    final pos = _scrollController.position;
++    final width = MediaQuery.sizeOf(context).width;
++    const horizontalPadding = 16.0;
++    const crossSpacing = 14.0;
++    const mainSpacing = 14.0;
++    const verticalPadding = 16.0;
++
++    final usableW = width - 2 * horizontalPadding;
++    final childW = (usableW - (crossAxisCount - 1) * crossSpacing) / crossAxisCount;
++    final childH = childW / aspectRatio;
++    final rowStride = childH + mainSpacing;
++    if (rowStride < 1) return null;
++
++    final scrollTop = pos.pixels;
++    final viewportH = pos.viewportDimension;
++    var firstRow = ((scrollTop - verticalPadding) / rowStride).floor();
++    if (firstRow < 0) firstRow = 0;
++    var lastRow = ((scrollTop + viewportH - verticalPadding) / rowStride).ceil();
++    const bufferRows = 2;
++    firstRow = (firstRow - bufferRows).clamp(0, 1 << 20);
++    final maxRow = _items.length <= 0 ? 0 : (_items.length - 1) ~/ crossAxisCount;
++    lastRow = (lastRow + bufferRows).clamp(0, maxRow);
++
++    final start = firstRow * crossAxisCount;
++    final end = ((lastRow + 1) * crossAxisCount - 1).clamp(0, _items.length - 1);
++    if (start > end) return null;
++    return (start: start, end: end);
++  }
++
++  Future<void> _prepareLazyEpgIfNeeded() async {
++    if (_lazyEpgPreparedSession == _lazyEpgSession) return;
++    final session = _lazyEpgSession;
++    final settings = SettingsService.instance;
++    final epgUrl = settings.getXmltvEpgUrl();
++    final map = settings.getXmltvChannelMap();
++    if (!mounted || session != _lazyEpgSession) return;
++    final epg = XmltvEpgService.instance;
++    if (epgUrl != null && epgUrl.isNotEmpty) {
++      await epg.loadFromUrl(epgUrl);
++    } else {
++      epg.clear();
++    }
++    if (!mounted || session != _lazyEpgSession) return;
++    _lazyEpgChannelMap = map;
++    _lazyEpgPreparedSession = session;
++  }
++
++  void _scheduleLazyNowPlayingPrefetch() {
++    if (!widget.tvChannelsOnly) return;
++    _lazyEpgDebounce?.cancel();
++    _lazyEpgDebounce = Timer(const Duration(milliseconds: 140), () {
++      if (!mounted) return;
++      unawaited(_runLazyNowPlayingPrefetch());
++    });
++  }
++
++  Future<void> _runLazyNowPlayingPrefetch() async {
++    if (!widget.tvChannelsOnly || !mounted || _items.isEmpty) return;
++    if (!_scrollController.hasClients) {
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted) _scheduleLazyNowPlayingPrefetch();
++      });
++      return;
++    }
++
++    final gen = _nowPlayingFetchGen;
++    final session = _lazyEpgSession;
++    final width = MediaQuery.sizeOf(context).width;
++    final layout = _gridLayoutForItems(width);
++    final range = _visibleItemIndexRange(
++      crossAxisCount: layout.crossAxisCount,
++      aspectRatio: layout.aspectRatio,
++    );
++    if (range == null) return;
++
++    await _prepareLazyEpgIfNeeded();
++    if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
++
++    final epg = XmltvEpgService.instance;
++    final epgLoaded = epg.isLoaded;
++    final epgMap = _lazyEpgChannelMap;
++    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
++
++    const maxBatch = 30;
++    const concurrency = 6;
++    final toFetch = <Map<String, dynamic>>[];
++    for (var i = range.start; i <= range.end && toFetch.length < maxBatch; i++) {
++      final item = _items[i];
++      final key = _channelRowKey(item, catType);
++      if (_nowPlayingByKey.containsKey(key)) continue;
++      toFetch.add(item);
++    }
++    if (toFetch.isEmpty) return;
++
++    for (var i = 0; i < toFetch.length; i += concurrency) {
++      if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
++      final chunk = toFetch.skip(i).take(concurrency).toList();
++      final updates = <String, TvScheduleSlot?>{};
++      await Future.wait(chunk.map((item) async {
++        final base = item['_addonBaseUrl']?.toString() ?? '';
++        final id = item['id']?.toString() ?? '';
++        if (base.isEmpty || id.isEmpty) return;
++        final type = item['type']?.toString() ?? catType;
++        final key = _channelRowKey(item, catType);
++        try {
++          final meta = await _stremio.getMeta(baseUrl: base, type: type, id: id);
++          if (meta == null) {
++            updates[key] = null;
++            return;
++          }
++          final name = item['name']?.toString() ?? meta['name']?.toString() ?? 'Channel';
++          final mapKey = SettingsService.xmltvChannelMapKeyFor(
++            addonBaseUrl: base,
++            stremioChannelId: id,
++          );
++          final slots = StremioTvSchedule.resolveSlots(
++            meta: meta,
++            channelName: name,
++            stremioId: id,
++            epg: epg,
++            epgLoaded: epgLoaded,
++            epgChannelOverride: epgMap[mapKey],
++            catalogItemTvgId: item['tvgId']?.toString(),
++          );
++          updates[key] = StremioTvSchedule.currentSlot(slots);
++        } catch (_) {
++          updates[key] = null;
++        }
++      }));
++      if (!mounted || gen != _nowPlayingFetchGen || session != _lazyEpgSession) return;
++      setState(() {
++        for (final e in updates.entries) {
++          _nowPlayingByKey[e.key] = e.value;
++        }
++      });
++    }
++  }
++
++  void _onScroll() {
++    if (_scrollController.hasClients &&
++        _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400) {
++      _loadMore();
++    }
++    if (widget.tvChannelsOnly && _items.isNotEmpty) {
++      _scheduleLazyNowPlayingPrefetch();
++    }
++  }
++
++  Future<void> _loadCatalogs() async {
++    var catalogs = await _stremio.getAllCatalogs();
++    if (widget.tvChannelsOnly) {
++      catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
++    }
++    if (!mounted) return;
++    setState(() {
++      _allCatalogs = catalogs;
++      if (widget.initialCatalog != null) {
++        _selectedCatalog = widget.initialCatalog;
++      } else if (catalogs.isNotEmpty) {
++        _selectedCatalog = catalogs.first;
++      }
++      _isLoading = false;
++    });
++    if (_selectedCatalog != null) {
++      _fetchCatalogItems();
++    }
++  }
++
++  List<Map<String, dynamic>> get _filteredCatalogs {
++    if (widget.tvChannelsOnly) return _allCatalogs;
++    if (_filterType == 'all') return _allCatalogs;
++    return _allCatalogs.where((c) => c['catalogType'] == _filterType).toList();
++  }
++
++  Future<void> _fetchCatalogItems() async {
++    if (_selectedCatalog == null) return;
++    setState(() {
++      _isLoading = true;
++      _items = [];
++      _skip = 0;
++      _hasMore = true;
++    });
++
++    final cat = _selectedCatalog!;
++    final results = await _stremio.getCatalog(
++      baseUrl: cat['addonBaseUrl'],
++      type: cat['catalogType'],
++      id: cat['catalogId'],
++      genre: _selectedGenre,
++      search: _searchQuery.isNotEmpty ? _searchQuery : null,
++    );
++
++    // Tag each item with the addon that provided it
++    for (final item in results) {
++      item['_addonBaseUrl'] = cat['addonBaseUrl'];
++      item['_addonName'] = cat['addonName'];
++    }
++
++    if (!mounted) return;
++    setState(() {
++      _items = results;
++      _isLoading = false;
++      _hasMore = results.length >= 100;
++      _skip = results.length;
++    });
++    if (widget.tvChannelsOnly) {
++      _nowPlayingFetchGen++;
++      _lazyEpgSession++;
++      _lazyEpgPreparedSession = -1;
++      setState(() => _nowPlayingByKey.clear());
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted) _scheduleLazyNowPlayingPrefetch();
++      });
++    }
++  }
++
++  Future<void> _loadMore() async {
++    if (_isLoadingMore || !_hasMore || _selectedCatalog == null) return;
++    final cat = _selectedCatalog!;
++    if (cat['supportsSkip'] != true) return;
++
++    setState(() => _isLoadingMore = true);
++    final results = await _stremio.getCatalog(
++      baseUrl: cat['addonBaseUrl'],
++      type: cat['catalogType'],
++      id: cat['catalogId'],
++      genre: _selectedGenre,
++      search: _searchQuery.isNotEmpty ? _searchQuery : null,
++      skip: _skip,
++    );
++    // Tag each item with the addon that provided it
++    for (final item in results) {
++      item['_addonBaseUrl'] = cat['addonBaseUrl'];
++      item['_addonName'] = cat['addonName'];
++    }
++    if (!mounted) return;
++    setState(() {
++      _items.addAll(results);
++      _skip += results.length;
++      _hasMore = results.length >= 100;
++      _isLoadingMore = false;
++    });
++    if (widget.tvChannelsOnly) {
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted) _scheduleLazyNowPlayingPrefetch();
++      });
++    }
++  }
++
++  void _selectCatalog(Map<String, dynamic> catalog) {
++    setState(() {
++      _selectedCatalog = catalog;
++      _selectedGenre = null;
++      _searchQuery = '';
++      _searchController.clear();
++    });
++    _fetchCatalogItems();
++  }
++
++  void _selectGenre(String? genre) {
++    setState(() => _selectedGenre = genre);
++    _fetchCatalogItems();
++  }
++
++  IconData _catalogTypeIcon(Object? type) {
++    final t = type?.toString() ?? '';
++    if (t == 'movie') return Icons.movie_outlined;
++    if (StremioService.isLiveTvCatalogType(t)) return Icons.live_tv_outlined;
++    return Icons.tv_outlined;
++  }
++
++  Color _catalogTypeBadgeBg(Object? type, {bool mobilePicker = false}) {
++    final t = type?.toString() ?? '';
++    final alpha = mobilePicker ? 0.15 : 0.2;
++    if (t == 'series') return Colors.blue.withValues(alpha: alpha);
++    if (StremioService.isLiveTvCatalogType(t)) return Colors.green.withValues(alpha: alpha);
++    return AppTheme.primaryColor.withValues(alpha: alpha);
++  }
++
++  Color _catalogTypeBadgeFg(Object? type) {
++    final t = type?.toString() ?? '';
++    if (t == 'series') return Colors.blue[300]!;
++    if (StremioService.isLiveTvCatalogType(t)) return Colors.greenAccent;
++    return AppTheme.primaryColor;
++  }
++
++  Future<void> _openItem(Map<String, dynamic> item) async {
++    final id = item['id']?.toString() ?? '';
++    final type = item['type']?.toString() ?? 'movie';
++    final name = item['name']?.toString() ?? 'Unknown';
++    final isCustomId = !id.startsWith('tt');
++    
++    // Check if this is a collection by ID prefix
++    final isCollection = id.startsWith('ctmdb.') || type == 'collections';
++
++    // Tag item with addon info from the selected catalog
++    if (_selectedCatalog != null) {
++      item['_addonBaseUrl'] ??= _selectedCatalog!['addonBaseUrl'];
++      item['_addonName'] ??= _selectedCatalog!['addonName'];
++    }
++
++    // If IMDB id → resolve via TMDB
++    if (!isCustomId && !isCollection) {
++      final tmdb = TmdbApi();
++      try {
++        final movie = await tmdb.findByImdbId(id, mediaType: type == 'series' ? 'tv' : 'movie');
++        if (movie != null && mounted) {
++          _navigateToDetails(movie);
++          return;
++        }
++      } catch (_) {}
++    }
++
++    // For non-custom IDs that failed IMDB lookup, try name search
++    if (!isCustomId && !isCollection) {
++      final tmdb = TmdbApi();
++      try {
++        final results = await tmdb.searchMulti(name);
++        if (results.isNotEmpty && mounted) {
++          final match = results.firstWhere(
++            (m) => m.title.toLowerCase() == name.toLowerCase(),
++            orElse: () => results.first,
++          );
++          _navigateToDetails(match);
++          return;
++        }
++      } catch (_) {}
++    }
++
++    // Custom ID, collection, or all lookups failed → use Stremio poster directly
++    if (mounted) {
++      // Update the item type to collections if needed
++      if (isCollection) {
++        item['type'] = 'collections';
++      }
++      
++      final movie = _stremioMetaToMovie(item);
++      _navigateToDetails(movie, stremioItem: item);
++    }
++  }
++
++  Movie _stremioMetaToMovie(Map<String, dynamic> meta) {
++    final id = meta['id']?.toString() ?? '';
++    final type = meta['type']?.toString() ?? 'movie';
++    final imdbId = id.startsWith('tt') ? id : null;
++    final isCollection = id.startsWith('ctmdb.') || type == 'collections';
++    
++    return Movie(
++      id: imdbId != null ? 0 : id.hashCode,
++      imdbId: imdbId,
++      title: meta['name']?.toString() ?? 'Unknown',
++      posterPath: meta['poster']?.toString() ?? '',
++      backdropPath: meta['background']?.toString() ?? meta['poster']?.toString() ?? '',
++      voteAverage: double.tryParse(meta['imdbRating']?.toString() ?? '') ?? 0.0,
++      releaseDate: meta['releaseInfo']?.toString() ?? '',
++      overview: meta['description']?.toString() ?? '',
++      genres: (meta['genres'] as List?)?.cast<String>() ?? [],
++      mediaType: isCollection
++          ? 'collections'
++          : ((type == 'series' || type == 'channel' || type == 'tv') ? 'tv' : 'movie'),
++      numberOfSeasons: 0,
++    );
++  }
++
++  Future<void> _navigateToDetails(Movie movie, {Map<String, dynamic>? stremioItem}) async {
++    if (!mounted) return;
++    if (stremioItem != null) {
++      Navigator.pushNamed(
++        context,
++        '/details',
++        arguments: {
++          'id': movie.id,
++          'media_type': movie.mediaType,
++          'stremio_item': stremioItem,
++        },
++      );
++      return;
++    }
++    Navigator.pushNamed(
++      context,
++      '/details',
++      arguments: {
++        'id': movie.id,
++        'media_type': movie.mediaType,
++      },
++    );
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final width = MediaQuery.of(context).size.width;
++    final isDesktop = width > 900;
++
++    return Scaffold(
++      backgroundColor: AppTheme.bgDark,
++      body: _allCatalogs.isEmpty && !_isLoading
++          ? _buildEmptyState()
++          : isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
++    );
++  }
++
++  Widget _buildEmptyState() {
++    final isChannels = widget.tvChannelsOnly;
++    return Center(
++      child: Column(
++        mainAxisAlignment: MainAxisAlignment.center,
++        children: [
++          Icon(isChannels ? Icons.live_tv_rounded : Icons.extension_off,
++              size: 80, color: Colors.white.withValues(alpha: 0.1)),
++          const SizedBox(height: 16),
++          Text(
++            isChannels ? 'No TV channel catalogs' : 'No catalog addons installed',
++            style: const TextStyle(color: Colors.white38, fontSize: 16),
++          ),
++          const SizedBox(height: 8),
++          Text(
++            isChannels
++                ? 'Install a Stremio addon that provides live TV catalogs (type channel or tv) in Settings'
++                : 'Install Stremio addons in Settings',
++            textAlign: TextAlign.center,
++            style: const TextStyle(color: Colors.white24, fontSize: 13),
++          ),
++        ],
++      ),
++    );
++  }
++
++  // ═══════════════════════════════════════════════════════════════════════════
++  //  DESKTOP LAYOUT
++  // ═══════════════════════════════════════════════════════════════════════════
++
++  Widget _buildDesktopLayout() {
++    return Row(
++      children: [
++        // Left sidebar — catalog list
++        Container(
++          width: 300,
++          decoration: BoxDecoration(
++            gradient: const LinearGradient(
++              begin: Alignment.topCenter,
++              end: Alignment.bottomCenter,
++              colors: [Color(0xFF1A1A2E), Color(0xFF0D0D16)],
++            ),
++            border: Border(right: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
++          ),
++          child: Column(
++            children: [
++              _buildSidebarHeader(),
++              _buildTypeFilter(),
++              Expanded(child: _buildCatalogList()),
++            ],
++          ),
++        ),
++        // Right content
++        Expanded(child: _buildContentArea()),
++      ],
++    );
++  }
++
++  Widget _buildSidebarHeader() {
++    return Container(
++      padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 16, 20, 16),
++      decoration: BoxDecoration(
++        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04))),
++      ),
++      child: Row(
++        children: [
++          if (widget.showCatalogBackButton) ...[
++            Container(
++              decoration: BoxDecoration(
++                color: Colors.white.withValues(alpha: 0.06),
++                borderRadius: BorderRadius.circular(10),
++              ),
++              child: IconButton(
++                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
++                onPressed: () => Navigator.pop(context),
++              ),
++            ),
++            const SizedBox(width: 14),
++          ],
++          Expanded(
++            child: Text(
++              widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
++              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5),
++            ),
++          ),
++          if (widget.tvChannelsOnly)
++            IconButton(
++              tooltip: 'TV Guide',
++              icon: const Icon(Icons.grid_view_rounded, color: AppTheme.primaryColor, size: 22),
++              onPressed: () => Navigator.push(
++                context,
++                MaterialPageRoute(builder: (_) => const StremioTvGuideScreen()),
++              ),
++            ),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildTypeFilter() {
++    if (widget.tvChannelsOnly) return const SizedBox.shrink();
++    return Padding(
++      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
++      child: Row(
++        children: [
++          _buildFilterChip('All', 'all'),
++          const SizedBox(width: 8),
++          _buildFilterChip('Movies', 'movie'),
++          const SizedBox(width: 8),
++          _buildFilterChip('Series', 'series'),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildFilterChip(String label, String type) {
++    final selected = _filterType == type;
++    return Expanded(
++      child: GestureDetector(
++        onTap: () => setState(() => _filterType = type),
++        child: AnimatedContainer(
++          duration: const Duration(milliseconds: 200),
++          padding: const EdgeInsets.symmetric(vertical: 10),
++          decoration: BoxDecoration(
++            color: selected ? AppTheme.primaryColor : Colors.white.withValues(alpha: 0.06),
++            borderRadius: BorderRadius.circular(20),
++          ),
++          child: Text(
++            label,
++            textAlign: TextAlign.center,
++            style: TextStyle(
++              color: selected ? Colors.white : Colors.white54,
++              fontSize: 13,
++              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _buildCatalogList() {
++    final catalogs = _filteredCatalogs;
++    // Group by addon name
++    final Map<String, List<Map<String, dynamic>>> grouped = {};
++    for (final c in catalogs) {
++      final name = c['addonName'] as String;
++      grouped.putIfAbsent(name, () => []).add(c);
++    }
++
++    return ListView(
++      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
++      children: [
++        for (final entry in grouped.entries) ...[
++          Padding(
++            padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
++            child: Row(
++              children: [
++                if ((entry.value.first['addonIcon'] ?? '').toString().isNotEmpty)
++                  ClipRRect(
++                    borderRadius: BorderRadius.circular(4),
++                    child: CachedNetworkImage(
++                      imageUrl: entry.value.first['addonIcon'],
++                      width: 18, height: 18,
++                      errorWidget: (_, _, _) => const Icon(Icons.extension, size: 18, color: Colors.white38),
++                    ),
++                  ),
++                if ((entry.value.first['addonIcon'] ?? '').toString().isNotEmpty)
++                  const SizedBox(width: 8),
++                Expanded(
++                  child: Text(
++                    entry.key,
++                    style: const TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold),
++                    overflow: TextOverflow.ellipsis,
++                  ),
++                ),
++              ],
++            ),
++          ),
++          for (final cat in entry.value)
++            _buildCatalogTile(cat),
++        ],
++      ],
++    );
++  }
++
++  Widget _buildCatalogTile(Map<String, dynamic> cat) {
++    final isSelected = _selectedCatalog != null &&
++        _selectedCatalog!['addonBaseUrl'] == cat['addonBaseUrl'] &&
++        _selectedCatalog!['catalogId'] == cat['catalogId'] &&
++        _selectedCatalog!['catalogType'] == cat['catalogType'];
++
++    return Padding(
++      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
++      child: Material(
++        color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.12) : Colors.transparent,
++        borderRadius: BorderRadius.circular(12),
++        child: InkWell(
++          borderRadius: BorderRadius.circular(12),
++          onTap: () => _selectCatalog(cat),
++          child: Padding(
++            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
++            child: Row(
++              children: [
++                Container(
++                  width: 32,
++                  height: 32,
++                  decoration: BoxDecoration(
++                    color: isSelected
++                        ? AppTheme.primaryColor.withValues(alpha: 0.2)
++                        : Colors.white.withValues(alpha: 0.04),
++                    borderRadius: BorderRadius.circular(8),
++                  ),
++                  child: Icon(
++                    cat['catalogType'] == 'movie'
++                        ? Icons.movie_outlined
++                        : (StremioService.isLiveTvCatalogType(cat['catalogType'])
++                            ? Icons.live_tv_outlined
++                            : Icons.tv_outlined),
++                    size: 16,
++                    color: isSelected ? AppTheme.primaryColor : Colors.white38,
++                  ),
++                ),
++                const SizedBox(width: 12),
++                Expanded(
++                  child: Text(
++                    cat['catalogName'],
++                    style: TextStyle(
++                      color: isSelected ? Colors.white : Colors.white70,
++                      fontSize: 13,
++                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
++                    ),
++                    overflow: TextOverflow.ellipsis,
++                  ),
++                ),
++                Container(
++                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
++                  decoration: BoxDecoration(
++                    color: Colors.white.withValues(alpha: 0.05),
++                    borderRadius: BorderRadius.circular(4),
++                  ),
++                  child: Text(
++                    cat['catalogType'].toString().toUpperCase(),
++                    style: const TextStyle(color: Colors.white38, fontSize: 9),
++                  ),
++                ),
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++
++  // ═══════════════════════════════════════════════════════════════════════════
++  //  MOBILE LAYOUT
++  // ═══════════════════════════════════════════════════════════════════════════
++
++  Widget _buildMobileLayout() {
++    return SafeArea(
++      bottom: false,
++      child: NestedScrollView(
++        headerSliverBuilder: (context, innerBoxIsScrolled) => [
++          // ── App Bar ──
++          SliverToBoxAdapter(
++            child: Padding(
++              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
++              child: Row(
++                children: [
++                  if (widget.showCatalogBackButton) ...[
++                    Container(
++                      decoration: BoxDecoration(
++                        color: Colors.white.withValues(alpha: 0.06),
++                        borderRadius: BorderRadius.circular(12),
++                      ),
++                      child: IconButton(
++                        icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 18),
++                        onPressed: () => Navigator.pop(context),
++                      ),
++                    ),
++                    const SizedBox(width: 14),
++                  ],
++                  Expanded(
++                    child: Column(
++                      crossAxisAlignment: CrossAxisAlignment.start,
++                      children: [
++                        Text(
++                          widget.tvChannelsOnly ? 'TV Channels' : 'Catalogs',
++                          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
++                        ),
++                        if (_selectedCatalog != null)
++                          Text(
++                            '${_selectedCatalog!['addonName']} • ${_selectedCatalog!['catalogName']}',
++                            style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
++                            maxLines: 1,
++                            overflow: TextOverflow.ellipsis,
++                          ),
++                      ],
++                    ),
++                  ),
++                  if (widget.tvChannelsOnly) ...[
++                    Container(
++                      decoration: BoxDecoration(
++                        color: Colors.white.withValues(alpha: 0.06),
++                        borderRadius: BorderRadius.circular(12),
++                      ),
++                      child: IconButton(
++                        tooltip: 'TV Guide',
++                        icon: const Icon(Icons.grid_view_rounded, color: Colors.white70, size: 20),
++                        onPressed: () => Navigator.push(
++                          context,
++                          MaterialPageRoute(builder: (_) => const StremioTvGuideScreen()),
++                        ),
++                      ),
++                    ),
++                    const SizedBox(width: 8),
++                  ],
++                  // Catalog picker button
++                  Container(
++                    decoration: BoxDecoration(
++                      color: AppTheme.primaryColor.withValues(alpha: 0.15),
++                      borderRadius: BorderRadius.circular(12),
++                    ),
++                    child: IconButton(
++                      icon: const Icon(Icons.dashboard_rounded, color: AppTheme.primaryColor, size: 20),
++                      onPressed: _showCatalogPicker,
++                    ),
++                  ),
++                ],
++              ),
++            ),
++          ),
++
++          // ── Type filter chips ──
++          if (!widget.tvChannelsOnly)
++            SliverToBoxAdapter(
++              child: Padding(
++                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
++                child: Row(
++                  children: [
++                    _buildMobileFilterPill('All', 'all'),
++                    const SizedBox(width: 8),
++                    _buildMobileFilterPill('Movies', 'movie'),
++                    const SizedBox(width: 8),
++                    _buildMobileFilterPill('Series', 'series'),
++                  ],
++                ),
++              ),
++            ),
++
++          // ── Quick catalog scroller ──
++          SliverToBoxAdapter(
++            child: _buildMobileCatalogScroller(),
++          ),
++
++          // ── Genre chips ──
++          if (_selectedCatalog != null && (_selectedCatalog!['genres'] as List).isNotEmpty)
++            SliverToBoxAdapter(child: _buildGenreChips()),
++
++          // ── Search bar ──
++          if (_selectedCatalog != null && _selectedCatalog!['supportsSearch'] == true)
++            SliverToBoxAdapter(child: _buildSearchBar()),
++
++          const SliverToBoxAdapter(child: SizedBox(height: 8)),
++        ],
++        body: _buildContentGrid(),
++      ),
++    );
++  }
++
++  Widget _buildMobileFilterPill(String label, String type) {
++    final selected = _filterType == type;
++    return GestureDetector(
++      onTap: () => setState(() => _filterType = type),
++      child: AnimatedContainer(
++        duration: const Duration(milliseconds: 200),
++        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
++        decoration: BoxDecoration(
++          color: selected ? AppTheme.primaryColor : Colors.white.withValues(alpha: 0.06),
++          borderRadius: BorderRadius.circular(20),
++        ),
++        child: Text(
++          label,
++          style: TextStyle(
++            color: selected ? Colors.white : Colors.white54,
++            fontSize: 13,
++            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _buildMobileCatalogScroller() {
++    final catalogs = _filteredCatalogs;
++    if (catalogs.isEmpty) return const SizedBox.shrink();
++
++    // Group catalogs by addon
++    final Map<String, List<Map<String, dynamic>>> grouped = {};
++    for (final c in catalogs) {
++      grouped.putIfAbsent(c['addonName'] as String, () => []).add(c);
++    }
++
++    return Padding(
++      padding: const EdgeInsets.only(top: 14),
++      child: SizedBox(
++        height: 80,
++        child: ListView.separated(
++          scrollDirection: Axis.horizontal,
++          padding: const EdgeInsets.symmetric(horizontal: 16),
++          itemCount: catalogs.length,
++          separatorBuilder: (_, _) => const SizedBox(width: 10),
++          itemBuilder: (context, index) {
++            final cat = catalogs[index];
++            final isSelected = _selectedCatalog != null &&
++                _selectedCatalog!['addonBaseUrl'] == cat['addonBaseUrl'] &&
++                _selectedCatalog!['catalogId'] == cat['catalogId'] &&
++                _selectedCatalog!['catalogType'] == cat['catalogType'];
++            final addonIcon = (cat['addonIcon'] ?? '').toString();
++
++            return GestureDetector(
++              onTap: () => _selectCatalog(cat),
++              child: AnimatedContainer(
++                duration: const Duration(milliseconds: 200),
++                width: 130,
++                padding: const EdgeInsets.all(12),
++                decoration: BoxDecoration(
++                  color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.15) : AppTheme.bgCard,
++                  borderRadius: BorderRadius.circular(14),
++                  border: Border.all(
++                    color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.06),
++                    width: isSelected ? 1.5 : 1,
++                  ),
++                ),
++                child: Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  children: [
++                    Row(
++                      children: [
++                        if (addonIcon.isNotEmpty)
++                          ClipRRect(
++                            borderRadius: BorderRadius.circular(4),
++                            child: CachedNetworkImage(
++                              imageUrl: addonIcon, width: 16, height: 16,
++                              errorWidget: (_, _, _) => Icon(
++                                _catalogTypeIcon(cat['catalogType']),
++                                size: 16, color: Colors.white38,
++                              ),
++                            ),
++                          )
++                        else
++                          Icon(
++                            _catalogTypeIcon(cat['catalogType']),
++                            size: 16, color: isSelected ? AppTheme.primaryColor : Colors.white38,
++                          ),
++                        const Spacer(),
++                        Container(
++                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
++                          decoration: BoxDecoration(
++                            color: _catalogTypeBadgeBg(cat['catalogType']),
++                            borderRadius: BorderRadius.circular(4),
++                          ),
++                          child: Text(
++                            (cat['catalogType'] as String).toUpperCase(),
++                            style: TextStyle(
++                              fontSize: 8,
++                              fontWeight: FontWeight.w700,
++                              color: _catalogTypeBadgeFg(cat['catalogType']),
++                            ),
++                          ),
++                        ),
++                      ],
++                    ),
++                    const Spacer(),
++                    Text(
++                      cat['catalogName'] as String,
++                      style: TextStyle(
++                        color: isSelected ? Colors.white : Colors.white70,
++                        fontSize: 12,
++                        fontWeight: FontWeight.w600,
++                      ),
++                      maxLines: 1,
++                      overflow: TextOverflow.ellipsis,
++                    ),
++                    const SizedBox(height: 2),
++                    Text(
++                      cat['addonName'] as String,
++                      style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 10),
++                      maxLines: 1,
++                      overflow: TextOverflow.ellipsis,
++                    ),
++                  ],
++                ),
++              ),
++            );
++          },
++        ),
++      ),
++    );
++  }
++
++  void _showCatalogPicker() {
++    final catalogs = _filteredCatalogs;
++    final Map<String, List<Map<String, dynamic>>> grouped = {};
++    for (final c in catalogs) {
++      grouped.putIfAbsent(c['addonName'] as String, () => []).add(c);
++    }
++
++    showModalBottomSheet(
++      context: context,
++      backgroundColor: AppTheme.bgDark,
++      isScrollControlled: true,
++      shape: const RoundedRectangleBorder(
++        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
++      ),
++      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
++      builder: (ctx) => Column(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          Container(
++            margin: const EdgeInsets.only(top: 10),
++            width: 36, height: 4,
++            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
++          ),
++          Padding(
++            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
++            child: Row(
++              children: [
++                const Icon(Icons.dashboard_rounded, color: AppTheme.primaryColor, size: 22),
++                const SizedBox(width: 10),
++                const Text('All Catalogs', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
++                const Spacer(),
++                Text('${catalogs.length}', style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 13)),
++              ],
++            ),
++          ),
++          const Divider(color: Colors.white10, height: 1),
++          Expanded(
++            child: ListView(
++              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
++              children: [
++                for (final entry in grouped.entries) ...[
++                  Padding(
++                    padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
++                    child: Row(
++                      children: [
++                        if ((entry.value.first['addonIcon'] ?? '').toString().isNotEmpty) ...[
++                          ClipRRect(
++                            borderRadius: BorderRadius.circular(5),
++                            child: CachedNetworkImage(
++                              imageUrl: entry.value.first['addonIcon'],
++                              width: 20, height: 20,
++                              errorWidget: (_, _, _) => const Icon(Icons.extension, size: 20, color: Colors.white38),
++                            ),
++                          ),
++                          const SizedBox(width: 8),
++                        ],
++                        Text(entry.key,
++                            style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
++                      ],
++                    ),
++                  ),
++                  for (final cat in entry.value)
++                    _buildCatalogPickerTile(cat, ctx),
++                ],
++              ],
++            ),
++          ),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildCatalogPickerTile(Map<String, dynamic> cat, BuildContext sheetCtx) {
++    final isSelected = _selectedCatalog != null &&
++        _selectedCatalog!['addonBaseUrl'] == cat['addonBaseUrl'] &&
++        _selectedCatalog!['catalogId'] == cat['catalogId'] &&
++        _selectedCatalog!['catalogType'] == cat['catalogType'];
++
++    return Padding(
++      padding: const EdgeInsets.only(bottom: 4),
++      child: Material(
++        color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.12) : Colors.transparent,
++        borderRadius: BorderRadius.circular(12),
++        child: InkWell(
++          borderRadius: BorderRadius.circular(12),
++          onTap: () {
++            Navigator.pop(sheetCtx);
++            _selectCatalog(cat);
++          },
++          child: Padding(
++            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
++            child: Row(
++              children: [
++                Icon(
++                  _catalogTypeIcon(cat['catalogType']),
++                  size: 20,
++                  color: isSelected ? AppTheme.primaryColor : Colors.white38,
++                ),
++                const SizedBox(width: 12),
++                Expanded(
++                  child: Text(
++                    cat['catalogName'] as String,
++                    style: TextStyle(
++                      color: isSelected ? Colors.white : Colors.white70,
++                      fontSize: 14,
++                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
++                    ),
++                  ),
++                ),
++                Container(
++                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
++                  decoration: BoxDecoration(
++                    color: _catalogTypeBadgeBg(cat['catalogType'], mobilePicker: true),
++                    borderRadius: BorderRadius.circular(6),
++                  ),
++                  child: Text(
++                    (cat['catalogType'] as String).toUpperCase(),
++                    style: TextStyle(
++                      fontSize: 9,
++                      fontWeight: FontWeight.w700,
++                      color: _catalogTypeBadgeFg(cat['catalogType']),
++                    ),
++                  ),
++                ),
++                if (isSelected) ...[
++                  const SizedBox(width: 8),
++                  const Icon(Icons.check_circle, color: AppTheme.primaryColor, size: 18),
++                ],
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _buildGenreChips() {
++    final genres = (_selectedCatalog!['genres'] as List).cast<String>();
++    return Padding(
++      padding: const EdgeInsets.only(top: 8),
++      child: SizedBox(
++        height: 36,
++        child: ListView.separated(
++          scrollDirection: Axis.horizontal,
++          padding: const EdgeInsets.symmetric(horizontal: 12),
++          itemCount: genres.length + 1, // +1 for "All" chip
++          separatorBuilder: (_, _) => const SizedBox(width: 6),
++          itemBuilder: (context, index) {
++            if (index == 0) {
++              return _buildGenreChip('All', null);
++            }
++            return _buildGenreChip(genres[index - 1], genres[index - 1]);
++          },
++        ),
++      ),
++    );
++  }
++
++  Widget _buildGenreChip(String label, String? genre) {
++    final isSelected = _selectedGenre == genre;
++    return GestureDetector(
++      onTap: () => _selectGenre(genre),
++      child: AnimatedContainer(
++        duration: const Duration(milliseconds: 200),
++        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
++        decoration: BoxDecoration(
++          color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.06),
++          borderRadius: BorderRadius.circular(20),
++          border: Border.all(color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.5) : Colors.transparent),
++        ),
++        child: Text(
++          label,
++          style: TextStyle(
++            color: isSelected ? Colors.white : Colors.white60,
++            fontSize: 12,
++            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _buildSearchBar() {
++    return Padding(
++      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
++      child: TextField(
++        controller: _searchController,
++        style: const TextStyle(color: Colors.white, fontSize: 14),
++        decoration: InputDecoration(
++          hintText: 'Search in ${_selectedCatalog!['catalogName']}...',
++          hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
++          filled: true,
++          fillColor: AppTheme.bgCard,
++          border: OutlineInputBorder(
++            borderRadius: BorderRadius.circular(12),
++            borderSide: const BorderSide(color: Colors.white10),
++          ),
++          enabledBorder: OutlineInputBorder(
++            borderRadius: BorderRadius.circular(12),
++            borderSide: const BorderSide(color: Colors.white10),
++          ),
++          focusedBorder: OutlineInputBorder(
++            borderRadius: BorderRadius.circular(12),
++            borderSide: const BorderSide(color: AppTheme.primaryColor),
++          ),
++          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
++          suffixIcon: _searchQuery.isNotEmpty
++              ? IconButton(
++                  icon: const Icon(Icons.clear, color: Colors.white38, size: 18),
++                  onPressed: () {
++                    _searchController.clear();
++                    setState(() => _searchQuery = '');
++                    _fetchCatalogItems();
++                  },
++                )
++              : const Icon(Icons.search, color: Colors.white24, size: 18),
++        ),
++        onSubmitted: (query) {
++          setState(() => _searchQuery = query);
++          _fetchCatalogItems();
++        },
++      ),
++    );
++  }
++
++  // ═══════════════════════════════════════════════════════════════════════════
++  //  CONTENT AREA (shared)
++  // ═══════════════════════════════════════════════════════════════════════════
++
++  Widget _buildContentArea() {
++    return Column(
++      children: [
++        if (_selectedCatalog != null) ...[
++          _buildContentHeader(),
++          if (_selectedCatalog!['supportsSearch'] == true) _buildDesktopSearchBar(),
++          if ((_selectedCatalog!['genres'] as List).isNotEmpty) _buildGenreChips(),
++        ],
++        const SizedBox(height: 8),
++        Expanded(child: _buildContentGrid()),
++      ],
++    );
++  }
++
++  Widget _buildContentHeader() {
++    return Container(
++      padding: EdgeInsets.fromLTRB(24, MediaQuery.of(context).padding.top + 16, 24, 12),
++      child: Row(
++        children: [
++          if ((_selectedCatalog!['addonIcon'] ?? '').toString().isNotEmpty)
++            ClipRRect(
++              borderRadius: BorderRadius.circular(8),
++              child: CachedNetworkImage(
++                imageUrl: _selectedCatalog!['addonIcon'],
++                width: 32, height: 32,
++                errorWidget: (_, _, _) => const SizedBox.shrink(),
++              ),
++            ),
++          if ((_selectedCatalog!['addonIcon'] ?? '').toString().isNotEmpty)
++            const SizedBox(width: 14),
++          Expanded(
++            child: Column(
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                Text(
++                  _selectedCatalog!['catalogName'],
++                  style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: -0.5),
++                ),
++                const SizedBox(height: 2),
++                Text(
++                  'from ${_selectedCatalog!['addonName']}',
++                  style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
++                ),
++              ],
++            ),
++          ),
++          if (_items.isNotEmpty)
++            Container(
++              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
++              decoration: BoxDecoration(
++                color: Colors.white.withValues(alpha: 0.06),
++                borderRadius: BorderRadius.circular(16),
++              ),
++              child: Text(
++                '${_items.length} items',
++                style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
++              ),
++            ),
++        ],
++      ),
++    );
++  }
++
++  Widget _buildDesktopSearchBar() {
++    return Padding(
++      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
++      child: TextField(
++        controller: _searchController,
++        style: const TextStyle(color: Colors.white, fontSize: 14),
++        decoration: InputDecoration(
++          hintText: 'Search in ${_selectedCatalog!['catalogName']}...',
++          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25), fontSize: 14),
++          filled: true,
++          fillColor: Colors.white.withValues(alpha: 0.06),
++          border: OutlineInputBorder(
++            borderRadius: BorderRadius.circular(14),
++            borderSide: BorderSide.none,
++          ),
++          contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
++          prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withValues(alpha: 0.3), size: 20),
++          suffixIcon: _searchQuery.isNotEmpty
++              ? IconButton(
++                  icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 18),
++                  onPressed: () {
++                    _searchController.clear();
++                    setState(() => _searchQuery = '');
++                    _fetchCatalogItems();
++                  },
++                )
++              : null,
++        ),
++        onSubmitted: (query) {
++          setState(() => _searchQuery = query);
++          _fetchCatalogItems();
++        },
++      ),
++    );
++  }
++
++  Widget _buildContentGrid() {
++    if (_isLoading && _items.isEmpty) {
++      return _buildShimmerGrid();
++    }
++    if (_items.isEmpty) {
++      return Center(
++        child: Column(
++          mainAxisAlignment: MainAxisAlignment.center,
++          children: [
++            Icon(Icons.movie_filter, size: 60, color: Colors.white.withValues(alpha: 0.08)),
++            const SizedBox(height: 12),
++            Text(
++              _searchQuery.isNotEmpty ? 'No results for "$_searchQuery"' : 'No items in this catalog',
++              style: const TextStyle(color: Colors.white38, fontSize: 14),
++            ),
++          ],
++        ),
++      );
++    }
++
++    final width = MediaQuery.of(context).size.width;
++    final layout = _gridLayoutForItems(width);
++    final crossAxisCount = layout.crossAxisCount;
++    final aspectRatio = layout.aspectRatio;
++
++    final catType = _selectedCatalog?['catalogType']?.toString() ?? 'channel';
++
++    if (widget.tvChannelsOnly) {
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted) _scheduleLazyNowPlayingPrefetch();
++      });
++    }
++
++    return GridView.builder(
++      controller: _scrollController,
++      padding: const EdgeInsets.all(16),
++      physics: const BouncingScrollPhysics(),
++      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
++        crossAxisCount: crossAxisCount,
++        childAspectRatio: aspectRatio,
++        crossAxisSpacing: 14,
++        mainAxisSpacing: 14,
++      ),
++      itemCount: _items.length + (_isLoadingMore ? 3 : 0),
++      itemBuilder: (context, index) {
++        if (index >= _items.length) {
++          return _buildShimmerCard();
++        }
++        final item = _items[index];
++        final rowKey = widget.tvChannelsOnly ? _channelRowKey(item, catType) : null;
++        final nowSlot = widget.tvChannelsOnly && rowKey != null ? _nowPlayingByKey[rowKey] : null;
++        return _StremioCatalogCard(
++          item: item,
++          onTap: () => _openItem(item),
++          nowPlaying: nowSlot,
++          showNowPlayingBar: widget.tvChannelsOnly,
++          nowPlayingLoaded: widget.tvChannelsOnly && rowKey != null && _nowPlayingByKey.containsKey(rowKey),
++        );
++      },
++    );
++  }
++
++  Widget _buildShimmerGrid() {
++    final width = MediaQuery.of(context).size.width;
++    final crossAxisCount = width > 1200 ? 7 : (width > 900 ? 5 : (width > 600 ? 4 : 3));
++
++    return GridView.builder(
++      padding: const EdgeInsets.all(16),
++      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
++        crossAxisCount: crossAxisCount,
++        childAspectRatio: 2 / 3,
++        crossAxisSpacing: 14,
++        mainAxisSpacing: 14,
++      ),
++      itemCount: 20,
++      itemBuilder: (_, _) => _buildShimmerCard(),
++    );
++  }
++
++  Widget _buildShimmerCard() {
++    return Shimmer.fromColors(
++      baseColor: AppTheme.bgCard,
++      highlightColor: Colors.white.withValues(alpha: 0.05),
++      child: Container(
++        decoration: BoxDecoration(
++          color: AppTheme.bgCard,
++          borderRadius: BorderRadius.circular(14),
++        ),
++      ),
++    );
++  }
++}
++
++// ═══════════════════════════════════════════════════════════════════════════════
++//  CATALOG CARD
++// ═══════════════════════════════════════════════════════════════════════════════
++
++class _StremioCatalogCard extends StatelessWidget {
++  final Map<String, dynamic> item;
++  final VoidCallback onTap;
++  final TvScheduleSlot? nowPlaying;
++  final bool showNowPlayingBar;
++  final bool nowPlayingLoaded;
++
++  const _StremioCatalogCard({
++    required this.item,
++    required this.onTap,
++    this.nowPlaying,
++    this.showNowPlayingBar = false,
++    this.nowPlayingLoaded = false,
++  });
++
++  @override
++  Widget build(BuildContext context) {
++    final poster = item['poster']?.toString() ?? '';
++    final name = item['name']?.toString() ?? 'Unknown';
++    final type = item['type']?.toString() ?? '';
++    final rating = item['imdbRating']?.toString() ?? '';
++    final releaseInfo = item['releaseInfo']?.toString() ?? '';
++    final progress = nowPlaying != null ? StremioTvSchedule.progressOf(nowPlaying!) : 0.0;
++
++    return FocusableControl(
++      onTap: onTap,
++      borderRadius: 14,
++      child: Container(
++        clipBehavior: Clip.antiAlias,
++        decoration: BoxDecoration(
++          color: AppTheme.bgCard,
++          borderRadius: BorderRadius.circular(14),
++          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 8, offset: const Offset(0, 4))],
++        ),
++        child: Stack(
++          fit: StackFit.expand,
++          children: [
++            // Poster
++            if (poster.isNotEmpty)
++              CachedNetworkImage(
++                imageUrl: poster,
++                fit: BoxFit.cover,
++                placeholder: (_, _) => Container(color: AppTheme.bgCard),
++                errorWidget: (_, _, _) => Container(
++                  color: AppTheme.bgCard,
++                  child: Center(child: Text(name, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: Colors.white38))),
++                ),
++              )
++            else
++              Container(
++                color: AppTheme.bgCard,
++                child: Center(child: Text(name, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: Colors.white38))),
++              ),
++
++            // Rating badge
++            if (rating.isNotEmpty)
++              Positioned(
++                top: 6, right: 6,
++                child: Container(
++                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
++                  decoration: BoxDecoration(
++                    color: Colors.black.withValues(alpha: 0.7),
++                    borderRadius: BorderRadius.circular(4),
++                  ),
++                  child: Row(
++                    mainAxisSize: MainAxisSize.min,
++                    children: [
++                      const Icon(Icons.star, size: 10, color: Colors.amber),
++                      const SizedBox(width: 2),
++                      Text(rating, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.amber)),
++                    ],
++                  ),
++                ),
++              ),
++
++            // Type badge (hidden on TV channels — cards are always live TV)
++            if (type.isNotEmpty && !showNowPlayingBar)
++              Positioned(
++                top: 6, left: 6,
++                child: Container(
++                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
++                  decoration: BoxDecoration(
++                    color: type == 'series'
++                        ? Colors.blue.withValues(alpha: 0.7)
++                        : AppTheme.primaryColor.withValues(alpha: 0.7),
++                    borderRadius: BorderRadius.circular(4),
++                  ),
++                  child: Text(
++                    type.toUpperCase(),
++                    style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white),
++                  ),
++                ),
++              ),
++
++            // Bottom info
++            Positioned(
++              bottom: 0, left: 0, right: 0,
++              child: Container(
++                padding: EdgeInsets.fromLTRB(8, 10, 8, showNowPlayingBar ? 10 : 8),
++                decoration: BoxDecoration(
++                  gradient: LinearGradient(
++                    begin: Alignment.bottomCenter,
++                    end: Alignment.topCenter,
++                    colors: [Colors.black.withValues(alpha: 0.92), Colors.transparent],
++                  ),
++                ),
++                child: Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  mainAxisSize: MainAxisSize.min,
++                  children: [
++                    Text(
++                      name,
++                      maxLines: showNowPlayingBar ? 1 : 2,
++                      overflow: TextOverflow.ellipsis,
++                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
++                    ),
++                    if (showNowPlayingBar) ...[
++                      const SizedBox(height: 6),
++                      if (nowPlaying != null) ...[
++                        Text(
++                          'Now · ${nowPlaying!.title}',
++                          maxLines: 2,
++                          overflow: TextOverflow.ellipsis,
++                          style: const TextStyle(color: Colors.white70, fontSize: 10, height: 1.2),
++                        ),
++                        const SizedBox(height: 5),
++                        ClipRRect(
++                          borderRadius: BorderRadius.circular(3),
++                          child: LinearProgressIndicator(
++                            value: progress.clamp(0.0, 1.0),
++                            minHeight: 4,
++                            backgroundColor: Colors.white.withValues(alpha: 0.15),
++                            valueColor: AlwaysStoppedAnimation<Color>(
++                              AppTheme.primaryColor.withValues(alpha: 0.95),
++                            ),
++                          ),
++                        ),
++                      ] else if (!nowPlayingLoaded)
++                        Text(
++                          'Loading schedule…',
++                          style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10),
++                        )
++                      else
++                        Text(
++                          'No listing for now',
++                          style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 10),
++                        ),
++                    ] else if (releaseInfo.isNotEmpty)
++                      Text(
++                        releaseInfo,
++                        style: const TextStyle(color: Colors.white54, fontSize: 10),
++                      ),
++                  ],
++                ),
++              ),
++            ),
++
++          ],
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/screens/stremio_tv_guide_screen.dart b/lib/screens/stremio_tv_guide_screen.dart
+new file mode 100644
+index 0000000..83c724e
+--- /dev/null
++++ b/lib/screens/stremio_tv_guide_screen.dart
+@@ -0,0 +1,423 @@
++import 'dart:async';
++import 'dart:ui' show FontFeature;
++
++import 'package:flutter/material.dart';
++import 'package:cached_network_image/cached_network_image.dart';
++import '../services/settings_service.dart';
++import '../api/stremio_service.dart';
++import '../models/movie.dart';
++import '../services/xmltv_epg_service.dart';
++import '../utils/app_theme.dart';
++import '../utils/stremio_tv_schedule.dart';
++import '../utils/tv_guide_refresh.dart';
++import 'epg_channel_mapping_screen.dart';
++
++/// Time-blocked listing for Stremio live-TV channels.
++///
++/// If the addon exposes a `videos` schedule (or `behaviorHints` EPG hints), those
++/// rows are shown. Otherwise each channel gets a simple "Live now" placeholder
++/// for the current window — Stremio does not guarantee EPG in the protocol.
++class StremioTvGuideScreen extends StatefulWidget {
++  const StremioTvGuideScreen({super.key});
++
++  @override
++  State<StremioTvGuideScreen> createState() => _StremioTvGuideScreenState();
++}
++
++class _ChannelRow {
++  final Map<String, dynamic> catalogItem;
++  final String addonBaseUrl;
++  final String metaType;
++  final List<TvScheduleSlot> slots;
++  /// True when slots came from addon meta (videos / behaviorHints), not XMLTV or placeholder.
++  final bool fromStremioSchedule;
++  final String? tvgId;
++
++  _ChannelRow({
++    required this.catalogItem,
++    required this.addonBaseUrl,
++    required this.metaType,
++    required this.slots,
++    this.fromStremioSchedule = false,
++    this.tvgId,
++  });
++
++  String get id => catalogItem['id']?.toString() ?? '';
++  String get name => catalogItem['name']?.toString() ?? 'Channel';
++  String? get poster => catalogItem['poster']?.toString();
++}
++
++class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
++  final StremioService _stremio = StremioService();
++
++  bool _loading = true;
++  String? _error;
++  List<_ChannelRow> _rows = [];
++  final int _maxChannels = 48;
++  final int _concurrency = 6;
++  int _loadGen = 0;
++
++  @override
++  void initState() {
++    super.initState();
++    TvGuideRefresh.notifier.addListener(_onTvGuideRefreshSignal);
++    _load();
++  }
++
++  @override
++  void dispose() {
++    TvGuideRefresh.notifier.removeListener(_onTvGuideRefreshSignal);
++    super.dispose();
++  }
++
++  void _onTvGuideRefreshSignal() {
++    if (mounted) unawaited(_load());
++  }
++
++  Future<void> _load() async {
++    final gen = ++_loadGen;
++    if (mounted) {
++      setState(() {
++        _loading = true;
++        _error = null;
++      });
++    }
++
++    try {
++      final settings = SettingsService.instance;
++      final epgUrl = settings.getXmltvEpgUrl();
++      if (!mounted || gen != _loadGen) return;
++      final epgMap = settings.getXmltvChannelMap();
++      if (!mounted || gen != _loadGen) return;
++      final epg = XmltvEpgService.instance;
++      if (epgUrl != null && epgUrl.isNotEmpty) {
++        await epg.loadFromUrl(epgUrl);
++      } else {
++        epg.clear();
++      }
++
++      if (!mounted || gen != _loadGen) return;
++      var catalogs = await _stremio.getAllCatalogs();
++      catalogs = catalogs.where((c) => StremioService.isLiveTvCatalogType(c['catalogType'])).toList();
++
++      final List<Map<String, dynamic>> items = [];
++      for (final cat in catalogs) {
++        if (items.length >= _maxChannels) break;
++        final batch = await _stremio.getCatalog(
++          baseUrl: cat['addonBaseUrl'],
++          type: cat['catalogType'],
++          id: cat['catalogId'],
++        );
++        for (final m in batch) {
++          if (items.length >= _maxChannels) break;
++          final copy = Map<String, dynamic>.from(m);
++          copy['_addonBaseUrl'] = cat['addonBaseUrl'];
++          copy['_catalogType'] = cat['catalogType'];
++          items.add(copy);
++        }
++      }
++
++      if (!mounted || gen != _loadGen) return;
++
++      if (items.isEmpty) {
++        if (mounted && gen == _loadGen) {
++          setState(() {
++            _loading = false;
++            _rows = [];
++            _error = null;
++          });
++        }
++        return;
++      }
++
++      final List<_ChannelRow> rows = [];
++      for (var i = 0; i < items.length; i += _concurrency) {
++        if (!mounted || gen != _loadGen) return;
++        final chunk = items.skip(i).take(_concurrency);
++        final futures = chunk.map((item) async {
++          final base = item['_addonBaseUrl']?.toString() ?? '';
++          final type = item['type']?.toString() ?? item['_catalogType']?.toString() ?? 'tv';
++          final id = item['id']?.toString() ?? '';
++          if (base.isEmpty || id.isEmpty) return null;
++          final meta = await _stremio.getMeta(baseUrl: base, type: type, id: id);
++          if (meta == null) return null;
++          final name = item['name']?.toString() ?? meta['name']?.toString() ?? 'Channel';
++          final tvgId = meta['tvgId']?.toString() ?? item['tvgId']?.toString();
++          final mapKey = SettingsService.xmltvChannelMapKeyFor(
++            addonBaseUrl: base,
++            stremioChannelId: id,
++          );
++          final built = StremioTvSchedule.slotsFromMeta(meta, name);
++          var slots = built.slots;
++          var fromStremio = built.fromAddon;
++          if (!fromStremio && epg.isLoaded) {
++            final xmlSlots = StremioTvSchedule.slotsFromXmltv(
++              epg,
++              tvgId: tvgId,
++              channelName: name,
++              stremioId: id,
++              epgChannelOverride: epgMap[mapKey],
++            );
++            if (xmlSlots.isNotEmpty) {
++              slots = xmlSlots;
++            }
++          }
++          return _ChannelRow(
++            catalogItem: item,
++            addonBaseUrl: base,
++            metaType: type,
++            slots: slots,
++            fromStremioSchedule: fromStremio,
++            tvgId: tvgId,
++          );
++        });
++        final part = await Future.wait(futures);
++        if (!mounted || gen != _loadGen) return;
++        rows.addAll(part.whereType<_ChannelRow>());
++      }
++
++      if (mounted && gen == _loadGen) {
++        setState(() {
++          _rows = rows;
++          _loading = false;
++        });
++      }
++    } catch (e) {
++      if (mounted && gen == _loadGen) {
++        setState(() {
++          _loading = false;
++          _error = e.toString();
++        });
++      }
++    }
++  }
++
++  void _openChannel(_ChannelRow row) {
++    final item = Map<String, dynamic>.from(row.catalogItem);
++    item['_addonBaseUrl'] = row.addonBaseUrl;
++    item['type'] = row.metaType;
++
++    final movie = Movie(
++      id: row.id.hashCode,
++      imdbId: row.id.startsWith('tt') ? row.id : null,
++      title: row.name,
++      posterPath: row.poster ?? '',
++      backdropPath: item['background']?.toString() ?? row.poster ?? '',
++      voteAverage: 0,
++      releaseDate: '',
++      overview: item['description']?.toString() ?? '',
++      genres: (item['genres'] as List?)?.cast<String>() ?? [],
++      mediaType: 'tv',
++    );
++
++    Navigator.pushNamed(
++      context,
++      '/details',
++      arguments: {
++        'id': movie.id,
++        'media_type': movie.mediaType,
++        'stremio_item': item,
++      },
++    );
++  }
++
++  String _fmtTime(DateTime t) {
++    final h = t.hour.toString().padLeft(2, '0');
++    final m = t.minute.toString().padLeft(2, '0');
++    return '$h:$m';
++  }
++
++  List<TvScheduleSlot> _upcomingSlots(_ChannelRow row, {int max = 4}) {
++    final now = DateTime.now();
++    final filtered = row.slots.where((s) => s.end.isAfter(now.subtract(const Duration(minutes: 5)))).toList();
++    if (filtered.isEmpty) return row.slots.take(max).toList();
++    return filtered.take(max).toList();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      backgroundColor: AppTheme.bgDark,
++      appBar: AppBar(
++        backgroundColor: Colors.transparent,
++        elevation: 0,
++        title: const Text('TV Guide'),
++        actions: [
++          IconButton(
++            tooltip: 'Match EPG to channels',
++            icon: const Icon(Icons.link_rounded),
++            onPressed: () {
++              Navigator.push(
++                context,
++                MaterialPageRoute(builder: (_) => const EpgChannelMappingScreen()),
++              );
++            },
++          ),
++          IconButton(
++            tooltip: 'Refresh',
++            icon: const Icon(Icons.refresh_rounded),
++            onPressed: _loading ? null : () => _load(),
++          ),
++        ],
++      ),
++      body: _loading
++          ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor))
++          : _error != null
++              ? Center(
++                  child: Padding(
++                    padding: const EdgeInsets.all(24),
++                    child: Text(_error!, style: const TextStyle(color: Colors.white54), textAlign: TextAlign.center),
++                  ),
++                )
++              : _rows.isEmpty
++                  ? Center(
++                      child: Padding(
++                        padding: const EdgeInsets.all(24),
++                        child: Column(
++                          mainAxisAlignment: MainAxisAlignment.center,
++                          children: [
++                            Icon(Icons.grid_view_rounded, size: 64, color: Colors.white.withValues(alpha: 0.12)),
++                            const SizedBox(height: 16),
++                            const Text(
++                              'No channels for the guide',
++                              style: TextStyle(color: Colors.white38, fontSize: 16),
++                            ),
++                            const SizedBox(height: 8),
++                            Text(
++                              'Install a live TV Stremio addon and open TV Guide again.',
++                              textAlign: TextAlign.center,
++                              style: TextStyle(color: Colors.white.withValues(alpha: 0.2), fontSize: 13),
++                            ),
++                          ],
++                        ),
++                      ),
++                    )
++                  : RefreshIndicator(
++                      color: AppTheme.primaryColor,
++                      onRefresh: _load,
++                      child: ListView.builder(
++                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
++                        itemCount: _rows.length + 1,
++                        itemBuilder: (context, index) {
++                          if (index == 0) {
++                            return Padding(
++                              padding: const EdgeInsets.only(bottom: 16, top: 4),
++                              child: Text(
++                                'Schedules use the addon when it provides them. If not, add an XMLTV URL in Settings → Stremio (TV Guide EPG) to fill the grid; channel ids should match tvg-id or the channel name when possible.',
++                                style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 12, height: 1.35),
++                              ),
++                            );
++                          }
++                          final row = _rows[index - 1];
++                          final upcoming = _upcomingSlots(row);
++                          return Padding(
++                            padding: const EdgeInsets.only(bottom: 12),
++                            child: Material(
++                              color: AppTheme.bgCard,
++                              borderRadius: BorderRadius.circular(14),
++                              child: InkWell(
++                                borderRadius: BorderRadius.circular(14),
++                                onTap: () => _openChannel(row),
++                                child: Padding(
++                                  padding: const EdgeInsets.all(12),
++                                  child: Row(
++                                    crossAxisAlignment: CrossAxisAlignment.start,
++                                    children: [
++                                      ClipRRect(
++                                        borderRadius: BorderRadius.circular(8),
++                                        child: row.poster != null && row.poster!.isNotEmpty
++                                            ? CachedNetworkImage(
++                                                imageUrl: row.poster!,
++                                                width: 52,
++                                                height: 52,
++                                                fit: BoxFit.cover,
++                                                errorWidget: (_, __, ___) => _channelPlaceholder(),
++                                              )
++                                            : _channelPlaceholder(),
++                                      ),
++                                      const SizedBox(width: 12),
++                                      Expanded(
++                                        child: Column(
++                                          crossAxisAlignment: CrossAxisAlignment.start,
++                                          children: [
++                                            Text(
++                                              row.name,
++                                              maxLines: 1,
++                                              overflow: TextOverflow.ellipsis,
++                                              style: const TextStyle(
++                                                color: Colors.white,
++                                                fontSize: 15,
++                                                fontWeight: FontWeight.w700,
++                                              ),
++                                            ),
++                                            const SizedBox(height: 8),
++                                            ...upcoming.map((s) {
++                                              return Padding(
++                                                padding: const EdgeInsets.only(bottom: 6),
++                                                child: Row(
++                                                  crossAxisAlignment: CrossAxisAlignment.start,
++                                                  children: [
++                                                    Text(
++                                                      '${_fmtTime(s.start)}',
++                                                      style: TextStyle(
++                                                        color: AppTheme.primaryColor.withValues(alpha: 0.9),
++                                                        fontSize: 12,
++                                                        fontWeight: FontWeight.w600,
++                                                        fontFeatures: const [FontFeature.tabularFigures()],
++                                                      ),
++                                                    ),
++                                                    const SizedBox(width: 8),
++                                                    Expanded(
++                                                      child: Column(
++                                                        crossAxisAlignment: CrossAxisAlignment.start,
++                                                        children: [
++                                                          Text(
++                                                            s.title,
++                                                            maxLines: 2,
++                                                            overflow: TextOverflow.ellipsis,
++                                                            style: const TextStyle(color: Colors.white70, fontSize: 13),
++                                                          ),
++                                                          if (s.subtitle != null &&
++                                                              s.subtitle!.isNotEmpty &&
++                                                              s.title != 'Live')
++                                                            Text(
++                                                              s.subtitle!,
++                                                              maxLines: 1,
++                                                              overflow: TextOverflow.ellipsis,
++                                                              style: TextStyle(
++                                                                color: Colors.white.withValues(alpha: 0.35),
++                                                                fontSize: 11,
++                                                              ),
++                                                            ),
++                                                        ],
++                                                      ),
++                                                    ),
++                                                  ],
++                                                ),
++                                              );
++                                            }),
++                                          ],
++                                        ),
++                                      ),
++                                      Icon(Icons.chevron_right_rounded, color: Colors.white.withValues(alpha: 0.2)),
++                                    ],
++                                  ),
++                                ),
++                              ),
++                            ),
++                          );
++                        },
++                      ),
++                    ),
++    );
++  }
++
++  Widget _channelPlaceholder() {
++    return Container(
++      width: 52,
++      height: 52,
++      color: Colors.white.withValues(alpha: 0.06),
++      child: Icon(Icons.live_tv_rounded, color: Colors.white.withValues(alpha: 0.2), size: 26),
++    );
++  }
++}
+diff --git a/lib/services/settings_service.dart b/lib/services/settings_service.dart
+index 351d1a6..99e7744 100644
+--- a/lib/services/settings_service.dart
++++ b/lib/services/settings_service.dart
+@@ -44,6 +44,72 @@ class SettingsService extends ChangeNotifier {
+   /// Notifier for addon changes (catalogs, home screen, etc.)
+   static final ValueNotifier<int> addonChangeNotifier = ValueNotifier<int>(0);
+ 
++  // --- XMLTV EPG (live TV guide) ---
++  static const String _xmltvEpgUrlKey = 'xmltv_epg_url';
++  static const String _xmltvChannelMapKey = 'xmltv_epg_channel_map_json';
++
++  String? getXmltvEpgUrl() {
++    final v = _prefs.getString(_xmltvEpgUrlKey);
++    if (v == null || v.trim().isEmpty) return null;
++    return v.trim();
++  }
++
++  Future<void> setXmltvEpgUrl(String? url) async {
++    if (url == null || url.trim().isEmpty) {
++      await _prefs.remove(_xmltvEpgUrlKey);
++    } else {
++      await _prefs.setString(_xmltvEpgUrlKey, url.trim());
++    }
++    notifyListeners();
++    _broadcastSettings();
++  }
++
++  Map<String, String> getXmltvChannelMap() {
++    final raw = _prefs.getString(_xmltvChannelMapKey);
++    if (raw == null || raw.trim().isEmpty) return {};
++    try {
++      final decoded = jsonDecode(raw);
++      if (decoded is! Map) return {};
++      return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
++    } catch (_) {
++      return {};
++    }
++  }
++
++  static String xmltvChannelMapKeyFor({
++    required String addonBaseUrl,
++    required String stremioChannelId,
++  }) =>
++      jsonEncode({'b': addonBaseUrl, 'i': stremioChannelId});
++
++  Future<void> setXmltvChannelMap(Map<String, String> map) async {
++    if (map.isEmpty) {
++      await _prefs.remove(_xmltvChannelMapKey);
++    } else {
++      await _prefs.setString(_xmltvChannelMapKey, jsonEncode(map));
++    }
++    notifyListeners();
++    _broadcastSettings();
++  }
++
++  Future<void> setXmltvChannelMapping({
++    required String addonBaseUrl,
++    required String stremioChannelId,
++    required String epgChannelId,
++  }) async {
++    final map = getXmltvChannelMap();
++    final k = xmltvChannelMapKeyFor(
++      addonBaseUrl: addonBaseUrl,
++      stremioChannelId: stremioChannelId,
++    );
++    if (epgChannelId.trim().isEmpty) {
++      map.remove(k);
++    } else {
++      map[k] = epgChannelId.trim();
++    }
++    await setXmltvChannelMap(map);
++  }
++
+   // --- Server ---
+   HttpServer? _server;
+   int? _serverPort;
+@@ -83,6 +149,7 @@ class SettingsService extends ChangeNotifier {
+     unawaited(_syncRichAddons());
+     // Sync subtitle-capable addon URLs for native player
+     _syncSubtitleAddonUrls();
++    // XMLTV keys are read on demand via getXmltvEpgUrl / getXmltvChannelMap
+   }
+ 
+   /// Fetches manifests for any addon URLs in the plain list that don't have
+@@ -259,6 +326,9 @@ class SettingsService extends ChangeNotifier {
+         'cache_size_mb': _cacheSizeMB,
+         'subtitle_fontsize': _subtitleFontsize,
+         'stremio_addons': _stremioAddons,
++        if (getXmltvEpgUrl() != null) _xmltvEpgUrlKey: getXmltvEpgUrl(),
++        if (getXmltvChannelMap().isNotEmpty)
++          _xmltvChannelMapKey: getXmltvChannelMap(),
+       };
+ 
+   /// Persist every profile-scoped setting into a single JSON blob keyed by
+@@ -327,6 +397,8 @@ class SettingsService extends ChangeNotifier {
+     _prefs.setString('stremio_addons_json', '[]');
+     _prefs.setStringList('stremio_addons_rich', []);
+     _prefs.setString('stremio_subtitle_addons_json', '[]');
++    _prefs.remove(_xmltvEpgUrlKey);
++    _prefs.remove(_xmltvChannelMapKey);
+     notifyListeners();
+   }
+ 
+@@ -378,6 +450,24 @@ class SettingsService extends ChangeNotifier {
+       // Fetch manifests for newly added URLs
+       unawaited(_syncRichAddons());
+     }
++    if (json.containsKey(_xmltvEpgUrlKey)) {
++      final u = json[_xmltvEpgUrlKey];
++      if (u == null || (u is String && u.trim().isEmpty)) {
++        _prefs.remove(_xmltvEpgUrlKey);
++      } else {
++        _prefs.setString(_xmltvEpgUrlKey, u.toString().trim());
++      }
++    }
++    if (json.containsKey(_xmltvChannelMapKey)) {
++      final m = json[_xmltvChannelMapKey];
++      if (m is Map && m.isEmpty) {
++        _prefs.remove(_xmltvChannelMapKey);
++      } else if (m is Map) {
++        _prefs.setString(
++            _xmltvChannelMapKey,
++            jsonEncode(m.map((k, v) => MapEntry(k.toString(), v.toString()))));
++      }
++    }
+     notifyListeners();
+   }
+ 
+@@ -394,47 +484,35 @@ class SettingsService extends ChangeNotifier {
+ 
+   // --- Embedded HTTP + WebSocket server ---
+ 
+-  Future<void> startServer() async {
+-    if (_server != null) return;
++  /// Re-detect LAN IP (e.g. after resume) so the QR URL stays correct.
++  Future<void> refreshLocalIpForQr() async {
++    await _detectLocalIp();
++    notifyListeners();
++  }
+ 
+-    // Primary: connected-socket trick — works on ALL platforms & connection types
+-    // (WiFi, ethernet, USB tethering, etc.)
+-    // Connects a TCP socket toward a public IP; OS reveals the local IP that
+-    // would route there. Connection is closed immediately, no data is sent.
+-    try {
+-      final socket = await Socket.connect('8.8.8.8', 53,
+-          timeout: const Duration(seconds: 2));
+-      final localAddr = socket.address.address;
+-      socket.destroy();
+-      if (localAddr != '0.0.0.0' && localAddr != '127.0.0.1') {
+-        _localIp = localAddr;
+-      }
+-    } catch (_) {}
++  Future<void> _detectLocalIp() async {
++    _localIp = null;
+ 
+-    // Fallback 1: scan network interfaces (works on Windows, sometimes Android)
+-    if (_localIp == null) {
+-      try {
+-        final interfaces = await NetworkInterface.list(
+-          type: InternetAddressType.IPv4,
+-          includeLoopback: false,
+-        );
+-        final lanIps = <String>[];
+-        for (final iface in interfaces) {
+-          for (final addr in iface.addresses) {
+-            final ip = addr.address;
+-            if (!addr.isLoopback &&
+-                ip != '0.0.0.0' &&
+-                !ip.startsWith('169.254.') &&
+-                !ip.startsWith('127.')) {
+-              lanIps.add(ip);
+-            }
++    try {
++      final interfaces = await NetworkInterface.list(
++        type: InternetAddressType.IPv4,
++        includeLoopback: false,
++      );
++      final lanIps = <String>[];
++      for (final iface in interfaces) {
++        for (final addr in iface.addresses) {
++          final ip = addr.address;
++          if (!addr.isLoopback &&
++              ip != '0.0.0.0' &&
++              !ip.startsWith('169.254.') &&
++              !ip.startsWith('127.')) {
++            lanIps.add(ip);
+           }
+         }
+-        _localIp = _pickBestLanIp(lanIps);
+-      } catch (_) {}
+-    }
++      }
++      _localIp = _pickBestLanIp(lanIps);
++    } catch (_) {}
+ 
+-    // Fallback 2: network_info_plus WiFi IP (reliable on Android WiFi)
+     if (_localIp == null) {
+       try {
+         final wifiIp = await NetworkInfo().getWifiIP();
+@@ -447,7 +525,27 @@ class SettingsService extends ChangeNotifier {
+       } catch (_) {}
+     }
+ 
++    if (_localIp == null) {
++      try {
++        final socket = await Socket.connect('8.8.8.8', 53,
++            timeout: const Duration(seconds: 2));
++        final localAddr = socket.address.address;
++        socket.destroy();
++        if (localAddr != '0.0.0.0' &&
++            localAddr != '127.0.0.1' &&
++            localAddr != '8.8.8.8') {
++          _localIp = localAddr;
++        }
++      } catch (_) {}
++    }
++
+     _localIp ??= 'localhost';
++  }
++
++  Future<void> startServer() async {
++    if (_server != null) return;
++
++    await _detectLocalIp();
+ 
+     _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+     _serverPort = _server!.port;
+diff --git a/lib/services/xmltv_epg_service.dart b/lib/services/xmltv_epg_service.dart
+new file mode 100644
+index 0000000..9a02f83
+--- /dev/null
++++ b/lib/services/xmltv_epg_service.dart
+@@ -0,0 +1,281 @@
++import 'dart:convert' show utf8;
++
++import 'package:archive/archive.dart';
++import 'package:http/http.dart' as http;
++import 'package:xml/xml.dart';
++
++/// Parses XMLTV (xmltv) files and maps programmes to channel ids for TV Guide.
++class XmltvEpgService {
++  XmltvEpgService._();
++  static final XmltvEpgService instance = XmltvEpgService._();
++
++  /// Normalized keys → programmes (start ascending).
++  final Map<String, List<XmltvProgramme>> _byChannel = {};
++
++  /// Normalized channel key → raw `id` attribute (first seen).
++  final Map<String, String> _normToRawId = {};
++
++  /// Normalized channel key → best display label from `<channel>` (for picker UI).
++  final Map<String, String> _normToDisplayName = {};
++
++  bool get isLoaded => _byChannel.isNotEmpty || _normToRawId.isNotEmpty;
++
++  /// Raw channel ids from the file, sorted by display name for pickers.
++  List<String> get loadedChannelIds {
++    final norms = {..._byChannel.keys, ..._normToRawId.keys};
++    final raw = norms.map((n) => _normToRawId[n] ?? n).toList();
++    raw.sort((a, b) {
++      final la = displayNameForChannelId(a).toLowerCase();
++      final lb = displayNameForChannelId(b).toLowerCase();
++      final c = la.compareTo(lb);
++      return c != 0 ? c : a.toLowerCase().compareTo(b.toLowerCase());
++    });
++    return raw;
++  }
++
++  /// User-facing label for a raw or normalized id (falls back to [id]).
++  String displayNameForChannelId(String id) {
++    final n = normalizeKey(id);
++    final fromMeta = _normToDisplayName[n];
++    if (fromMeta != null && fromMeta.isNotEmpty) return fromMeta;
++    return id;
++  }
++
++  void clear() {
++    _byChannel.clear();
++    _normToRawId.clear();
++    _normToDisplayName.clear();
++  }
++
++  static String normalizeKey(String s) {
++    var t = s.toLowerCase().trim();
++    t = t.replaceAll(RegExp(r'\s+'), '');
++    t = t.replaceAll(RegExp(r'[^a-z0-9._:-]'), '');
++    return t;
++  }
++
++  /// XMLTV datetime: `YYYYMMDDHHmmss` with optional ` +0200` offset.
++  static DateTime? parseXmltvTime(String? raw) {
++    if (raw == null || raw.length < 14) return null;
++    final space = raw.indexOf(' ');
++    final core = space >= 0 ? raw.substring(0, space) : raw.substring(0, 14);
++    if (core.length < 14) return null;
++    try {
++      final y = int.parse(core.substring(0, 4));
++      final mo = int.parse(core.substring(4, 6));
++      final d = int.parse(core.substring(6, 8));
++      final h = int.parse(core.substring(8, 10));
++      final mi = int.parse(core.substring(10, 12));
++      final sec = int.parse(core.substring(12, 14));
++      if (space > 15 && raw.length > space + 5) {
++        final tz = raw.substring(space + 1).trim();
++        if (tz.length >= 5 && (tz.startsWith('+') || tz.startsWith('-'))) {
++          final sign = tz.startsWith('-') ? -1 : 1;
++          final th = int.tryParse(tz.substring(1, 3)) ?? 0;
++          final tmi = int.tryParse(tz.substring(3, 5)) ?? 0;
++          final offset = Duration(hours: sign * th, minutes: sign * tmi);
++          final utc = DateTime.utc(y, mo, d, h, mi, sec).subtract(offset);
++          return utc.toLocal();
++        }
++      }
++      return DateTime(y, mo, d, h, mi, sec);
++    } catch (_) {
++      return null;
++    }
++  }
++
++  static String _elemText(XmlElement parent, String name) {
++    final el = parent.findElements(name).firstOrNull;
++    return el?.innerText.trim() ?? '';
++  }
++
++  /// Fetches and parses an XMLTV document from [url]. Clears previous data.
++  Future<bool> loadFromUrl(String url) async {
++    clear();
++    final uri = Uri.tryParse(url.trim());
++    if (uri == null || !uri.hasScheme) return false;
++
++    try {
++      final response = await http.get(uri).timeout(const Duration(seconds: 25));
++      if (response.statusCode != 200) return false;
++      var body = response.body;
++      if (response.bodyBytes.length > 2 &&
++          response.bodyBytes[0] == 0x1f &&
++          response.bodyBytes[1] == 0x8b) {
++        body = utf8.decode(GZipDecoder().decodeBytes(response.bodyBytes));
++      }
++      return _parseXml(body);
++    } catch (_) {
++      return false;
++    }
++  }
++
++  static String? _channelDisplayName(XmlElement channelEl) {
++    XmlElement? pick;
++    for (final el in channelEl.findElements('display-name')) {
++      final lang = el.getAttribute('lang')?.toLowerCase() ?? '';
++      if (lang.isEmpty || lang.startsWith('en')) {
++        pick = el;
++        break;
++      }
++      pick ??= el;
++    }
++    final t = pick?.innerText.trim() ?? '';
++    return t.isNotEmpty ? t : null;
++  }
++
++  bool _parseXml(String body) {
++    try {
++      final doc = XmlDocument.parse(body);
++      void registerRawId(String channelId) {
++        final k = normalizeKey(channelId);
++        if (k.isEmpty) return;
++        _normToRawId.putIfAbsent(k, () => channelId.trim());
++      }
++
++      void addProgramme(String channelId, XmltvProgramme p) {
++        final k = normalizeKey(channelId);
++        if (k.isEmpty) return;
++        registerRawId(channelId);
++        _byChannel.putIfAbsent(k, () => []).add(p);
++      }
++
++      for (final cel in doc.findAllElements('channel')) {
++        final id = cel.getAttribute('id');
++        if (id == null || id.isEmpty) continue;
++        registerRawId(id);
++        final dn = _channelDisplayName(cel);
++        if (dn != null) {
++          final k = normalizeKey(id);
++          _normToDisplayName.putIfAbsent(k, () => dn);
++        }
++      }
++
++      for (final prog in doc.findAllElements('programme')) {
++        final ch = prog.getAttribute('channel');
++        if (ch == null || ch.isEmpty) continue;
++        final start = parseXmltvTime(prog.getAttribute('start'));
++        if (start == null) continue;
++        final stopRaw = prog.getAttribute('stop');
++        final stop = parseXmltvTime(stopRaw) ?? start.add(const Duration(hours: 1));
++        final title = _elemText(prog, 'title');
++        if (title.isEmpty) continue;
++        final sub = _elemText(prog, 'sub-title');
++        final desc = _elemText(prog, 'desc');
++        addProgramme(
++          ch,
++          XmltvProgramme(
++            start: start,
++            end: stop,
++            title: title,
++            subtitle: sub.isNotEmpty ? sub : (desc.isNotEmpty ? desc : null),
++          ),
++        );
++      }
++
++      for (final list in _byChannel.values) {
++        list.sort((a, b) => a.start.compareTo(b.start));
++      }
++      return isLoaded;
++    } catch (_) {
++      clear();
++      return false;
++    }
++  }
++
++  Iterable<String> _candidateKeys(String? tvgId, String? channelName, String? stremioId) sync* {
++    if (tvgId != null && tvgId.isNotEmpty) {
++      yield normalizeKey(tvgId);
++      final noDot = tvgId.replaceAll('.', '');
++      if (noDot != tvgId) yield normalizeKey(noDot);
++    }
++    if (channelName != null && channelName.isNotEmpty) {
++      yield normalizeKey(channelName);
++      yield normalizeKey(channelName.replaceAll(' ', '.'));
++      final noSpace = channelName.replaceAll(RegExp(r'\s+'), '');
++      if (noSpace != channelName) yield normalizeKey(noSpace);
++      final slug = channelName
++          .toLowerCase()
++          .replaceAll(RegExp(r'[^a-z0-9]+'), '');
++      if (slug.isNotEmpty) yield normalizeKey(slug);
++    }
++    if (stremioId != null && stremioId.contains(':')) {
++      final tail = stremioId.split(':').last;
++      if (tail.isNotEmpty) {
++        yield normalizeKey(tail);
++        if (tail.contains('-')) {
++          final parts = tail.split('-');
++          if (parts.length > 1) yield normalizeKey(parts.last);
++        }
++      }
++    }
++  }
++
++  /// Programmes overlapping [from]..[to] for the best-matching channel id.
++  /// [epgChannelOverride] is tried first (manual match from Settings).
++  /// Overlapping programmes in [from]..[to] for the first matching channel key.
++  /// [maxItems] caps the returned list only after the full window is collected (so
++  /// "now" is not dropped when many programmes precede it in the same window).
++  List<XmltvProgramme> programmesFor({
++    String? tvgId,
++    String? channelName,
++    String? stremioId,
++    String? epgChannelOverride,
++    required DateTime from,
++    required DateTime to,
++    int? maxItems,
++  }) {
++    final seen = <String>{};
++    Iterable<String> keys() sync* {
++      if (epgChannelOverride != null && epgChannelOverride.trim().isNotEmpty) {
++        yield normalizeKey(epgChannelOverride.trim());
++      }
++      for (final k in _candidateKeys(tvgId, channelName, stremioId)) {
++        if (seen.add(k)) yield k;
++      }
++    }
++
++    for (final key in keys()) {
++      final list = _byChannel[key];
++      if (list == null || list.isEmpty) continue;
++      final out = <XmltvProgramme>[];
++      const safetyCap = 800;
++      for (final p in list) {
++        if (p.end.isBefore(from) || !p.start.isBefore(to)) continue;
++        out.add(p);
++        if (out.length >= safetyCap) break;
++      }
++      if (out.isEmpty) continue;
++      if (maxItems != null && out.length > maxItems) {
++        final now = DateTime.now();
++        var anchor = 0;
++        for (var i = 0; i < out.length; i++) {
++          if (!out[i].end.isBefore(now)) {
++            anchor = i;
++            break;
++          }
++        }
++        final maxStart = out.length - maxItems;
++        final start = (anchor - (maxItems ~/ 2)).clamp(0, maxStart < 0 ? 0 : maxStart);
++        final end = (start + maxItems).clamp(0, out.length);
++        return out.sublist(start, end);
++      }
++      return out;
++    }
++    return [];
++  }
++}
++
++class XmltvProgramme {
++  final DateTime start;
++  final DateTime end;
++  final String title;
++  final String? subtitle;
++
++  const XmltvProgramme({
++    required this.start,
++    required this.end,
++    required this.title,
++    this.subtitle,
++  });
++}
+diff --git a/lib/utils/app_theme.dart b/lib/utils/app_theme.dart
+new file mode 100644
+index 0000000..20f996c
+--- /dev/null
++++ b/lib/utils/app_theme.dart
+@@ -0,0 +1,62 @@
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++
++/// Minimal theme tokens for ported Stremio live TV / EPG screens.
++class AppTheme {
++  static const Color bgDark = Color(0xFF000000);
++  static const Color bgCard = Color(0xFF141414);
++  static const Color primaryColor = Color(0xFFE5E5E5);
++  static const Color accentColor = Color(0xFF3B82F6);
++}
++
++/// Simple focus ring for D-pad (no extra packages).
++class FocusableControl extends StatelessWidget {
++  final Widget child;
++  final VoidCallback? onTap;
++  final bool autoFocus;
++  final double borderRadius;
++
++  const FocusableControl({
++    super.key,
++    required this.child,
++    this.onTap,
++    this.autoFocus = false,
++    this.borderRadius = 12,
++  });
++
++  @override
++  Widget build(BuildContext context) {
++    return Focus(
++      autofocus: autoFocus,
++      onKeyEvent: (node, event) {
++        if (onTap != null &&
++            event is KeyDownEvent &&
++            (event.logicalKey == LogicalKeyboardKey.enter ||
++                event.logicalKey == LogicalKeyboardKey.select)) {
++          onTap!();
++          return KeyEventResult.handled;
++        }
++        return KeyEventResult.ignored;
++      },
++      child: Builder(
++        builder: (ctx) {
++          final focused = Focus.of(ctx).hasFocus;
++          return GestureDetector(
++            onTap: onTap,
++            child: AnimatedContainer(
++              duration: const Duration(milliseconds: 120),
++              decoration: BoxDecoration(
++                borderRadius: BorderRadius.circular(borderRadius),
++                border: Border.all(
++                  color: focused ? AppTheme.primaryColor : Colors.transparent,
++                  width: 2,
++                ),
++              ),
++              child: child,
++            ),
++          );
++        },
++      ),
++    );
++  }
++}
+diff --git a/lib/utils/stremio_tv_schedule.dart b/lib/utils/stremio_tv_schedule.dart
+new file mode 100644
+index 0000000..b436a30
+--- /dev/null
++++ b/lib/utils/stremio_tv_schedule.dart
+@@ -0,0 +1,219 @@
++import '../services/xmltv_epg_service.dart';
++
++/// A single TV guide time block (Stremio meta, XMLTV, or placeholder).
++class TvScheduleSlot {
++  final DateTime start;
++  final DateTime end;
++  final String title;
++  final String? subtitle;
++
++  const TvScheduleSlot({
++    required this.start,
++    required this.end,
++    required this.title,
++    this.subtitle,
++  });
++}
++
++/// Builds programme lists from Stremio channel meta and optional XMLTV EPG.
++class StremioTvSchedule {
++  StremioTvSchedule._();
++
++  static DateTime? parseReleased(dynamic released) {
++    if (released == null) return null;
++    if (released is int) {
++      final n = released;
++      if (n > 2000000000000) return DateTime.fromMillisecondsSinceEpoch(n);
++      if (n > 2000000000) return DateTime.fromMillisecondsSinceEpoch(n * 1000);
++      return DateTime.fromMillisecondsSinceEpoch(n * 1000);
++    }
++    if (released is double) {
++      return parseReleased(released.round());
++    }
++    if (released is String) {
++      final t = DateTime.tryParse(released);
++      if (t != null) return t;
++      final asInt = int.tryParse(released);
++      if (asInt != null) return parseReleased(asInt);
++      // Compact ISO without separators: YYYYMMDDTHHmmss or YYYYMMDD
++      final digits = released.replaceAll(RegExp(r'[^0-9]'), '');
++      if (digits.length >= 8) {
++        final y = int.tryParse(digits.substring(0, 4));
++        final mo = digits.length >= 6 ? int.tryParse(digits.substring(4, 6)) : null;
++        final d = digits.length >= 8 ? int.tryParse(digits.substring(6, 8)) : null;
++        if (y != null && mo != null && d != null) {
++          if (digits.length >= 14) {
++            final h = int.tryParse(digits.substring(8, 10)) ?? 0;
++            final mi = int.tryParse(digits.substring(10, 12)) ?? 0;
++            final sec = int.tryParse(digits.substring(12, 14)) ?? 0;
++            return DateTime(y, mo, d, h, mi, sec);
++          }
++          return DateTime(y, mo, d);
++        }
++      }
++    }
++    return null;
++  }
++
++  /// Slot that contains [now] (start <= now < end), or null.
++  static TvScheduleSlot? currentSlot(Iterable<TvScheduleSlot> slots, [DateTime? now]) {
++    final n = now ?? DateTime.now();
++    for (final s in slots) {
++      if (!n.isBefore(s.start) && n.isBefore(s.end)) return s;
++    }
++    return null;
++  }
++
++  /// 0..1 progress through [slot] at [now].
++  static double progressOf(TvScheduleSlot slot, [DateTime? now]) {
++    final n = now ?? DateTime.now();
++    final total = slot.end.difference(slot.start).inMicroseconds;
++    if (total <= 0) return 0;
++    final elapsed = n.difference(slot.start).inMicroseconds.clamp(0, total);
++    return elapsed / total;
++  }
++
++  /// [fromAddon] is true when `videos` or `behaviorHints.epg` produced the list.
++  static ({List<TvScheduleSlot> slots, bool fromAddon}) slotsFromMeta(
++    Map<String, dynamic> meta,
++    String channelName,
++  ) {
++    final videos = meta['videos'];
++    if (videos is List && videos.isNotEmpty) {
++      final List<TvScheduleSlot> slots = [];
++      for (final raw in videos) {
++        if (raw is! Map) continue;
++        final m = Map<String, dynamic>.from(raw as Map);
++        final title = (m['name'] ?? m['title'] ?? 'Program').toString();
++        final start = parseReleased(
++          m['released'] ??
++              m['firstAired'] ??
++              m['airDate'] ??
++              m['time'] ??
++              m['start'] ??
++              m['from'] ??
++              m['date'],
++        );
++        if (start == null) continue;
++        final durMin = (m['duration'] as num?)?.toInt() ??
++            (m['runtime'] as num?)?.toInt() ??
++            30;
++        final end = start.add(Duration(minutes: durMin.clamp(15, 240)));
++        slots.add(TvScheduleSlot(
++          start: start,
++          end: end,
++          title: title,
++          subtitle: m['description']?.toString(),
++        ));
++      }
++      slots.sort((a, b) => a.start.compareTo(b.start));
++      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
++    }
++
++    final hints = meta['behaviorHints'];
++    if (hints is Map && hints['epg'] is List) {
++      final List<TvScheduleSlot> slots = [];
++      for (final e in hints['epg'] as List) {
++        if (e is! Map) continue;
++        final start = parseReleased(e['start'] ?? e['from']);
++        final end = parseReleased(e['end'] ?? e['to']);
++        if (start == null) continue;
++        slots.add(TvScheduleSlot(
++          start: start,
++          end: end ?? start.add(const Duration(hours: 1)),
++          title: (e['title'] ?? e['name'] ?? 'Program').toString(),
++          subtitle: e['description']?.toString(),
++        ));
++      }
++      slots.sort((a, b) => a.start.compareTo(b.start));
++      if (slots.isNotEmpty) return (slots: slots, fromAddon: true);
++    }
++
++    final now = DateTime.now();
++    final hourStart = DateTime(now.year, now.month, now.day, now.hour);
++    return (
++      slots: [
++        TvScheduleSlot(
++          start: hourStart,
++          end: hourStart.add(const Duration(hours: 1)),
++          title: 'Live',
++          subtitle: channelName,
++        ),
++      ],
++      fromAddon: false,
++    );
++  }
++
++  static List<TvScheduleSlot> slotsFromXmltv(
++    XmltvEpgService epg, {
++    required String? tvgId,
++    required String channelName,
++    required String stremioId,
++    String? epgChannelOverride,
++  }) {
++    final from = DateTime.now().subtract(const Duration(hours: 6));
++    final to = DateTime.now().add(const Duration(days: 2));
++    final progs = epg.programmesFor(
++      tvgId: tvgId,
++      channelName: channelName,
++      stremioId: stremioId,
++      epgChannelOverride: epgChannelOverride,
++      from: from,
++      to: to,
++      maxItems: 24,
++    );
++    return progs
++        .map(
++          (p) => TvScheduleSlot(
++            start: p.start,
++            end: p.end,
++            title: p.title,
++            subtitle: p.subtitle,
++          ),
++        )
++        .toList();
++  }
++
++  /// Resolves schedule from Stremio meta and optional XMLTV.
++  ///
++  /// XMLTV is preferred when it yields a programme airing **now**, so channel cards
++  /// show real titles instead of the hourly "Live" placeholder when EPG matches.
++  static List<TvScheduleSlot> resolveSlots({
++    required Map<String, dynamic> meta,
++    required String channelName,
++    required String stremioId,
++    required XmltvEpgService epg,
++    required bool epgLoaded,
++    String? epgChannelOverride,
++    String? catalogItemTvgId,
++  }) {
++    final built = slotsFromMeta(meta, channelName);
++    final now = DateTime.now();
++
++    if (!epgLoaded) {
++      return built.slots;
++    }
++
++    final tvgId =
++        meta['tvgId']?.toString() ?? meta['tvg_id']?.toString() ?? catalogItemTvgId;
++    final xmlSlots = slotsFromXmltv(
++      epg,
++      tvgId: tvgId,
++      channelName: channelName,
++      stremioId: stremioId,
++      epgChannelOverride: epgChannelOverride,
++    );
++    if (xmlSlots.isEmpty) {
++      return built.slots;
++    }
++
++    final xmlNow = currentSlot(xmlSlots, now);
++    if (xmlNow != null) {
++      return xmlSlots;
++    }
++    if (!built.fromAddon) {
++      return xmlSlots;
++    }
++    return built.slots;
++  }
++}
+diff --git a/lib/utils/tv_guide_refresh.dart b/lib/utils/tv_guide_refresh.dart
+new file mode 100644
+index 0000000..a87dee5
+--- /dev/null
++++ b/lib/utils/tv_guide_refresh.dart
+@@ -0,0 +1,13 @@
++import 'package:flutter/foundation.dart';
++
++/// Bumped when the app should reload TV Guide / XMLTV-backed channel listings
++/// (e.g. app resumed from background or main shell opened after splash).
++class TvGuideRefresh {
++  TvGuideRefresh._();
++
++  static final ValueNotifier<int> notifier = ValueNotifier<int>(0);
++
++  static void bump() {
++    notifier.value++;
++  }
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index ff64784..1f66ecf 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -47,6 +47,9 @@ dependencies:
+   youtube_explode_dart: ^3.0.5
+   webview_flutter: ^4.10.0
+   webview_flutter_android: ^4.3.0
++  xml: ^6.5.0
++  archive: ^4.0.4
++  shimmer: ^3.0.0
+ 
+ dev_dependencies:
+   flutter_test:
+-- 
+2.43.0
+

@@ -1,6 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 /// Direct HTTP client for animerealms.org API.
 /// Uses the same AniList IDs as miruro.
@@ -11,7 +12,11 @@ import 'package:flutter/foundation.dart';
 ///   POST /api/watch  {provider, anilistId, episodeNumber} → streams
 class AnimeRealmsExtractor {
   static const String _baseUrl = 'https://www.animerealms.org';
-  final HttpClient _client = HttpClient();
+  static final http.Client _client = http.Client();
+
+  static const _browserHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  };
 
   /// Get available provider mappings for an anime.
   Future<Map<String, dynamic>> getMappings(int anilistId, {String? provider}) async {
@@ -19,13 +24,15 @@ class AnimeRealmsExtractor {
         ? 'id=$anilistId&provider=$provider'
         : 'id=$anilistId';
     final uri = Uri.parse('$_baseUrl/api/mappings?$query');
-    final req = await _client.getUrl(uri);
-    req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    req.headers.set('Referer', '$_baseUrl/');
-    req.headers.set('Origin', _baseUrl);
-    final res = await req.close();
-    final body = await consolidateHttpClientResponseBytes(res);
-    return jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
+    final res = await _client.get(
+      uri,
+      headers: {
+        ..._browserHeaders,
+        'Referer': '$_baseUrl/',
+        'Origin': _baseUrl,
+      },
+    );
+    return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// Fetch streams from a specific provider for an episode.
@@ -35,19 +42,21 @@ class AnimeRealmsExtractor {
     required int episodeNumber,
   }) async {
     final uri = Uri.parse('$_baseUrl/api/watch');
-    final req = await _client.postUrl(uri);
-    req.headers.set('Content-Type', 'application/json');
-    req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    req.headers.set('Referer', '$_baseUrl/');
-    req.headers.set('Origin', _baseUrl);
-    req.write(jsonEncode({
-      'provider': provider,
-      'anilistId': anilistId,
-      'episodeNumber': episodeNumber,
-    }));
-    final res = await req.close();
-    final body = await consolidateHttpClientResponseBytes(res);
-    return jsonDecode(utf8.decode(body)) as Map<String, dynamic>;
+    final res = await _client.post(
+      uri,
+      headers: {
+        ..._browserHeaders,
+        'Content-Type': 'application/json',
+        'Referer': '$_baseUrl/',
+        'Origin': _baseUrl,
+      },
+      body: jsonEncode({
+        'provider': provider,
+        'anilistId': anilistId,
+        'episodeNumber': episodeNumber,
+      }),
+    );
+    return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// Try all available providers and return results from every one that has streams.

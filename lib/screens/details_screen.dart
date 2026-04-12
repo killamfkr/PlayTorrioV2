@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -23,6 +23,8 @@ import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
 import '../utils/extensions.dart';
 import '../utils/app_theme.dart';
+import '../utils/performance_tuning.dart';
+import '../platform_flags.dart';
 import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
@@ -93,6 +95,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   // Stream resolution cancellation
   bool _streamCancelled = false;
+
+  /// `/stream/{type}/...` for Stremio when playing from [stremioItem] (e.g. `tv` for live channel addons).
+  String get _stremioStreamApiType => StremioService.streamTypeForStremioMetaType(
+        widget.stremioItem?['type']?.toString(),
+        fallbackMediaType: _movie.mediaType,
+      );
+
+  bool get _isLiveTvStremioChannel => _stremioStreamApiType == 'tv';
 
   // Desktop cast avatars
   List<Map<String, String>> _castMembers = [];
@@ -916,8 +926,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final customId = item['id']?.toString() ?? '';
     final addonBaseUrl = item['_addonBaseUrl']?.toString() ?? '';
     final addonName = item['_addonName']?.toString() ?? 'Unknown';
-    final type = item['type']?.toString() ?? (_movie.mediaType == 'tv' ? 'series' : 'movie');
-    debugPrint('[CustomIdStreams] customId=$customId, addonBaseUrl=$addonBaseUrl, type=$type');
+    final metaType = item['type']?.toString() ?? (_movie.mediaType == 'tv' ? 'series' : 'movie');
+    // `/stream/...` path type: live TV addons use `tv` (not `series`) per Stremio manifest.
+    final apiType = StremioService.streamTypeForStremioMetaType(metaType, fallbackMediaType: _movie.mediaType);
+    debugPrint('[CustomIdStreams] customId=$customId, addonBaseUrl=$addonBaseUrl, metaType=$metaType apiType=$apiType');
     if (customId.isEmpty || addonBaseUrl.isEmpty) {
       debugPrint('[CustomIdStreams] SKIPPED: customId empty=${customId.isEmpty}, addonBaseUrl empty=${addonBaseUrl.isEmpty}');
       return;
@@ -927,8 +939,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     
     try {
       // For collections, fetch meta to get videos array with collection items
-      if (type == 'collections') {
-        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: type, id: customId);
+      if (metaType == 'collections') {
+        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: metaType, id: customId);
         if (meta != null && meta['videos'] != null) {
           final videos = meta['videos'] as List;
           debugPrint('[CustomIdStreams] Got ${videos.length} collection items from meta');
@@ -949,8 +961,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
       
       // For series, first fetch meta to get videos array with season/episode info
-      if (type == 'series') {
-        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: type, id: customId);
+      if (metaType == 'series') {
+        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: apiType, id: customId);
         if (meta != null && meta['videos'] != null) {
           final videos = meta['videos'] as List;
           debugPrint('[CustomIdStreams] Got ${videos.length} videos from meta');
@@ -963,7 +975,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           if (selectedVideo != null) {
             final videoId = selectedVideo['id']?.toString() ?? '';
             debugPrint('[CustomIdStreams] Fetching streams for video: $videoId');
-            final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: type, id: videoId);
+            final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: apiType, id: videoId);
             debugPrint('[CustomIdStreams] Got ${streams.length} streams');
             
             if (mounted) {
@@ -987,7 +999,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
       
       // For movies or if meta fetch failed, use the original ID directly
-      final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: type, id: customId);
+      final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: apiType, id: customId);
       debugPrint('[CustomIdStreams] Got ${streams.length} streams');
       if (streams.isNotEmpty) debugPrint('[CustomIdStreams] First stream: ${streams.first}');
       if (mounted) {
@@ -1352,12 +1364,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
         streamUrl: stream['url'], title: _movie.title,
         headers: Map<String, String>.from(stream['behaviorHints']?['proxyHeaders']?['request'] ?? {}),
         movie: _movie,
-        selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
-        selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+        selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
+        selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
         startPosition: startPosition,
         activeProvider: 'stremio_direct',
         stremioId: stremioId,
         stremioAddonBaseUrl: stremioAddonBaseUrl,
+        stremioStreamType: _stremioStreamApiType,
       )));
     } else if (stream['infoHash'] != null) {
       // Build a proper magnet link:
@@ -1432,13 +1445,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (url != null && mounted) {
         Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
           streamUrl: url!, title: _movie.title, magnetLink: magnet, movie: _movie,
-          selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
-          selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+          selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
+          selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
           fileIndex: resolvedFileIndex,
           startPosition: startPosition,
           activeProvider: 'stremio_direct',
           stremioId: stremioId,
-          stremioAddonBaseUrl: stremioAddonBaseUrl)));
+          stremioAddonBaseUrl: stremioAddonBaseUrl,
+          stremioStreamType: _stremioStreamApiType)));
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to resolve stream.')));
       }
@@ -1622,7 +1636,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     final w = MediaQuery.of(context).size.width;
-    final isMobile = (Platform.isAndroid || Platform.isIOS) || w < 800;
+    final isMobile = (platformIsAndroid || platformIsIOS) || w < 800;
 
     return KeyboardListener(
       focusNode: _keyboardFocusNode,
@@ -1685,8 +1699,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
           alignment: Alignment.topCenter,
           errorWidget: (c, u, e) => Container(color: const Color(0xFF0A0A1A)),
         ),
-        BackdropFilter(filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-          child: Container(color: Colors.transparent)),
+        if (PerformanceTuning.skipBackdropBlur)
+          Container(color: Colors.black.withValues(alpha: 0.35))
+        else
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+            child: Container(color: Colors.transparent),
+          ),
         Container(decoration: const BoxDecoration(gradient: LinearGradient(
           begin: Alignment.topLeft, end: Alignment.bottomRight,
           colors: [Color(0xD5050510), Color(0xE8000000)]))),

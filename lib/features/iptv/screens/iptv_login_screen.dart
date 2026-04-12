@@ -387,7 +387,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
                           ],
                         ),
                         child: ElevatedButton(
-                          onPressed: _loading ? null : _login,
+                          onPressed: _loading ? null : () => _login(),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.transparent,
                             shadowColor: Colors.transparent,

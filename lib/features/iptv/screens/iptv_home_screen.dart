@@ -85,7 +85,7 @@ class _IptvHomeScreenState extends State<IptvHomeScreen> {
                     IconButton(
                       icon: const Icon(Icons.logout, color: Colors.white54, size: 22),
                       tooltip: 'Logout',
-                      onPressed: _logout,
+                      onPressed: () => _logout(),
                     ),
                   ],
                 ),

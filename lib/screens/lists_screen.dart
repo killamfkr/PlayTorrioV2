@@ -243,7 +243,7 @@ class _ListsScreenState extends State<ListsScreen> with SingleTickerProviderStat
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _createTraktList,
+              onPressed: () => _createTraktList(),
               icon: const Icon(Icons.add),
               label: const Text('Create New List'),
               style: ElevatedButton.styleFrom(
