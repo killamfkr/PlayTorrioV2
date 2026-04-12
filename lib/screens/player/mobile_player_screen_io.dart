@@ -37,6 +37,7 @@ import '../../api/tmdb_service.dart';
 import '../../api/introdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
+import '../../services/built_in_video_media_session.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -448,6 +449,46 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     }
   }
 
+  /// Android Auto / car displays use [AudioService] metadata + playback state.
+  bool get _isLiveTvPlayback =>
+      widget.stremioStreamType == 'tv' && widget.movie?.mediaType == 'tv';
+
+  String? get _mediaSessionSubtitle {
+    final m = widget.movie;
+    if (m == null) return null;
+    if (m.mediaType == 'tv' &&
+        widget.selectedSeason != null &&
+        widget.selectedEpisode != null) {
+      return 'S${widget.selectedSeason} · E${widget.selectedEpisode}';
+    }
+    if (m.releaseDate.isNotEmpty) return m.releaseDate;
+    return null;
+  }
+
+  String _mediaSessionAlbum() {
+    final m = widget.movie;
+    if (m == null) return 'PlayTorrio';
+    return m.mediaType == 'tv' ? 'TV show' : 'Movie';
+  }
+
+  void _syncBuiltInVideoMediaSession() {
+    if (_disposed || !Platform.isAndroid || DeviceProfile.isAndroidTv) return;
+    final poster = widget.movie?.posterPath;
+    attachBuiltInVideoMediaSession(
+      _player,
+      title: widget.title,
+      posterPath: (poster != null && poster.isNotEmpty) ? poster : null,
+      displaySubtitle: _mediaSessionSubtitle,
+      album: _mediaSessionAlbum(),
+      isLive: _isLiveTvPlayback ? true : null,
+      extras: widget.movie != null
+          ? <String, dynamic>{
+              'android.media.extras.MEDIA_ID': 'tmdb:${widget.movie!.id}',
+            }
+          : null,
+    );
+  }
+
   // ── Player ──────────────────────────────────────────────────────────────
   late final Player _player;
   late final VideoController _controller;
@@ -779,6 +820,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _errorSub?.cancel();
     _completedSub?.cancel();
 
+    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+      detachBuiltInVideoMediaSession(_player);
+    }
+
     _positionNotifier.dispose();
     _durationNotifier.dispose();
     _bufferedNotifier.dispose();
@@ -1103,6 +1148,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           setState(() {
             _currentUrl = source.url;
           });
+          _syncBuiltInVideoMediaSession();
           return; // Opened successfully (might still error out during buffering)
         } catch (e) {
           debugPrint('[Player] Source $i catch error: $e');
@@ -1124,6 +1170,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
           _applyBuiltinSubtitleState();
           _player.setVolume(_volume);
+          _syncBuiltInVideoMediaSession();
           return;
         } catch (e) {
           retryCount++;
@@ -1216,6 +1263,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         await _player.open(Media(streamUrl, httpHeaders: headers));
         _applyBuiltinSubtitleState();
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
+        _syncBuiltInVideoMediaSession();
         
         setState(() {
           _currentProvider = newProvider;
@@ -2268,6 +2316,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           Media(result.url, httpHeaders: result.headers),
                         );
                         _applyBuiltinSubtitleState();
+                        _syncBuiltInVideoMediaSession();
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
                           url: result.url,
@@ -2291,6 +2340,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           Media(source.url, httpHeaders: srcHeaders),
                         );
                         _applyBuiltinSubtitleState();
+                        _syncBuiltInVideoMediaSession();
                         setState(() {
                           _currentUrl = source.url;
                           _currentFallbackSourceIndex = 0;
@@ -2444,6 +2494,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           Media(streamUrl, httpHeaders: headers),
         );
         _applyBuiltinSubtitleState();
+        _syncBuiltInVideoMediaSession();
 
         if (currentPos.inSeconds > 0) {
           await _player.seek(currentPos);
