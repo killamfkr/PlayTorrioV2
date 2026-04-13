@@ -11,6 +11,8 @@ import 'api/audio_handler.dart';
 import 'api/audiobook_player_service.dart';
 import 'api/settings_service.dart';
 import 'api/music_player_service.dart';
+import 'api/stremio_service.dart';
+import 'utils/dlstreams_top_home.dart';
 import 'play_torrio_app.dart';
 import 'utils/device_profile.dart';
 import 'utils/tv_settings_remote_service.dart';
@@ -98,5 +100,29 @@ Future<void> bootstrap() async {
   await SettingsService().initLightMode();
   await SettingsService().getBuiltinPlayerSubtitlesEnabled();
 
+  await _ensureBundledStremioAddons();
+
   runApp(const PlayTorrioApp());
+}
+
+/// Pre-installs community addons we curate in the app (user can remove in Settings).
+Future<void> _ensureBundledStremioAddons() async {
+  if (!platformIsAndroid && !platformIsIOS) return;
+  try {
+    final settings = SettingsService();
+    final existing = await settings.getStremioAddons();
+    final hasDlstreams = existing.any(
+      (a) => '${a['baseUrl']}'.toLowerCase().contains('dlstreams.top'),
+    );
+    if (hasDlstreams) return;
+    final fetched = await StremioService().fetchManifest(kDlstreamsTopManifestUrl);
+    if (fetched == null) {
+      debugPrint('[Boot] dlstreams.top manifest not available (skipped)');
+      return;
+    }
+    await settings.saveStremioAddon(fetched);
+    debugPrint('[Boot] Bundled Stremio addon: dlstreams.top');
+  } catch (e) {
+    debugPrint('[Boot] Bundled Stremio addons: $e');
+  }
 }

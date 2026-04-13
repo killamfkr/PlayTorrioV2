@@ -19,6 +19,7 @@ import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../utils/performance_tuning.dart';
+import '../utils/dlstreams_top_home.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
@@ -469,7 +470,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       final usable = catalogs.where((c) => c['searchRequired'] != true).toList();
 
       final streamingAddonCats = usable.where(_isStreamingCatalogsAddon).toList();
-      final otherCats = usable.where((c) => !_isStreamingCatalogsAddon(c)).toList();
+      final dlstreamsAddonCats =
+          usable.where(isDlstreamsTopCatalog).toList();
+      final otherCats = usable
+          .where((c) =>
+              !_isStreamingCatalogsAddon(c) && !isDlstreamsTopCatalog(c))
+          .toList();
 
       final Map<String, List<Map<String, dynamic>>> nextItems = {};
       final List<Map<String, dynamic>> nextOrder = [];
@@ -491,6 +497,35 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           nextItems[itemKey] = items;
           nextOrder.add(cat);
         } catch (_) {}
+      }
+
+      // dlstreams.top: load **every** catalog as its own home row, grouped into shelves
+      // (Sports TV, Movies & Series, …); schedule-style catalogs → "Live schedules" board.
+      if (dlstreamsAddonCats.isNotEmpty) {
+        final ordered = orderedDlstreamsCatalogs(dlstreamsAddonCats);
+        annotateDlstreamsShelfHeaders(ordered);
+        if (ordered.isNotEmpty) {
+          ordered.first['_homeShowDlstreamsSource'] = true;
+          ordered.first['_homeTightDlstreamsTop'] = true;
+        }
+        await Future.wait(ordered.map((cat) async {
+          try {
+            final items = await _stremio.getCatalog(
+              baseUrl: cat['addonBaseUrl'],
+              type: cat['catalogType'],
+              id: cat['catalogId'],
+            );
+            if (items.isEmpty) return;
+            for (final item in items) {
+              item['_addonBaseUrl'] = cat['addonBaseUrl'];
+              item['_addonName'] = cat['addonName'];
+            }
+            final itemKey =
+                '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+            nextItems[itemKey] = items;
+            nextOrder.add(cat);
+          } catch (_) {}
+        }));
       }
 
       // Other addons: first catalog per addon that returns items (original behavior).
@@ -2598,12 +2633,44 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
     final catalogName = cat['catalogName'] as String;
     final addonIcon = (cat['addonIcon'] ?? '').toString();
     final isDesktop = MediaQuery.of(context).size.width > 900;
+    final shelfHeader = cat['_homeShelfHeader'] as String?;
+    final showDlstreamsSource = cat['_homeShowDlstreamsSource'] == true;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (shelfHeader != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              cat['_homeTightDlstreamsTop'] == true ? 8 : 28,
+              24,
+              0,
+            ),
+            child: Text(
+              shelfHeader,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.92),
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        if (showDlstreamsSource)
+          Padding(
+            padding: EdgeInsets.fromLTRB(24, shelfHeader != null ? 6 : 8, 24, 0),
+            child: Text(
+              'Source: dlstreams.top',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.38),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 36, 24, 14),
+          padding: EdgeInsets.fromLTRB(24, shelfHeader != null || showDlstreamsSource ? 14 : 36, 24, 14),
           child: Row(
             children: [
               if (addonIcon.isNotEmpty) ...[
@@ -2644,7 +2711,7 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      addonName,
+                      isDlstreamsTopCatalog(cat) ? catalogName : addonName,
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 11),
                     ),
                     const SizedBox(height: 4),
