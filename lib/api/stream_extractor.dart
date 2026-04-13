@@ -377,6 +377,17 @@ class StreamExtractor {
       });
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
 
+      // 8b. Strip iframe sandbox — nested YouTube embeds fail on Android WebView with
+      // "Remove sandbox attributes on the iframe tag" when parent pages use restrictive sandbox.
+      const relaxIframes = () => {
+        document.querySelectorAll('iframe[sandbox]').forEach((el) => {
+          try { el.removeAttribute('sandbox'); } catch (e) {}
+        });
+      };
+      relaxIframes();
+      const iframeObserver = new MutationObserver(() => relaxIframes());
+      iframeObserver.observe(document.documentElement, { childList: true, subtree: true });
+
       // 9. Hook Media Element Methods
       const originalPlay = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function() {

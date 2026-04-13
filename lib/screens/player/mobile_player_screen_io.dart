@@ -38,6 +38,7 @@ import '../../api/introdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
 import '../../services/built_in_video_media_session.dart';
+import '../../utils/youtube_embed_resolver.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -1097,6 +1098,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   //  PLAYBACK INITIALIZATION
   // ─────────────────────────────────────────────────────────────────────────
 
+  /// YouTube **page** URLs from Stremio (watch/embed/live) break in WebView-style
+  /// embeds with "Remove sandbox attributes on the iframe tag" — resolve to HLS/MP4.
+  Future<String> _resolvePlaybackMediaUrl(String url) async {
+    final direct = await YoutubeEmbedResolver.resolveToDirectStream(url);
+    return direct ?? url;
+  }
+
   Future<void> _initPlayback() async {
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
@@ -1137,7 +1145,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           _subscribeToStreams();
           await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
-          await _player.open(Media(source.url, httpHeaders: srcHeaders));
+          final playUrl = await _resolvePlaybackMediaUrl(source.url);
+          await _player.open(Media(playUrl, httpHeaders: srcHeaders));
           _applyBuiltinSubtitleState();
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
@@ -1146,7 +1155,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           }
           _player.setVolume(_volume);
           setState(() {
-            _currentUrl = source.url;
+            _currentUrl = playUrl;
           });
           _syncBuiltInVideoMediaSession();
           return; // Opened successfully (might still error out during buffering)
@@ -1167,7 +1176,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         try {
           _subscribeToStreams();
           await _configureMpvProperties();
-          await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          final playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
+          await _player.open(Media(playUrl, httpHeaders: widget.headers));
           _applyBuiltinSubtitleState();
           _player.setVolume(_volume);
           _syncBuiltInVideoMediaSession();
@@ -1260,7 +1270,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
-        await _player.open(Media(streamUrl, httpHeaders: headers));
+        final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
+        await _player.open(Media(playUrl, httpHeaders: headers));
         _applyBuiltinSubtitleState();
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
         _syncBuiltInVideoMediaSession();
@@ -1268,7 +1279,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
-          _currentUrl = streamUrl;
+          _currentUrl = playUrl;
           _currentFallbackSourceIndex = 0; // Reset for the new provider
           _hasError = false;
           _errorMessage = '';
@@ -2312,19 +2323,20 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           ));
                           return;
                         }
+                        final playUrl = await _resolvePlaybackMediaUrl(result.url);
                         await _player.open(
-                          Media(result.url, httpHeaders: result.headers),
+                          Media(playUrl, httpHeaders: result.headers),
                         );
                         _applyBuiltinSubtitleState();
                         _syncBuiltInVideoMediaSession();
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
-                          url: result.url,
+                          url: playUrl,
                           title: source.title,
-                          type: result.url.contains('.m3u8') ? 'hls' : result.url.contains('.mpd') ? 'dash' : 'mp4',
+                          type: playUrl.contains('.m3u8') ? 'hls' : playUrl.contains('.mpd') ? 'dash' : 'mp4',
                         );
                         setState(() {
-                          _currentUrl = result.url;
+                          _currentUrl = playUrl;
                           _currentFallbackSourceIndex = 0;
                           _hasError = false;
                           _errorMessage = '';
@@ -2336,13 +2348,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                           final ref = source.headers!['Referer'] ?? source.headers!['referer'];
                           if (ref != null) await (_player.platform as NativePlayer).setProperty('referrer', ref);
                         }
+                        final playUrl = await _resolvePlaybackMediaUrl(source.url);
                         await _player.open(
-                          Media(source.url, httpHeaders: srcHeaders),
+                          Media(playUrl, httpHeaders: srcHeaders),
                         );
                         _applyBuiltinSubtitleState();
                         _syncBuiltInVideoMediaSession();
                         setState(() {
-                          _currentUrl = source.url;
+                          _currentUrl = playUrl;
                           _currentFallbackSourceIndex = 0;
                           _hasError = false;
                           _errorMessage = '';
@@ -2490,8 +2503,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
+        final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
         await _player.open(
-          Media(streamUrl, httpHeaders: headers),
+          Media(playUrl, httpHeaders: headers),
         );
         _applyBuiltinSubtitleState();
         _syncBuiltInVideoMediaSession();
@@ -2503,7 +2517,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
-          _currentUrl = streamUrl;
+          _currentUrl = playUrl;
           _currentFallbackSourceIndex = 0; // Reset index on manual switch
           _hasError = false;
           _errorMessage = '';

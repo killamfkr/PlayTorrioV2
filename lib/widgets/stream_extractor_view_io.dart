@@ -341,6 +341,16 @@ class _StreamExtractorViewState extends State<StreamExtractorView> {
       });
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
 
+      // 8b. Nested players (e.g. YouTube) break in WebView when parent iframes use sandbox.
+      const relaxIframes = () => {
+        document.querySelectorAll('iframe[sandbox]').forEach((el) => {
+          try { el.removeAttribute('sandbox'); } catch (e) {}
+        });
+      };
+      relaxIframes();
+      const iframeObserver = new MutationObserver(() => relaxIframes());
+      iframeObserver.observe(document.documentElement, { childList: true, subtree: true });
+
       // 9. Scan for strings
       const scan = () => {
         const pattern = /https?://[^s"']+(?:.m3u8|.mp4|workers.dev|trueparadise|videasy)/gi;

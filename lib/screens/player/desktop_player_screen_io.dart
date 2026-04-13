@@ -34,6 +34,7 @@ import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
 import '../../api/introdb_service.dart';
+import '../../utils/youtube_embed_resolver.dart';
 import '../player_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -797,6 +798,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   //  PLAYBACK INITIALIZATION
   // ─────────────────────────────────────────────────────────────────────────
 
+  Future<String> _resolvePlaybackMediaUrl(String url) async {
+    final direct = await YoutubeEmbedResolver.resolveToDirectStream(url);
+    return direct ?? url;
+  }
+
   Future<void> _initPlayback() async {
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
@@ -836,10 +842,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         try {
           _subscribeToStreams();
           await _configureMpvProperties();
-          await _player.open(Media(source.url, httpHeaders: source.headers ?? widget.headers));
+          final playUrl = await _resolvePlaybackMediaUrl(source.url);
+          await _player.open(Media(playUrl, httpHeaders: source.headers ?? widget.headers));
           _player.setVolume(_volumeNotifier.value);
           setState(() {
-            _currentUrl = source.url;
+            _currentUrl = playUrl;
           });
           return; // Opened successfully
         } catch (e) {
@@ -859,7 +866,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         try {
           _subscribeToStreams();
           await _configureMpvProperties();
-          await _player.open(Media(widget.mediaPath, httpHeaders: widget.headers));
+          final playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
+          await _player.open(Media(playUrl, httpHeaders: widget.headers));
           _player.setVolume(_volumeNotifier.value);
           return;
         } catch (e) {
@@ -950,13 +958,14 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
-        await _player.open(Media(streamUrl, httpHeaders: headers));
+        final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
+        await _player.open(Media(playUrl, httpHeaders: headers));
         if (currentPos.inSeconds > 0) await _player.seek(currentPos);
         
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
-          _currentUrl = streamUrl;
+          _currentUrl = playUrl;
           _currentFallbackSourceIndex = 0; // Reset for the new provider
           _hasError = false;
           _errorMessage = '';
@@ -1823,28 +1832,30 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                           ));
                           return;
                         }
+                        final playUrl = await _resolvePlaybackMediaUrl(result.url);
                         await _player.open(
-                          Media(result.url, httpHeaders: result.headers),
+                          Media(playUrl, httpHeaders: result.headers),
                         );
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
-                          url: result.url,
+                          url: playUrl,
                           title: source.title,
-                          type: result.url.contains('.m3u8') ? 'hls' : result.url.contains('.mpd') ? 'dash' : 'mp4',
+                          type: playUrl.contains('.m3u8') ? 'hls' : playUrl.contains('.mpd') ? 'dash' : 'mp4',
                         );
                         setState(() {
-                          _currentUrl = result.url;
+                          _currentUrl = playUrl;
                           _currentFallbackSourceIndex = 0;
                           _hasError = false;
                           _errorMessage = '';
                         });
                       } else {
                         // Normal direct switch
+                        final playUrl = await _resolvePlaybackMediaUrl(source.url);
                         await _player.open(
-                          Media(source.url, httpHeaders: source.headers ?? widget.headers),
+                          Media(playUrl, httpHeaders: source.headers ?? widget.headers),
                         );
                         setState(() {
-                          _currentUrl = source.url;
+                          _currentUrl = playUrl;
                           _currentFallbackSourceIndex = 0;
                           _hasError = false;
                           _errorMessage = '';
@@ -2370,8 +2381,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       }
       
       if (streamUrl != null && streamUrl.isNotEmpty) {
+        final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
         await _player.open(
-          Media(streamUrl, httpHeaders: headers),
+          Media(playUrl, httpHeaders: headers),
         );
         
         if (currentPos.inSeconds > 0) {
@@ -2381,7 +2393,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         setState(() {
           _currentProvider = newProvider;
           _currentSources = sources;
-          _currentUrl = streamUrl;
+          _currentUrl = playUrl;
           _currentFallbackSourceIndex = 0; // Reset index on manual switch
           _hasError = false;
           _errorMessage = '';
