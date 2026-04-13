@@ -41,23 +41,17 @@ class YoutubeEmbedResolver {
       if (manifest == null) return null;
 
       // Prefer combined HLS (good quality + audio) when available.
+      // youtube_explode_dart 3.x: [HlsStreamInfo] only has [StreamInfo] (bitrate), not [videoQuality].
       if (manifest.hls.isNotEmpty) {
-        final list = manifest.hls.toList();
-        list.sort((a, b) {
-          final ha = a.videoQuality?.maxHeight ?? 0;
-          final hb = b.videoQuality?.maxHeight ?? 0;
-          return hb.compareTo(ha);
-        });
+        final list = manifest.hls.toList()
+          ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
         return list.first.url.toString();
       }
       // Muxed MP4 tops out around 360p but works without separate audio.
       if (manifest.muxed.isNotEmpty) {
-        final list = manifest.muxed.toList();
-        list.sort((a, b) {
-          final ha = a.videoQuality?.maxHeight ?? 0;
-          final hb = b.videoQuality?.maxHeight ?? 0;
-          return hb.compareTo(ha);
-        });
+        final list = manifest.muxed.toList()
+          ..sort((a, b) =>
+              b.videoQuality.index.compareTo(a.videoQuality.index));
         return list.first.url.toString();
       }
     } catch (e, st) {
