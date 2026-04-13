@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:visibility_detector/visibility_detector.dart';
 import '../models/iptv_credential.dart';
 import '../services/iptv_service.dart';
+import '../../../utils/iframe_sandbox_strip_js.dart';
 import 'iptv_home_screen.dart';
 
 class IptvLoginScreen extends StatefulWidget {
@@ -224,6 +225,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       child: InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(_defaultIptvUrl)),
+        initialUserScripts: iframeSandboxStripUserScripts(),
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
           domStorageEnabled: true,
@@ -235,6 +237,11 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
           allowsInlineMediaPlayback: true,
           supportMultipleWindows: false,
         ),
+        onLoadStop: (controller, url) async {
+          await controller.evaluateJavascript(
+            source: iframeSandboxStripAtDocumentStartJs(),
+          );
+        },
         shouldOverrideUrlLoading: (ctrl, action) async {
           final url = action.request.url?.toString() ?? '';
           final embedHost = Uri.tryParse(_defaultIptvUrl)?.host ?? '';
