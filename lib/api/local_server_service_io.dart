@@ -405,13 +405,16 @@ class LocalServerService {
       } catch (_) {}
     }
 
+    // Forward **all** Stremio [proxyHeaders.request] keys (Cookie, Authorization,
+    // sec-ch-ua, etc.). Older code only passed UA/Referer/Origin and broke HLS.
     final proxyHeaders = <String, String>{
-      'User-Agent': customHeaders['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-      if (customHeaders.containsKey('Referer')) 'Referer': customHeaders['Referer']!,
-      if (customHeaders.containsKey('Origin')) 'Origin': customHeaders['Origin']!,
-      'Accept': '*/*',
-      'Accept-Encoding': 'identity',
-      'Connection': 'keep-alive',
+      ...customHeaders,
+      if (!customHeaders.containsKey('User-Agent'))
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      if (!customHeaders.containsKey('Accept')) 'Accept': '*/*',
+      if (!customHeaders.containsKey('Accept-Encoding')) 'Accept-Encoding': 'identity',
+      if (!customHeaders.containsKey('Connection')) 'Connection': 'keep-alive',
     };
 
     final range = request.headers['range'];

@@ -40,6 +40,7 @@ import '../../models/stream_source.dart';
 import '../../services/built_in_video_media_session.dart';
 import '../../utils/youtube_embed_resolver.dart';
 import '../../utils/mpv_http_headers.dart';
+import '../../utils/stremio_hls_playback.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -538,8 +539,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         '[Player] Live TV stall — reopening stream (attempt $_liveStallReopenAttempts/$_kLiveStallReopenMax)');
     try {
       final url = _currentUrl ?? widget.mediaPath;
+      final stremioOpen =
+          await _resolveStremioLivePlaybackIfNeeded(url, widget.headers);
       await _configureMpvProperties();
-      await _player.open(Media(url, httpHeaders: widget.headers));
+      await _player.open(
+          Media(stremioOpen.playUrl, httpHeaders: stremioOpen.openHeaders));
       _applyBuiltinSubtitleState();
       await _player.play();
     } catch (e) {
@@ -673,6 +677,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   Timer? _liveBufferingUiTimer;
   bool _liveBufferingUiShown = false;
   bool _lastBufferingRaw = false;
+
+  /// Stremio live HLS proxied through localhost — mpv uses no extra HTTP headers.
+  bool _stremioLocalHlsProxyActive = false;
 
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
@@ -1195,6 +1202,23 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     return direct ?? url;
   }
 
+  /// Stremio live TV HLS: optional localhost proxy applies proxyHeaders to every
+  /// segment (like Stremio). When active, mpv must not duplicate those headers.
+  Future<({String playUrl, Map<String, String>? openHeaders})>
+      _resolveStremioLivePlaybackIfNeeded(
+    String playUrl,
+    Map<String, String>? requestHeaders,
+  ) async {
+    final r = await resolveStremioLiveTvPlayback(
+      url: playUrl,
+      requestHeaders: requestHeaders,
+      isStremioLiveTv: _isStremioLiveTv,
+      isStremioDirect: widget.activeProvider == 'stremio_direct',
+    );
+    _stremioLocalHlsProxyActive = r.usedLocalProxy;
+    return (playUrl: r.playUrl, openHeaders: r.openHeaders);
+  }
+
   Future<void> _initPlayback() async {
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
@@ -1240,10 +1264,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         
         try {
           _subscribeToStreams();
-          await _configureMpvProperties();
           final srcHeaders = source.headers ?? widget.headers;
-          final playUrl = await _resolvePlaybackMediaUrl(source.url);
-          await _player.open(Media(playUrl, httpHeaders: srcHeaders));
+          var playUrl = await _resolvePlaybackMediaUrl(source.url);
+          final stremioOpen =
+              await _resolveStremioLivePlaybackIfNeeded(playUrl, srcHeaders);
+          playUrl = stremioOpen.playUrl;
+          await _configureMpvProperties();
+          await _player.open(
+              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
           _applyBuiltinSubtitleState();
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
@@ -1272,9 +1300,13 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       while (retryCount < maxRetries) {
         try {
           _subscribeToStreams();
+          var playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
+          final stremioOpen = await _resolveStremioLivePlaybackIfNeeded(
+              playUrl, widget.headers);
+          playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
-          final playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
-          await _player.open(Media(playUrl, httpHeaders: widget.headers));
+          await _player.open(
+              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
           _applyBuiltinSubtitleState();
           _player.setVolume(_volume);
           _syncBuiltInVideoMediaSession();
@@ -1574,6 +1606,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   Future<void> _configureMpvProperties() async {
     if (_player.platform is! NativePlayer) return;
     final mpv = _player.platform as NativePlayer;
+    final effectiveStremioHeaders = _stremioLocalHlsProxyActive
+        ? <String, String>{}
+        : (widget.headers ?? <String, String>{});
 
     // ── Decoding ─────────────────────────────────────────────────────────
     // auto-safe on mobile: uses MediaCodec (Android) / VideoToolbox (iOS),
@@ -1655,9 +1690,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     }
 
     // ── HTTP Headers (all requests: master + HLS segments) ────────────────
-    await applyMpvHttpHeadersFromMap(mpv, widget.headers);
+    await applyMpvHttpHeadersFromMap(
+        mpv, effectiveStremioHeaders.isEmpty ? null : effectiveStremioHeaders);
     // HLS keys / some libav HTTP paths ignore mpv's global headers; mirror via lavf.
-    if (_isStremioLiveTv) {
+    if (_isStremioLiveTv && !_stremioLocalHlsProxyActive) {
       await applyMpvDemuxerLavfHttpHeaders(mpv, widget.headers);
     }
 

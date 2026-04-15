@@ -36,6 +36,7 @@ import '../../api/tmdb_service.dart';
 import '../../api/introdb_service.dart';
 import '../../utils/youtube_embed_resolver.dart';
 import '../../utils/mpv_http_headers.dart';
+import '../../utils/stremio_hls_playback.dart';
 import '../player_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -513,6 +514,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   bool _liveBufferingUiShown = false;
   bool _lastBufferingRaw = false;
 
+  bool _stremioLocalHlsProxyActive = false;
+
   bool get _isStremioLiveTv =>
       widget.activeProvider == 'stremio_direct' &&
       widget.stremioStreamType == 'tv';
@@ -821,6 +824,21 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     return direct ?? url;
   }
 
+  Future<({String playUrl, Map<String, String>? openHeaders})>
+      _resolveStremioLivePlaybackIfNeeded(
+    String playUrl,
+    Map<String, String>? requestHeaders,
+  ) async {
+    final r = await resolveStremioLiveTvPlayback(
+      url: playUrl,
+      requestHeaders: requestHeaders,
+      isStremioLiveTv: _isStremioLiveTv,
+      isStremioDirect: widget.activeProvider == 'stremio_direct',
+    );
+    _stremioLocalHlsProxyActive = r.usedLocalProxy;
+    return (playUrl: r.playUrl, openHeaders: r.openHeaders);
+  }
+
   void _cancelLiveBufferingUiDebounce() {
     _liveBufferingUiTimer?.cancel();
     _liveBufferingUiTimer = null;
@@ -881,8 +899,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         '[Player] Live TV stall — reopening stream (attempt $_liveStallReopenAttempts/$_kLiveStallReopenMax)');
     try {
       final url = _currentUrl ?? widget.mediaPath;
+      final stremioOpen =
+          await _resolveStremioLivePlaybackIfNeeded(url, widget.headers);
       await _configureMpvProperties();
-      await _player.open(Media(url, httpHeaders: widget.headers));
+      await _player.open(
+          Media(stremioOpen.playUrl, httpHeaders: stremioOpen.openHeaders));
       await _player.play();
     } catch (e) {
       debugPrint('[Player] Live reopen failed: $e');
@@ -934,9 +955,14 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         
         try {
           _subscribeToStreams();
+          final srcHeaders = source.headers ?? widget.headers;
+          var playUrl = await _resolvePlaybackMediaUrl(source.url);
+          final stremioOpen =
+              await _resolveStremioLivePlaybackIfNeeded(playUrl, srcHeaders);
+          playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
-          final playUrl = await _resolvePlaybackMediaUrl(source.url);
-          await _player.open(Media(playUrl, httpHeaders: source.headers ?? widget.headers));
+          await _player.open(
+              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
           _player.setVolume(_volumeNotifier.value);
           setState(() {
             _currentUrl = playUrl;
@@ -958,9 +984,13 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       while (retryCount < maxRetries) {
         try {
           _subscribeToStreams();
+          var playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
+          final stremioOpen = await _resolveStremioLivePlaybackIfNeeded(
+              playUrl, widget.headers);
+          playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
-          final playUrl = await _resolvePlaybackMediaUrl(widget.mediaPath);
-          await _player.open(Media(playUrl, httpHeaders: widget.headers));
+          await _player.open(
+              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
           _player.setVolume(_volumeNotifier.value);
           return;
         } catch (e) {
@@ -1249,6 +1279,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   Future<void> _configureMpvProperties() async {
     if (_player.platform is! NativePlayer) return;
     final mpv = _player.platform as NativePlayer;
+    final effectiveStremioHeaders = _stremioLocalHlsProxyActive
+        ? <String, String>{}
+        : (widget.headers ?? <String, String>{});
 
     // ── Decoding ─────────────────────────────────────────────────────────
     // auto-safe: tries whitelisted GPU decoders, falls back gracefully.
@@ -1323,8 +1356,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     }
 
     // ── HTTP Headers (all requests: master + HLS segments) ────────────────
-    await applyMpvHttpHeadersFromMap(mpv, widget.headers);
-    if (_isStremioLiveTv) {
+    await applyMpvHttpHeadersFromMap(
+        mpv, effectiveStremioHeaders.isEmpty ? null : effectiveStremioHeaders);
+    if (_isStremioLiveTv && !_stremioLocalHlsProxyActive) {
       await applyMpvDemuxerLavfHttpHeaders(mpv, widget.headers);
     }
 
