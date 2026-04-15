@@ -476,6 +476,34 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     return m.mediaType == 'tv' ? 'TV show' : 'Movie';
   }
 
+  void _cancelLiveBufferingUiDebounce() {
+    _liveBufferingUiTimer?.cancel();
+    _liveBufferingUiTimer = null;
+  }
+
+  /// Live HLS toggles `buffering` rapidly; debounce so the center control does not flash spinner/play.
+  void _updateDebouncedBufferingUi(bool raw) {
+    if (!_isStremioLiveTv) {
+      _isBufferingNotifier.value = raw;
+      return;
+    }
+    _lastBufferingRaw = raw;
+    if (raw) {
+      _cancelLiveBufferingUiDebounce();
+      _liveBufferingUiTimer = Timer(const Duration(milliseconds: 400), () {
+        if (_disposed || !_lastBufferingRaw) return;
+        if (!_liveBufferingUiShown) {
+          _liveBufferingUiShown = true;
+          _isBufferingNotifier.value = true;
+        }
+      });
+    } else {
+      _cancelLiveBufferingUiDebounce();
+      _liveBufferingUiShown = false;
+      _isBufferingNotifier.value = false;
+    }
+  }
+
   void _cancelLiveStallWatchdog() {
     _liveStallWatchdog?.cancel();
     _liveStallWatchdog = null;
@@ -639,6 +667,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   int _liveStallReopenAttempts = 0;
   static const int _kLiveStallReopenMax = 3;
   static const Duration _kLiveStallThreshold = Duration(seconds: 28);
+
+  /// Debounced buffering UI — raw mpv buffering flips rapidly on live HLS (spinner/play loop).
+  Timer? _liveBufferingUiTimer;
+  bool _liveBufferingUiShown = false;
+  bool _lastBufferingRaw = false;
 
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
@@ -865,6 +898,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _indicatorHideTimer?.cancel();
     _liveStallWatchdog?.cancel();
     _liveStallWatchdog = null;
+    _liveBufferingUiTimer?.cancel();
+    _liveBufferingUiTimer = null;
     _rippleController.dispose();
 
     _positionSub?.cancel();
@@ -1165,6 +1200,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _isInitPlaybackRunning = true;
     _liveStallReopenAttempts = 0;
     _cancelLiveStallWatchdog();
+    _cancelLiveBufferingUiDebounce();
+    _liveBufferingUiShown = false;
+    if (_isStremioLiveTv) {
+      _isBufferingNotifier.value = true;
+    }
     
     try {
     setState(() {
@@ -1387,13 +1427,15 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _durationSub = _player.stream.duration.listen((dur) {
       if (_disposed) return;
       _durationNotifier.value = dur;
-      if (!_hasInitialSeek &&
+      // Never resume-seek live TV — seek on a live edge breaks HLS and causes buffer oscillation.
+      if (!_isStremioLiveTv &&
+          !_hasInitialSeek &&
           dur.inSeconds > 0 &&
           widget.startPosition != null) {
         _hasInitialSeek = true;
         // mpv 'start' property handles the initial seek natively (set in
         // _configureMpvProperties). Fire a deferred seek as a safety net in
-        // case the property was ignored (e.g. live streams, non-seekable src).
+        // case the property was ignored (e.g. non-seekable VOD).
         Future.delayed(const Duration(milliseconds: 500), () {
           if (_disposed) return;
           final currentPos = _positionNotifier.value;
@@ -1429,6 +1471,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         if (_isStremioLiveTv) {
           _liveStallReopenAttempts = 0;
           _cancelLiveStallWatchdog();
+          _cancelLiveBufferingUiDebounce();
+          _liveBufferingUiShown = false;
+          _isBufferingNotifier.value = false;
         }
         unawaited(_configureAudioSessionIfNeeded());
         unawaited(_ensureAudioSessionActive());
@@ -1477,7 +1522,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     _bufferingSub = _player.stream.buffering.listen((buffering) {
       if (_disposed) return;
-      _isBufferingNotifier.value = buffering;
+      _updateDebouncedBufferingUi(buffering);
       if (_isStremioLiveTv) {
         if (buffering) {
           _armLiveStallWatchdog();
@@ -1498,6 +1543,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
       
       debugPrint('🔴 [MobilePlayer] $err');
+
+      // Live IPTV: auto source-skip retries make oscillation worse (same URL, repeated open).
+      if (_isStremioLiveTv) {
+        return;
+      }
       
       if (err.contains('Failed') || err.contains('No such file')) {
         // Don't retry if we've already given up or are currently retrying
@@ -1529,9 +1579,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     // whitelisted to formats each platform reliably supports.
     await mpv.setProperty('hwdec', _hwDecMode.mpvValue);
 
-    // Zero-copy direct rendering — decoder writes straight to GPU texture.
-    // Big win on mobile for battery + throughput on H.265/4K content.
-    await mpv.setProperty('vd-lavc-dr', 'yes');
+    // Zero-copy can destabilize some live HLS paths (constant rebuffer).
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('vd-lavc-dr', 'no');
+    } else {
+      await mpv.setProperty('vd-lavc-dr', 'yes');
+    }
 
     // Auto thread count (0 = let mpv decide). On mobile 4–8 cores typical.
     await mpv.setProperty('vd-lavc-threads', '0');
@@ -1572,12 +1625,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await mpv.setProperty('tls-verify', 'no');
 
     if (_isStremioLiveTv) {
-      // Live streams: large read-ahead fights the live edge and causes buffering loops.
+      // Live HLS: tiny cache underruns the edge; moderate buffer reduces flip-flop.
       await mpv.setProperty('cache', 'yes');
-      await mpv.setProperty('cache-secs', '8');
-      await mpv.setProperty('demuxer-max-bytes', '32MiB');
-      await mpv.setProperty('demuxer-readahead-secs', '8');
-      await mpv.setProperty('demuxer-max-back-bytes', '4MiB');
+      await mpv.setProperty('cache-secs', '20');
+      await mpv.setProperty('demuxer-max-bytes', '48MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '12');
+      await mpv.setProperty('demuxer-max-back-bytes', '12MiB');
     } else {
       // 150 MiB forward cache (less than desktop's 300 MiB — spare mobile RAM).
       await mpv.setProperty('cache', 'yes');
@@ -1616,9 +1669,15 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     // position. This is far more reliable on Android than seeking after open,
     // because the post-open seek can be silently dropped before the demuxer
     // is fully initialised.
-    if (widget.startPosition != null && !_hasInitialSeek) {
+    if (!_isStremioLiveTv &&
+        widget.startPosition != null &&
+        !_hasInitialSeek) {
       final secs = widget.startPosition!.inMilliseconds / 1000.0;
       await mpv.setProperty('start', '+${secs.toStringAsFixed(3)}');
+    }
+
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('force-seekable', 'no');
     }
   }
 

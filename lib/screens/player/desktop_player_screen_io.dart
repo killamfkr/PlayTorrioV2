@@ -508,6 +508,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   static const int _kLiveStallReopenMax = 3;
   static const Duration _kLiveStallThreshold = Duration(seconds: 28);
 
+  Timer? _liveBufferingUiTimer;
+  bool _liveBufferingUiShown = false;
+  bool _lastBufferingRaw = false;
+
   bool get _isStremioLiveTv =>
       widget.activeProvider == 'stremio_direct' &&
       widget.stremioStreamType == 'tv';
@@ -646,6 +650,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _hideTimer?.cancel();
     _liveStallWatchdog?.cancel();
     _liveStallWatchdog = null;
+    _liveBufferingUiTimer?.cancel();
+    _liveBufferingUiTimer = null;
 
     // Cancel all subscriptions
     _positionSub?.cancel();
@@ -814,6 +820,33 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     return direct ?? url;
   }
 
+  void _cancelLiveBufferingUiDebounce() {
+    _liveBufferingUiTimer?.cancel();
+    _liveBufferingUiTimer = null;
+  }
+
+  void _updateDebouncedBufferingUi(bool raw) {
+    if (!_isStremioLiveTv) {
+      _isBufferingNotifier.value = raw;
+      return;
+    }
+    _lastBufferingRaw = raw;
+    if (raw) {
+      _cancelLiveBufferingUiDebounce();
+      _liveBufferingUiTimer = Timer(const Duration(milliseconds: 400), () {
+        if (_disposed || !_lastBufferingRaw) return;
+        if (!_liveBufferingUiShown) {
+          _liveBufferingUiShown = true;
+          _isBufferingNotifier.value = true;
+        }
+      });
+    } else {
+      _cancelLiveBufferingUiDebounce();
+      _liveBufferingUiShown = false;
+      _isBufferingNotifier.value = false;
+    }
+  }
+
   void _cancelLiveStallWatchdog() {
     _liveStallWatchdog?.cancel();
     _liveStallWatchdog = null;
@@ -861,6 +894,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _isInitPlaybackRunning = true;
     _liveStallReopenAttempts = 0;
     _cancelLiveStallWatchdog();
+    _cancelLiveBufferingUiDebounce();
+    _liveBufferingUiShown = false;
+    if (_isStremioLiveTv) {
+      _isBufferingNotifier.value = true;
+    }
     
     try {
     setState(() {
@@ -1074,7 +1112,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _durationSub = _player.stream.duration.listen((dur) {
       if (_disposed) return;
       _durationNotifier.value = dur;
-      if (!_hasInitialSeek && dur.inSeconds > 0 && widget.startPosition != null) {
+      if (!_isStremioLiveTv &&
+          !_hasInitialSeek &&
+          dur.inSeconds > 0 &&
+          widget.startPosition != null) {
         _hasInitialSeek = true;
         _player.seek(widget.startPosition!);
         if (mounted) {
@@ -1100,6 +1141,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         if (_isStremioLiveTv) {
           _liveStallReopenAttempts = 0;
           _cancelLiveStallWatchdog();
+          _cancelLiveBufferingUiDebounce();
+          _liveBufferingUiShown = false;
+          _isBufferingNotifier.value = false;
         }
         _startHideTimer();
         // Scrobble resume
@@ -1147,7 +1191,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     // Buffering spinner
     _bufferingSub = _player.stream.buffering.listen((buffering) {
       if (_disposed) return;
-      _isBufferingNotifier.value = buffering;
+      _updateDebouncedBufferingUi(buffering);
       if (_isStremioLiveTv) {
         if (buffering) {
           _armLiveStallWatchdog();
@@ -1174,6 +1218,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       }
       
       debugPrint('🔴 Player error: $err');
+
+      if (_isStremioLiveTv) {
+        return;
+      }
       
       // Only surface fatal errors to UI (connection failures are often transient)
       if (err.contains('Failed') || err.contains('No such file')) {
@@ -1206,9 +1254,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     // This is the officially recommended hwdec mode by mpv developers.
     await mpv.setProperty('hwdec', _hwDecMode.mpvValue);
 
-    // Zero-copy direct rendering from decoder to GPU texture when possible.
-    // Reduces RAM usage and improves throughput, especially on 4K/HEVC.
-    await mpv.setProperty('vd-lavc-dr', 'yes');
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('vd-lavc-dr', 'no');
+    } else {
+      await mpv.setProperty('vd-lavc-dr', 'yes');
+    }
 
     // Let mpv pick the optimal thread count automatically (0 = auto).
     await mpv.setProperty('vd-lavc-threads', '0');
@@ -1224,14 +1274,14 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     await mpv.setProperty('sub-auto', 'all');
 
     // ── Video Sync & Smoothness ───────────────────────────────────────────
-    // display-resample: syncs to the monitor's refresh rate, eliminates judder.
-    // This is the best sync mode for desktop displays.
-    await mpv.setProperty('video-sync', 'display-resample');
-
-    // Temporal interpolation to smooth out frame pacing between display frames.
-    // Significantly reduces judder on 24fps content on 60Hz+ monitors.
-    await mpv.setProperty('interpolation', 'yes');
-    await mpv.setProperty('tscale', 'oversample'); // lightweight interpolation
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('video-sync', 'audio');
+      await mpv.setProperty('interpolation', 'no');
+    } else {
+      await mpv.setProperty('video-sync', 'display-resample');
+      await mpv.setProperty('interpolation', 'yes');
+      await mpv.setProperty('tscale', 'oversample');
+    }
 
     // ── Adaptive Streaming (HLS/DASH) ─────────────────────────────────────
     if (_isStremioLiveTv) {
@@ -1246,10 +1296,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     if (_isStremioLiveTv) {
       await mpv.setProperty('cache', 'yes');
-      await mpv.setProperty('cache-secs', '8');
-      await mpv.setProperty('demuxer-max-bytes', '48MiB');
-      await mpv.setProperty('demuxer-readahead-secs', '8');
-      await mpv.setProperty('demuxer-max-back-bytes', '8MiB');
+      await mpv.setProperty('cache-secs', '20');
+      await mpv.setProperty('demuxer-max-bytes', '64MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '12');
+      await mpv.setProperty('demuxer-max-back-bytes', '12MiB');
     } else {
       // Cache: 300 MB in memory, read 120 s ahead.
       await mpv.setProperty('cache', 'yes');
@@ -1283,13 +1333,15 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     }
 
     // ── Resume Position ──────────────────────────────────────────────────
-    // Set mpv's native 'start' property so it begins playback at the saved
-    // position. This is more reliable than seeking after open, because the
-    // post-open seek can be silently dropped before the demuxer is fully
-    // initialised.
-    if (widget.startPosition != null && !_hasInitialSeek) {
+    if (!_isStremioLiveTv &&
+        widget.startPosition != null &&
+        !_hasInitialSeek) {
       final secs = widget.startPosition!.inMilliseconds / 1000.0;
       await mpv.setProperty('start', '+${secs.toStringAsFixed(3)}');
+    }
+
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('force-seekable', 'no');
     }
   }
 
