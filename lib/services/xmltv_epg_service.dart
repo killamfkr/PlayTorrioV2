@@ -1,8 +1,23 @@
 import 'dart:convert' show utf8;
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
+
+/// Result of parsing in a background isolate (avoids UI jank on large EPG files).
+class _XmltvParsedData {
+  final Map<String, List<XmltvProgramme>> byChannel;
+  final Map<String, String> normToRawId;
+  final Map<String, String> normToDisplayName;
+
+  const _XmltvParsedData({
+    required this.byChannel,
+    required this.normToRawId,
+    required this.normToDisplayName,
+  });
+}
 
 /// Parses XMLTV (xmltv) files and maps programmes to channel ids for TV Guide.
 class XmltvEpgService {
@@ -89,7 +104,20 @@ class XmltvEpgService {
     return el?.innerText.trim() ?? '';
   }
 
+  void _applyParsedData(_XmltvParsedData data) {
+    _byChannel
+      ..clear()
+      ..addAll(data.byChannel);
+    _normToRawId
+      ..clear()
+      ..addAll(data.normToRawId);
+    _normToDisplayName
+      ..clear()
+      ..addAll(data.normToDisplayName);
+  }
+
   /// Fetches and parses an XMLTV document from [url]. Clears previous data.
+  /// Heavy parsing runs in a background isolate so the UI thread does not freeze.
   Future<bool> loadFromUrl(String url) async {
     clear();
     final uri = Uri.tryParse(url.trim());
@@ -98,13 +126,14 @@ class XmltvEpgService {
     try {
       final response = await http.get(uri).timeout(const Duration(seconds: 25));
       if (response.statusCode != 200) return false;
-      var body = response.body;
-      if (response.bodyBytes.length > 2 &&
-          response.bodyBytes[0] == 0x1f &&
-          response.bodyBytes[1] == 0x8b) {
-        body = utf8.decode(GZipDecoder().decodeBytes(response.bodyBytes));
+      final bytes = Uint8List.fromList(response.bodyBytes);
+      final data = await compute(_parseXmltvBytesInIsolate, bytes);
+      if (data == null) {
+        clear();
+        return false;
       }
-      return _parseXml(body);
+      _applyParsedData(data);
+      return isLoaded;
     } catch (_) {
       return false;
     }
@@ -124,20 +153,39 @@ class XmltvEpgService {
     return t.isNotEmpty ? t : null;
   }
 
-  bool _parseXml(String body) {
+  /// Top-level for [compute] — must not touch [XmltvEpgService.instance].
+  static _XmltvParsedData? _parseXmltvBytesInIsolate(Uint8List bytes) {
+    try {
+      String body;
+      if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+        body = utf8.decode(GZipDecoder().decodeBytes(bytes));
+      } else {
+        body = utf8.decode(bytes);
+      }
+      return _parseXmlStringToData(body);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static _XmltvParsedData? _parseXmlStringToData(String body) {
     try {
       final doc = XmlDocument.parse(body);
+      final byChannel = <String, List<XmltvProgramme>>{};
+      final normToRawId = <String, String>{};
+      final normToDisplayName = <String, String>{};
+
       void registerRawId(String channelId) {
         final k = normalizeKey(channelId);
         if (k.isEmpty) return;
-        _normToRawId.putIfAbsent(k, () => channelId.trim());
+        normToRawId.putIfAbsent(k, () => channelId.trim());
       }
 
       void addProgramme(String channelId, XmltvProgramme p) {
         final k = normalizeKey(channelId);
         if (k.isEmpty) return;
         registerRawId(channelId);
-        _byChannel.putIfAbsent(k, () => []).add(p);
+        byChannel.putIfAbsent(k, () => []).add(p);
       }
 
       for (final cel in doc.findAllElements('channel')) {
@@ -147,7 +195,7 @@ class XmltvEpgService {
         final dn = _channelDisplayName(cel);
         if (dn != null) {
           final k = normalizeKey(id);
-          _normToDisplayName.putIfAbsent(k, () => dn);
+          normToDisplayName.putIfAbsent(k, () => dn);
         }
       }
 
@@ -173,13 +221,19 @@ class XmltvEpgService {
         );
       }
 
-      for (final list in _byChannel.values) {
+      for (final list in byChannel.values) {
         list.sort((a, b) => a.start.compareTo(b.start));
       }
-      return isLoaded;
+
+      final empty = byChannel.isEmpty && normToRawId.isEmpty;
+      if (empty) return null;
+      return _XmltvParsedData(
+        byChannel: byChannel,
+        normToRawId: normToRawId,
+        normToDisplayName: normToDisplayName,
+      );
     } catch (_) {
-      clear();
-      return false;
+      return null;
     }
   }
 
