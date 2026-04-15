@@ -10,6 +10,7 @@ import '../models/torrent_result.dart';
 import '../api/torrent_api.dart';
 import '../api/torrent_stream_service.dart';
 import '../api/stremio_service.dart';
+import '../utils/stremio_stream_headers.dart';
 import '../api/torrent_filter.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
@@ -1362,7 +1363,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (!mounted) return;
       Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
         streamUrl: stream['url'], title: _movie.title,
-        headers: Map<String, String>.from(stream['behaviorHints']?['proxyHeaders']?['request'] ?? {}),
+        headers: stremioProxyRequestHeadersFromStream(stream),
         movie: _movie,
         selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
         selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,

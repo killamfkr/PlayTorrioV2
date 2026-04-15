@@ -5,6 +5,7 @@ import 'package:shimmer/shimmer.dart';
 import '../api/tmdb_api.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
+import '../utils/stremio_stream_headers.dart';
 import '../api/stream_extractor.dart';
 import '../api/stream_providers.dart';
 import '../api/amri_extractor.dart';
@@ -1858,6 +1859,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       int? fileIndex;
       String? stremioItemId;
       String? stremioAddonBase;
+      Map<String, String>? stremioResumeHeaders;
 
       if (method == 'stremio_direct') {
         // Direct stremio stream — try the saved URL first
@@ -1889,6 +1891,8 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               final first = streams.first;
               if (first is Map<String, dynamic> && first['url'] != null) {
                 streamUrl = first['url'] as String;
+                stremioResumeHeaders = stremioProxyRequestHeadersFromStream(first);
+                if (stremioResumeHeaders.isEmpty) stremioResumeHeaders = null;
               }
             }
           } catch (e) {
@@ -2104,6 +2108,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             builder: (_) => PlayerScreen(
               streamUrl: streamUrl!,
               title: title,
+              headers: stremioResumeHeaders,
               movie: Movie(
                 id: tmdbId,
                 title: title,

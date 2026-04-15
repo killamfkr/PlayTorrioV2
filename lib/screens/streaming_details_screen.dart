@@ -6,6 +6,7 @@ import '../models/movie.dart';
 import '../api/tmdb_api.dart';
 import '../api/stream_extractor.dart';
 import '../api/stremio_service.dart';
+import '../utils/stremio_stream_headers.dart';
 import '../api/stream_providers.dart';
 import '../api/webstreamr_service.dart';
 import '../api/settings_service.dart';
@@ -230,11 +231,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
 
     if (stream['url'] != null) {
       if (!mounted) return;
-      final headers = stream['behaviorHints'] is Map
-          ? Map<String, String>.from(
-              (stream['behaviorHints'] as Map)['proxyHeaders']?['request'] as Map? ?? {},
-            )
-          : <String, String>{};
+      final headers = stremioProxyRequestHeadersFromStream(stream);
       Navigator.push(
         context,
         MaterialPageRoute(

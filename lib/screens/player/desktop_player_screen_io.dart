@@ -37,6 +37,7 @@ import '../../api/introdb_service.dart';
 import '../../utils/youtube_embed_resolver.dart';
 import '../../utils/mpv_http_headers.dart';
 import '../../utils/stremio_hls_playback.dart';
+import '../../utils/stremio_stream_headers.dart';
 import '../player_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2221,10 +2222,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
         if (stream['url'] != null) {
           streamUrl = stream['url'] as String;
-          final proxyHeaders = stream['behaviorHints']?['proxyHeaders']?['request'];
-          if (proxyHeaders is Map) {
-            headers = Map<String, String>.from(proxyHeaders);
-          }
+          final h = stremioProxyRequestHeadersFromStream(stream);
+          if (h.isNotEmpty) headers = h;
         } else if (stream['infoHash'] != null) {
           // Stremio returned a torrent hash — resolve it
           final infoHash = stream['infoHash'] as String;
