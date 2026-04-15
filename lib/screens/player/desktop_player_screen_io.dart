@@ -1324,6 +1324,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
     // ── HTTP Headers (all requests: master + HLS segments) ────────────────
     await applyMpvHttpHeadersFromMap(mpv, widget.headers);
+    if (_isStremioLiveTv) {
+      await applyMpvDemuxerLavfHttpHeaders(mpv, widget.headers);
+    }
 
     // ── Resume Position ──────────────────────────────────────────────────
     if (!_isStremioLiveTv &&

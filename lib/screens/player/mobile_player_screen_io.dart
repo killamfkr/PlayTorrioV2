@@ -1656,6 +1656,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // ── HTTP Headers (all requests: master + HLS segments) ────────────────
     await applyMpvHttpHeadersFromMap(mpv, widget.headers);
+    // HLS keys / some libav HTTP paths ignore mpv's global headers; mirror via lavf.
+    if (_isStremioLiveTv) {
+      await applyMpvDemuxerLavfHttpHeaders(mpv, widget.headers);
+    }
 
     // ── Resume Position ──────────────────────────────────────────────────
     // Set mpv's native 'start' property so it begins playback at the saved

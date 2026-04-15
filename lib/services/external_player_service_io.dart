@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../api/settings_service.dart';
+import '../utils/mpv_http_headers.dart';
 import 'android_player_launcher.dart';
 import 'external_player_model.dart';
 
@@ -101,8 +102,8 @@ class ExternalPlayerService {
       ],
       desktopArgs: (url, title, headers) => [
         if (title != null) '--force-media-title=$title',
-        if (headers != null)
-          '--http-header-fields=${headers.entries.map((e) => '${e.key}: ${e.value}').join(',')}',
+        if (headers != null && headers.isNotEmpty)
+          '--http-header-fields=${encodeMpvHttpHeaderFieldsValue(headers)}',
         url,
       ],
     ),
@@ -173,8 +174,8 @@ class ExternalPlayerService {
       linuxBinary: 'mpv',
       desktopArgs: (url, title, headers) => [
         if (title != null) '--force-media-title=$title',
-        if (headers != null)
-          '--http-header-fields=${headers.entries.map((e) => '${e.key}: ${e.value}').join(',')}',
+        if (headers != null && headers.isNotEmpty)
+          '--http-header-fields=${encodeMpvHttpHeaderFieldsValue(headers)}',
         url,
       ],
     ),
