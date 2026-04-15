@@ -2,21 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import '../api/local_server_service.dart';
 
-bool _looksLikeAdaptiveOrLiveStreamUrl(String url) {
-  final lower = url.toLowerCase();
-  if (lower.contains('.m3u8') || lower.contains('m3u8')) return true;
-  if (lower.contains('.mpd') || lower.contains('/manifest')) return true;
-  if (lower.contains('application/vnd.apple.mpegurl')) return true;
-  // Path patterns without a clear extension
-  if (lower.contains('/playlist') ||
-      lower.contains('master') ||
-      lower.contains('index.m3u') ||
-      lower.contains('/hls/')) {
-    return true;
-  }
-  return false;
-}
-
 /// Stremio’s engine proxies HLS so **every** playlist/segment/key request carries
 /// [behaviorHints.proxyHeaders.request]. Plain players only attach headers to the
 /// first open; nested libav HLS fetches often 403 without a proxy.
@@ -47,10 +32,8 @@ Future<({String playUrl, Map<String, String>? openHeaders, bool usedLocalProxy})
       requestHeaders.isEmpty) {
     return (playUrl: url, openHeaders: requestHeaders, usedLocalProxy: false);
   }
-  // Adaptive / typical live patterns — avoid proxying plain progressive MP4 (OOM risk).
-  if (!_looksLikeAdaptiveOrLiveStreamUrl(url)) {
-    return (playUrl: url, openHeaders: requestHeaders, usedLocalProxy: false);
-  }
+  // FlixNest / dlstreams often use opaque URLs with no `.m3u8` in the string.
+  // If the addon sent proxyHeaders, **always** route through our proxy (like Stremio).
   try {
     await LocalServerService().start();
     final proxied = LocalServerService().getHlsProxyUrl(url, requestHeaders);

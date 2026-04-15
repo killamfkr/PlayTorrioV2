@@ -465,14 +465,48 @@ class LocalServerService {
       }
 
       final contentType = streamedResponse.headers['content-type'] ?? '';
+      final contentLenHeader = streamedResponse.headers['content-length'];
+      final contentLen = contentLenHeader != null ? int.tryParse(contentLenHeader) : null;
 
-      // Buffer once: must not decode binary segments (.ts) as UTF-8.
+      // Segments (.ts) are multi‑MB — stream through without buffering. Playlists are small.
+      const int kMaxPlaylistBuffer = 8 * 1024 * 1024;
+      const int kStreamThroughIfLargerThan = 2 * 1024 * 1024;
+
+      if (contentLen != null && contentLen > kStreamThroughIfLargerThan) {
+        final responseHeaders = <String, String>{
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'bytes',
+          'Connection': 'keep-alive',
+        };
+        for (final h in ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+          final v = streamedResponse.headers[h];
+          if (v != null) responseHeaders[h] = v;
+        }
+        return Response(
+          streamedResponse.statusCode,
+          body: streamedResponse.stream,
+          headers: responseHeaders,
+        );
+      }
+
       final raw = await streamedResponse.stream.toBytes();
+      if (raw.length > kMaxPlaylistBuffer) {
+        debugPrint('[HlsProxy] Response ${raw.length} bytes — too large to treat as playlist, passing through');
+        final responseHeaders = <String, String>{
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'bytes',
+          'Connection': 'keep-alive',
+        };
+        responseHeaders['content-type'] =
+            streamedResponse.headers['content-type'] ?? 'application/octet-stream';
+        responseHeaders['content-length'] = raw.length.toString();
+        return Response(streamedResponse.statusCode, body: raw, headers: responseHeaders);
+      }
+
       final headLen = raw.length < 512 ? raw.length : 512;
       final headUtf8 =
           headLen > 0 ? utf8.decode(raw.sublist(0, headLen), allowMalformed: true) : '';
       final trimmedHead = headUtf8.trimLeft();
-      // Some CDNs serve playlists as text/plain or application/octet-stream.
       final looksLikePlaylist = streamedResponse.statusCode == 200 &&
           (contentType.contains('mpegurl') ||
               contentType.contains('x-mpegurl') ||
@@ -531,7 +565,6 @@ class LocalServerService {
         );
       }
 
-      // Non-playlist (segments, keys, mp4): return raw bytes unchanged.
       final responseHeaders = <String, String>{
         'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes',
