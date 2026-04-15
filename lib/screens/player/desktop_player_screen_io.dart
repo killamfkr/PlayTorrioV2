@@ -503,6 +503,15 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   Duration? _activeSkipTarget; // where to seek when the user taps
   bool _skipDismissed = false; // user dismissed the current segment button
 
+  Timer? _liveStallWatchdog;
+  int _liveStallReopenAttempts = 0;
+  static const int _kLiveStallReopenMax = 3;
+  static const Duration _kLiveStallThreshold = Duration(seconds: 28);
+
+  bool get _isStremioLiveTv =>
+      widget.activeProvider == 'stremio_direct' &&
+      widget.stremioStreamType == 'tv';
+
   // ─────────────────────────────────────────────────────────────────────────
   //  LIFECYCLE
   // ─────────────────────────────────────────────────────────────────────────
@@ -635,6 +644,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     windowManager.removeListener(this);
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _liveStallWatchdog?.cancel();
+    _liveStallWatchdog = null;
 
     // Cancel all subscriptions
     _positionSub?.cancel();
@@ -803,10 +814,53 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     return direct ?? url;
   }
 
+  void _cancelLiveStallWatchdog() {
+    _liveStallWatchdog?.cancel();
+    _liveStallWatchdog = null;
+  }
+
+  void _armLiveStallWatchdog() {
+    if (!_isStremioLiveTv || _disposed) return;
+    _cancelLiveStallWatchdog();
+    _liveStallWatchdog = Timer(_kLiveStallThreshold, () {
+      if (_disposed || !_isStremioLiveTv) return;
+      if (!_isBufferingNotifier.value) return;
+      _reopenLiveStreamIfStuck();
+    });
+  }
+
+  Future<void> _reopenLiveStreamIfStuck() async {
+    if (_disposed || !_isStremioLiveTv) return;
+    if (_liveStallReopenAttempts >= _kLiveStallReopenMax) {
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _errorMessage =
+              'Live stream stalled (buffering too long). Try another source or check your connection.';
+        });
+      }
+      _isBufferingNotifier.value = false;
+      return;
+    }
+    _liveStallReopenAttempts++;
+    debugPrint(
+        '[Player] Live TV stall — reopening stream (attempt $_liveStallReopenAttempts/$_kLiveStallReopenMax)');
+    try {
+      final url = _currentUrl ?? widget.mediaPath;
+      await _configureMpvProperties();
+      await _player.open(Media(url, httpHeaders: widget.headers));
+      await _player.play();
+    } catch (e) {
+      debugPrint('[Player] Live reopen failed: $e');
+    }
+  }
+
   Future<void> _initPlayback() async {
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
     _isInitPlaybackRunning = true;
+    _liveStallReopenAttempts = 0;
+    _cancelLiveStallWatchdog();
     
     try {
     setState(() {
@@ -1043,6 +1097,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       if (_disposed) return;
       _isPlayingNotifier.value = playing;
       if (playing) {
+        if (_isStremioLiveTv) {
+          _liveStallReopenAttempts = 0;
+          _cancelLiveStallWatchdog();
+        }
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {
@@ -1090,6 +1148,13 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     _bufferingSub = _player.stream.buffering.listen((buffering) {
       if (_disposed) return;
       _isBufferingNotifier.value = buffering;
+      if (_isStremioLiveTv) {
+        if (buffering) {
+          _armLiveStallWatchdog();
+        } else {
+          _cancelLiveStallWatchdog();
+        }
+      }
     });
 
     // Volume sync (e.g. hardware media keys)
@@ -1169,22 +1234,30 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     await mpv.setProperty('tscale', 'oversample'); // lightweight interpolation
 
     // ── Adaptive Streaming (HLS/DASH) ─────────────────────────────────────
-    // Always pick the highest bitrate variant in multi-quality playlists.
-    await mpv.setProperty('hls-bitrate', 'max');
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('hls-bitrate', 'min');
+    } else {
+      await mpv.setProperty('hls-bitrate', 'max');
+    }
 
     // ── Network / Streaming ───────────────────────────────────────────────
     await mpv.setProperty('network-timeout', '30');
     await mpv.setProperty('tls-verify', 'no'); // for self-signed / CDN certs
 
-    // Cache: 300 MB in memory, read 120 s ahead.
-    // This dramatically reduces rebuffering on variable-bitrate streams.
-    await mpv.setProperty('cache', 'yes');
-    await mpv.setProperty('cache-secs', '120');
-    await mpv.setProperty('demuxer-max-bytes', '300MiB');
-    await mpv.setProperty('demuxer-readahead-secs', '120');
-
-    // How far back the demuxer keeps decoded data (for backward seeks).
-    await mpv.setProperty('demuxer-max-back-bytes', '50MiB');
+    if (_isStremioLiveTv) {
+      await mpv.setProperty('cache', 'yes');
+      await mpv.setProperty('cache-secs', '8');
+      await mpv.setProperty('demuxer-max-bytes', '48MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '8');
+      await mpv.setProperty('demuxer-max-back-bytes', '8MiB');
+    } else {
+      // Cache: 300 MB in memory, read 120 s ahead.
+      await mpv.setProperty('cache', 'yes');
+      await mpv.setProperty('cache-secs', '120');
+      await mpv.setProperty('demuxer-max-bytes', '300MiB');
+      await mpv.setProperty('demuxer-readahead-secs', '120');
+      await mpv.setProperty('demuxer-max-back-bytes', '50MiB');
+    }
 
     // Prevent yt-dlp from being invoked (we supply our own URL).
     await mpv.setProperty('ytdl', 'no');
