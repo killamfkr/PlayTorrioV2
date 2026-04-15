@@ -39,6 +39,7 @@ import '../../models/movie.dart';
 import '../../models/stream_source.dart';
 import '../../services/built_in_video_media_session.dart';
 import '../../utils/youtube_embed_resolver.dart';
+import '../../utils/mpv_http_headers.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
@@ -1653,16 +1654,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       await mpv.setProperty('audio-file', widget.audioUrl!);
     }
 
-    // ── HTTP Headers ──────────────────────────────────────────────────────
-    if (widget.headers != null) {
-      final referer =
-          widget.headers!['Referer'] ?? widget.headers!['referer'];
-      if (referer != null) await mpv.setProperty('referrer', referer);
-
-      final ua =
-          widget.headers!['User-Agent'] ?? widget.headers!['user-agent'];
-      if (ua != null) await mpv.setProperty('user-agent', ua);
-    }
+    // ── HTTP Headers (all requests: master + HLS segments) ────────────────
+    await applyMpvHttpHeadersFromMap(mpv, widget.headers);
 
     // ── Resume Position ──────────────────────────────────────────────────
     // Set mpv's native 'start' property so it begins playback at the saved

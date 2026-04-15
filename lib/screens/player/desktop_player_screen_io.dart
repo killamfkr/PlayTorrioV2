@@ -35,6 +35,7 @@ import '../../api/torrent_filter.dart';
 import '../../api/tmdb_service.dart';
 import '../../api/introdb_service.dart';
 import '../../utils/youtube_embed_resolver.dart';
+import '../../utils/mpv_http_headers.dart';
 import '../player_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1321,16 +1322,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       await mpv.setProperty('audio-file', widget.audioUrl!);
     }
 
-    // ── HTTP Headers ──────────────────────────────────────────────────────
-    if (widget.headers != null) {
-      final referer =
-          widget.headers!['Referer'] ?? widget.headers!['referer'];
-      if (referer != null) await mpv.setProperty('referrer', referer);
-
-      final ua =
-          widget.headers!['User-Agent'] ?? widget.headers!['user-agent'];
-      if (ua != null) await mpv.setProperty('user-agent', ua);
-    }
+    // ── HTTP Headers (all requests: master + HLS segments) ────────────────
+    await applyMpvHttpHeadersFromMap(mpv, widget.headers);
 
     // ── Resume Position ──────────────────────────────────────────────────
     if (!_isStremioLiveTv &&
