@@ -24,7 +24,8 @@ String iframeSandboxStripAtDocumentStartJs() => '''
 })();
 ''';
 
-List<UserScript> iframeSandboxStripUserScripts() => UnmodifiableListView([
+UnmodifiableListView<UserScript> iframeSandboxStripUserScripts() =>
+    UnmodifiableListView<UserScript>([
       UserScript(
         source: iframeSandboxStripAtDocumentStartJs(),
         injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
