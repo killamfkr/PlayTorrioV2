@@ -1,10 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/music_player_service.dart';
 import '../utils/app_theme.dart';
+import '../platform_flags.dart';
 import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
 
@@ -150,7 +150,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       Navigator.pop(context); 
       final musicService = MusicPlayerService();
       if (chapters.isNotEmpty) {
-        if (Platform.isWindows || MediaQuery.of(context).size.width > 900) {
+        if (platformIsWindows || MediaQuery.of(context).size.width > 900) {
           musicService.isFullScreenVisible.value = true;
           showDialog(
             context: context,

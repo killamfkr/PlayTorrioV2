@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:auto_orientation_v2/auto_orientation_v2.dart';
@@ -15,15 +15,16 @@ import 'comics_screen.dart';
 import 'manga_screen.dart';
 import 'jellyfin_screen.dart';
 import 'anime_screen.dart';
-import 'arabic_screen.dart';
-import 'live_matches_screen.dart';
+import 'stremio_catalog_screen.dart';
 import 'magnet_player_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../utils/performance_tuning.dart';
+import '../utils/tv_guide_refresh.dart';
+import '../utils/tv_settings_remote_service.dart';
 import '../api/settings_service.dart';
-import '../services/app_updater_service.dart';
-import '../widgets/update_dialog.dart';
+import '../platform_flags.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -53,7 +54,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'search':       {'icon': Icons.search,                      'active': Icons.search,                  'label': 'Search'},
     'mylist':       {'icon': Icons.bookmark_outline,            'active': Icons.bookmark,                'label': 'My List'},
     'magnet':       {'icon': Icons.link_rounded,                'active': Icons.link_rounded,            'label': 'Magnet'},
-    'live_matches': {'icon': Icons.sports_soccer_outlined,      'active': Icons.sports_soccer_rounded,   'label': 'Live Matches'},
+    'live_matches': {'icon': Icons.live_tv_outlined,            'active': Icons.live_tv_rounded,           'label': 'TV Channels'},
     'iptv':         {'icon': Icons.live_tv_outlined,            'active': Icons.live_tv,                 'label': 'IPTV'},
     'audiobooks':   {'icon': Icons.menu_book_outlined,          'active': Icons.menu_book,               'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,     'active': Icons.import_contacts_rounded, 'label': 'Books'},
@@ -62,7 +63,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'manga':        {'icon': Icons.book_outlined,               'active': Icons.book,                    'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_outlined,                'active': Icons.dns_rounded,             'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_outline,         'active': Icons.play_circle_filled,      'label': 'Anime'},
-    'arabic':       {'icon': Icons.movie_filter_outlined,       'active': Icons.movie_filter,            'label': 'Arabic'},
     'settings':     {'icon': Icons.settings_outlined,           'active': Icons.settings,                'label': 'Settings'},
   };
 
@@ -75,6 +75,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     MainScreen.stremioSearchNotifier.addListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.addListener(_onNavbarConfigChanged);
+    SettingsService.lightModeNotifier.addListener(_onLightModeChanged);
 
     _allScreens = {
       'home':         const HomeScreen(),
@@ -82,7 +83,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'search':       const SearchScreen(),
       'mylist':       const MyListScreen(),
       'magnet':       const MagnetPlayerScreen(),
-      'live_matches': const LiveMatchesScreen(),
+      'live_matches': StremioCatalogScreen(
+        tvChannelsOnly: true,
+        showCatalogBackButton: false,
+        tvGuideRefreshListenable: TvGuideRefresh.notifier,
+      ),
       'iptv':         const IptvLoginScreen(),
       'audiobooks':   const AudiobookScreen(),
       'books':        const BooksScreen(),
@@ -91,28 +96,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'manga':        MangaScreen(initialSearch: null),
       'jellyfin':     const JellyfinScreen(),
       'anime':        const AnimeScreen(),
-      'arabic':       const ArabicScreen(),
       'settings':     const SettingsScreen(),
     };
 
     _loadNavbarConfig();
-    _checkForUpdates();
-  }
-
-  Future<void> _checkForUpdates() async {
-    try {
-      final updater = AppUpdaterService();
-      final updateInfo = await updater.checkForUpdates();
-      if (updateInfo != null && mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => UpdateDialog(updateInfo: updateInfo),
-        );
-      }
-    } catch (e) {
-      debugPrint('[MainScreen] Update check failed: $e');
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      TvGuideRefresh.bump();
+    });
   }
 
   Future<void> _loadNavbarConfig() async {
@@ -150,7 +140,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
-    if (Platform.isAndroid) {
+    if (platformIsAndroid) {
       Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) {
           SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -162,12 +152,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed && Platform.isAndroid) {
+    if (state == AppLifecycleState.resumed && platformIsAndroid) {
       if (!DeviceProfile.isAndroidTv) {
         AutoOrientation.fullAutoMode(forceSensor: true);
         SystemChrome.setPreferredOrientations([]);
       }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      if (DeviceProfile.isAndroidTv) {
+        TvSettingsRemoteService().refreshLanIp();
+      }
     }
   }
 
@@ -192,17 +185,22 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (idx != -1) setState(() => _selectedIndex = idx);
   }
 
+  void _onLightModeChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     MainScreen.stremioSearchNotifier.removeListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.removeListener(_onNavbarConfigChanged);
+    SettingsService.lightModeNotifier.removeListener(_onLightModeChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    final isDesktop = platformIsDesktop;
     final orientation = MediaQuery.of(context).orientation;
     final isLandscape = orientation == Orientation.landscape;
     
@@ -214,8 +212,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         children: [
           // Base gradient
           Container(decoration: AppTheme.effectiveBackground),
-          // Ambient glows (skipped in light mode)
-          if (!AppTheme.isLightMode) ...[
+          // Ambient glows (skipped in lite mode / on Android — expensive overdraw)
+          if (!PerformanceTuning.skipAmbientShellGlows) ...[
           // Ambient purple glow – top-right
           Positioned(
             top: -80,
@@ -275,52 +273,94 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           Row(
             children: [
               if (useNavRail)
-              SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: MediaQuery.of(context).size.height),
-                  child: IntrinsicHeight(
-                    child: NavigationRail(
-                          backgroundColor: Colors.transparent,
-                          selectedIndex: _selectedIndex,
-                          onDestinationSelected: _onItemTapped,
-                          labelType: NavigationRailLabelType.all,
-                          indicatorColor: AppTheme.primaryColor,
-                          selectedLabelTextStyle: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+                // Android TV: avoid wrapping the rail in a scroll view — it can steal
+                // focus and make the selected destination / content highlight feel "lost".
+                DeviceProfile.isAndroidTv
+                    ? ConstrainedBox(
+                        constraints:
+                            BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                        child: IntrinsicHeight(
+                          child: NavigationRail(
+                            backgroundColor: Colors.transparent,
+                            selectedIndex: _selectedIndex,
+                            onDestinationSelected: _onItemTapped,
+                            labelType: NavigationRailLabelType.all,
+                            indicatorColor: AppTheme.primaryColor,
+                            selectedLabelTextStyle: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            unselectedLabelTextStyle: const TextStyle(
+                              color: Colors.white54,
+                            ),
+                            leading: const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 24.0),
+                              child: Icon(
+                                Icons.play_circle_fill,
+                                color: AppTheme.primaryColor,
+                                size: 48,
+                              ),
+                            ),
+                            destinations: _visibleIds.map((id) {
+                              final meta = _navMeta[id]!;
+                              return NavigationRailDestination(
+                                icon: Icon(meta['icon'] as IconData, color: Colors.white54),
+                                selectedIcon:
+                                    Icon(meta['active'] as IconData, color: Colors.white),
+                                label: Text(meta['label'] as String),
+                              );
+                            }).toList(),
                           ),
-                          unselectedLabelTextStyle: const TextStyle(
-                            color: Colors.white54,
-                          ),
-                          leading: const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 24.0),
-                            child: Icon(
-                              Icons.play_circle_fill,
-                              color: AppTheme.primaryColor,
-                              size: 48,
+                        ),
+                      )
+                    : SingleChildScrollView(
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
+                              backgroundColor: Colors.transparent,
+                              selectedIndex: _selectedIndex,
+                              onDestinationSelected: _onItemTapped,
+                              labelType: NavigationRailLabelType.all,
+                              indicatorColor: AppTheme.primaryColor,
+                              selectedLabelTextStyle: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              unselectedLabelTextStyle: const TextStyle(
+                                color: Colors.white54,
+                              ),
+                              leading: const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24.0),
+                                child: Icon(
+                                  Icons.play_circle_fill,
+                                  color: AppTheme.primaryColor,
+                                  size: 48,
+                                ),
+                              ),
+                              destinations: _visibleIds.map((id) {
+                                final meta = _navMeta[id]!;
+                                return NavigationRailDestination(
+                                  icon: Icon(meta['icon'] as IconData, color: Colors.white54),
+                                  selectedIcon:
+                                      Icon(meta['active'] as IconData, color: Colors.white),
+                                  label: Text(meta['label'] as String),
+                                );
+                              }).toList(),
                             ),
                           ),
-                          destinations: _visibleIds.map((id) {
-                            final meta = _navMeta[id]!;
-                            return NavigationRailDestination(
-                              icon: Icon(meta['icon'] as IconData, color: Colors.white54),
-                              selectedIcon: Icon(meta['active'] as IconData, color: Colors.white),
-                              label: Text(meta['label'] as String),
-                            );
-                          }).toList(),
                         ),
                       ),
-                    ),
-                  ),
-                
-            Expanded(
-              child: IndexedStack(
-                index: _selectedIndex,
-                children: _visibleIds.map((id) => _allScreens[id]!).toList(),
+              Expanded(
+                child: _LazyTabStack(
+                  selectedIndex: _selectedIndex,
+                  tabIds: _visibleIds,
+                  builders: _allScreens,
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
         ],
       ),
       bottomNavigationBar: useNavRail
@@ -407,7 +447,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
-    if (lightMode || DeviceProfile.isAndroidTv) {
+    if (PerformanceTuning.skipBottomNavBlur || DeviceProfile.isAndroidTv) {
       return ClipRect(child: navContent);
     }
 
@@ -416,6 +456,74 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: navContent,
       ),
+    );
+  }
+}
+
+/// Builds each tab only after it has been selected at least once (unlike IndexedStack, which builds all tabs up front).
+class _LazyTabStack extends StatefulWidget {
+  final int selectedIndex;
+  final List<String> tabIds;
+  final Map<String, Widget> builders;
+
+  const _LazyTabStack({
+    required this.selectedIndex,
+    required this.tabIds,
+    required this.builders,
+  });
+
+  @override
+  State<_LazyTabStack> createState() => _LazyTabStackState();
+}
+
+class _LazyTabStackState extends State<_LazyTabStack> {
+  final Set<int> _visited = {};
+
+  static bool _sameTabOrder(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _visited.add(widget.selectedIndex);
+  }
+
+  @override
+  void didUpdateWidget(_LazyTabStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_sameTabOrder(oldWidget.tabIds, widget.tabIds)) {
+      _visited
+        ..clear()
+        ..add(widget.selectedIndex);
+    } else {
+      _visited.add(widget.selectedIndex);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: List.generate(widget.tabIds.length, (i) {
+        if (!_visited.contains(i)) {
+          return const SizedBox.shrink();
+        }
+        final id = widget.tabIds[i];
+        final child = widget.builders[id]!;
+        final visible = i == widget.selectedIndex;
+        return Offstage(
+          offstage: !visible,
+          child: TickerMode(
+            enabled: visible,
+            child: child,
+          ),
+        );
+      }),
     );
   }
 }

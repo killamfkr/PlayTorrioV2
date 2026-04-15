@@ -1,6 +1,6 @@
 # PlayTorrio
 
-Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live sports. All in one app.
+Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live TV from Stremio. All in one app.
 
 Made by me. If you like it, star it or whatever.
 
@@ -35,9 +35,9 @@ Audiobooks:
 - Chapter navigation
 - Playback speed control
 
-Live Sports:
-- Watch live matches and events
-- Multiple stream sources
+Live TV (Stremio):
+- Browse TV channel catalogs from installed Stremio addons
+- Play streams through the same Stremio flow as movies and series
 
 IPTV:
 - Xtream Codes API support
@@ -46,7 +46,6 @@ IPTV:
 
 Other stuff:
 - Torrent search with Prowlarr/Jackett integration
-- Auto-updates (checks on launch)
 - Cross-platform (Windows, Linux, macOS, Android)
 - Dark theme because obviously
 
@@ -69,6 +68,43 @@ flutter build windows
 flutter build linux
 flutter build apk
 ```
+
+### Web (experimental)
+
+A **browser build** is supported for browsing and streaming where the platform allows (no magnet/torrent engine, no local Shelf proxy, simplified player, some tabs stubbed). Build static files with:
+
+```
+flutter pub get
+flutter build web --release
+```
+
+Serve `build/web` with any static file server, or use Docker:
+
+```
+docker build -f docker/web/Dockerfile -t playtorrio-web .
+docker run --rm -p 8089:80 playtorrio-web
+```
+
+**Docker Compose — build locally** (from repo root):
+
+```
+docker compose -f docker/web/docker-compose.yml up -d --build
+```
+
+**Docker Compose — pull pre-built image** (no clone/build; image from GitHub Container Registry after CI runs on `main`):
+
+```
+docker compose -f docker/web/docker-compose.ghcr.yml pull
+docker compose -f docker/web/docker-compose.ghcr.yml up -d
+```
+
+Default image: `ghcr.io/killamfkr/playtorrio-web:latest`. Forks: run the **Docker Web (GHCR)** workflow on your repo, then set `PLAYTORRIO_WEB_IMAGE=ghcr.io/<your-github-user>/playtorrio-web:latest`.
+
+Then open http://localhost:8089
+
+### Unraid
+
+Use the Community Applications–style template in [`docker/unraid/playtorrio-web.xml`](docker/unraid/playtorrio-web.xml). Copy it to `config/plugins/dockerMan/templates-user/` on your Unraid flash drive, build the image on the server (`docker build -f docker/web/Dockerfile -t playtorrio-web:latest .`), then add the container from the template. Full steps: [`docker/unraid/README.md`](docker/unraid/README.md).
 
 ## License
 

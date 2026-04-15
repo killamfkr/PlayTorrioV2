@@ -30,7 +30,8 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
   int _currentPage = 1;
   String? _selectedGenre;
   bool _isGenreDropdownOpen = false;
-  bool _allowAdult = false;
+  /// Default on: show all ratings including 18+ / NSFW (user can turn off via 18+ toggle).
+  bool _allowAdult = true;
 
   @override
   void initState() {

@@ -7,6 +7,10 @@ class TmdbApi {
   static const String _baseUrl = 'https://api.themoviedb.org/3';
   static const String _imageBaseUrl = 'https://image.tmdb.org/t/p/w500';
 
+  /// TMDB defaults [include_adult] to false on search/discover — omitting it hides
+  /// adult-rated titles. We pass true app-wide so NSFW / all certifications can appear.
+  static const Map<String, String> _includeAdultParam = {'include_adult': 'true'};
+
   /// High-res backdrop for hero banners / full-width headers.
   static String getBackdropUrl(String path) => 'https://image.tmdb.org/t/p/w1280$path';
 
@@ -29,6 +33,67 @@ class TmdbApi {
     }
   }
 
+  /// Trending TV for the day (same window as [getTrending] for movies).
+  Future<List<Movie>> getTrendingTv() async {
+    final response = await http.get(Uri.parse('$_baseUrl/trending/tv/day?api_key=$_apiKey'));
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to load trending TV');
+    }
+  }
+
+  /// TMDB watch provider IDs (OR = `|`). Major US streaming apps; adjust [watchRegion] for catalog.
+  static const String streamingWatchProvidersOr =
+      '8|9|337|350|15|384|531|387'; // Netflix, Prime, Disney+, Apple TV+, Hulu, Max, Paramount+, Peacock
+
+  /// Movies available on at least one of [streamingWatchProvidersOr] in [watchRegion].
+  Future<List<Movie>> discoverMoviesOnStreaming({
+    String watchProvidersOr = streamingWatchProvidersOr,
+    String watchRegion = 'US',
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/discover/movie').replace(queryParameters: {
+      'api_key': _apiKey,
+      'page': '$page',
+      'watch_region': watchRegion,
+      'with_watch_providers': watchProvidersOr,
+      'sort_by': 'popularity.desc',
+      ..._includeAdultParam,
+    });
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'movie')).toList();
+    } else {
+      throw Exception('Failed to discover movies on streaming');
+    }
+  }
+
+  /// TV series available on at least one of [streamingWatchProvidersOr] in [watchRegion].
+  Future<List<Movie>> discoverTvOnStreaming({
+    String watchProvidersOr = streamingWatchProvidersOr,
+    String watchRegion = 'US',
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/discover/tv').replace(queryParameters: {
+      'api_key': _apiKey,
+      'page': '$page',
+      'watch_region': watchRegion,
+      'with_watch_providers': watchProvidersOr,
+      'sort_by': 'popularity.desc',
+      ..._includeAdultParam,
+    });
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to discover TV on streaming');
+    }
+  }
+
   Future<List<Movie>> getPopular() async {
     final response = await http.get(Uri.parse('$_baseUrl/movie/popular?api_key=$_apiKey'));
     if (response.statusCode == 200) {
@@ -36,6 +101,16 @@ class TmdbApi {
       return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'movie')).toList();
     } else {
       throw Exception('Failed to load popular movies');
+    }
+  }
+
+  Future<List<Movie>> getPopularTv() async {
+    final response = await http.get(Uri.parse('$_baseUrl/tv/popular?api_key=$_apiKey'));
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
+    } else {
+      throw Exception('Failed to load popular TV');
     }
   }
 
@@ -183,7 +258,8 @@ class TmdbApi {
   }
 
   Future<List<Movie>> searchMulti(String query) async {
-    final response = await http.get(Uri.parse('$_baseUrl/search/multi?api_key=$_apiKey&query=${Uri.encodeComponent(query)}'));
+    final response = await http.get(Uri.parse(
+        '$_baseUrl/search/multi?api_key=$_apiKey&include_adult=true&query=${Uri.encodeComponent(query)}'));
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
       return (decoded['results'] as List)
@@ -196,7 +272,8 @@ class TmdbApi {
   }
 
   Future<List<Movie>> searchMovies(String query) async {
-    final response = await http.get(Uri.parse('$_baseUrl/search/movie?api_key=$_apiKey&query=${Uri.encodeComponent(query)}'));
+    final response = await http.get(Uri.parse(
+        '$_baseUrl/search/movie?api_key=$_apiKey&include_adult=true&query=${Uri.encodeComponent(query)}'));
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
       return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'movie')).toList();
@@ -206,7 +283,8 @@ class TmdbApi {
   }
 
   Future<List<Movie>> searchTvShows(String query) async {
-    final response = await http.get(Uri.parse('$_baseUrl/search/tv?api_key=$_apiKey&query=${Uri.encodeComponent(query)}'));
+    final response = await http.get(Uri.parse(
+        '$_baseUrl/search/tv?api_key=$_apiKey&include_adult=true&query=${Uri.encodeComponent(query)}'));
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
       return (decoded['results'] as List).map((json) => Movie.fromJson(json, mediaType: 'tv')).toList();
@@ -236,7 +314,7 @@ class TmdbApi {
   }
 
   Future<List<Movie>> discoverMovies({List<int>? genres, int? year, double? minRating, String? language, int page = 1}) async {
-    String url = '$_baseUrl/discover/movie?api_key=$_apiKey&page=$page';
+    String url = '$_baseUrl/discover/movie?api_key=$_apiKey&page=$page&include_adult=true';
     if (genres != null && genres.isNotEmpty) {
       url += '&with_genres=${genres.join(',')}';
     }
@@ -260,7 +338,7 @@ class TmdbApi {
   }
 
   Future<List<Movie>> discoverTvShows({List<int>? genres, int? year, double? minRating, String? language, int page = 1}) async {
-    String url = '$_baseUrl/discover/tv?api_key=$_apiKey&page=$page';
+    String url = '$_baseUrl/discover/tv?api_key=$_apiKey&page=$page&include_adult=true';
     if (genres != null && genres.isNotEmpty) {
       url += '&with_genres=${genres.join(',')}';
     }

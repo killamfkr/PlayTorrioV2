@@ -1,5 +1,5 @@
 import 'dart:ui';
-import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:media_kit/media_kit.dart';
@@ -9,6 +9,7 @@ import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../api/lyrics_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/local_file_image.dart';
 
 enum PlayerView { art, lyrics, related }
 
@@ -814,15 +815,11 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
         ),
       );
     }
-    return Image.file(
-      File(cover),
-      width: width, height: height,
+    return localFileImageOrFallback(
+      path: cover,
+      width: width,
+      height: height,
       fit: BoxFit.cover,
-      errorBuilder: (c, e, s) => Container(
-        width: width, height: height,
-        color: Colors.white.withValues(alpha: 0.05),
-        child: const Icon(Icons.music_note_rounded, color: Colors.white24),
-      ),
     );
   }
 

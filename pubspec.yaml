@@ -46,12 +46,11 @@ dependencies:
   transparent_image: ^2.0.1
   xml: ^6.5.0
   archive: ^4.0.4
-  package_info_plus: ^9.0.0
-  ota_update: ^7.1.0
   libtorrent_flutter: 1.7.4
   auto_orientation_v2: ^2.3.7
   file_picker: ^8.0.0+1
   android_pip: ^2.0.2
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:

@@ -1,6 +1,8 @@
 import 'dart:convert';
-import 'dart:io';
+
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Service to interact with miruro.tv API for anime streaming.
@@ -17,7 +19,7 @@ class AnimeService {
   );
   static const String _protocolVersion = '0.2.0';
 
-  final HttpClient _client = HttpClient();
+  static final http.Client _http = http.Client();
 
   /// Generic API GET request through the secure pipe.
   Future<dynamic> _apiGet(String path, {Map<String, String>? query}) async {
@@ -31,16 +33,17 @@ class AnimeService {
     final encoded = _base64urlEncode(jsonEncode(request));
     final uri = Uri.parse('$_baseUrl/api/secure/pipe?e=$encoded');
 
-    final httpReq = await _client.getUrl(uri);
-    httpReq.headers.set('User-Agent', 'Mozilla/5.0');
-    httpReq.headers.set('Referer', '$_baseUrl/');
-    httpReq.headers.set('Origin', _baseUrl);
+    final response = await _http.get(
+      uri,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': '$_baseUrl/',
+        'Origin': _baseUrl,
+      },
+    );
+    final body = utf8.decode(response.bodyBytes);
 
-    final response = await httpReq.close();
-    final bytes = await consolidateHttpClientResponseBytes(response);
-    final body = utf8.decode(bytes);
-
-    final xObf = response.headers.value('x-obfuscated');
+    final xObf = response.headers['x-obfuscated'];
     if (xObf != null) {
       return jsonDecode(_deobfuscate(body, xObf));
     }
@@ -73,23 +76,19 @@ class AnimeService {
   }
 
   Uint8List _decompress(Uint8List data) {
-    // Try gzip
     try {
       if (data.length >= 2 && data[0] == 0x1f && data[1] == 0x8b) {
-        return Uint8List.fromList(gzip.decode(data));
+        return Uint8List.fromList(GZipDecoder().decodeBytes(data));
       }
     } catch (_) {}
-    // Try zlib
     try {
-      return Uint8List.fromList(zlib.decode(data));
+      return Uint8List.fromList(ZLibDecoder().decodeBytes(data));
     } catch (_) {}
-    // Try raw deflate with zlib header
     try {
       return Uint8List.fromList(
-        zlib.decode([0x78, 0x01, ...data]),
+        ZLibDecoder().decodeBytes(Uint8List.fromList([0x78, 0x01, ...data])),
       );
     } catch (_) {}
-    // Return as-is if nothing works
     return data;
   }
 
