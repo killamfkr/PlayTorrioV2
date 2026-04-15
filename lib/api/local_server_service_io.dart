@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
@@ -19,6 +20,13 @@ class LocalServerService {
 
   // Persistent HTTP client for connection reuse (keep-alive)
   final http.Client _httpClient = http.Client();
+
+  /// Stremio proxy headers can be several KB. Embedding `headers=json` in every
+  /// rewritten m3u8 line exceeds URL limits → mpv never plays. Store by token instead.
+  final Map<String, _HlsProxyHeaderSession> _hlsProxyHeaderSessions = {};
+  final math.Random _hlsSessionRandom = math.Random.secure();
+  String? _hlsHeadersJsonCache;
+  String? _hlsHeadersTokenCache;
 
   int get port => _port;
   String get baseUrl => 'http://localhost:$_port';
@@ -389,6 +397,7 @@ class LocalServerService {
     final params = request.url.queryParameters;
     final targetUrl = params['url'];
     final headersJson = params['headers'];
+    final hdrToken = params['hdr'];
 
     if (targetUrl == null) {
       return Response(400, body: 'Missing url parameter');
@@ -399,7 +408,17 @@ class LocalServerService {
     final serverBase = '${targetUri.scheme}://${targetUri.host}${targetUri.hasPort ? ':${targetUri.port}' : ''}';
 
     Map<String, String> customHeaders = {};
-    if (headersJson != null) {
+    if (hdrToken != null && hdrToken.isNotEmpty) {
+      _purgeExpiredHlsHeaderSessions();
+      final sess = _hlsProxyHeaderSessions[hdrToken];
+      if (sess != null) {
+        try {
+          customHeaders = Map<String, String>.from(json.decode(sess.headersJson));
+        } catch (_) {}
+      } else {
+        debugPrint('[HlsProxy] Unknown or expired hdr token');
+      }
+    } else if (headersJson != null) {
       try {
         customHeaders = Map<String, String>.from(json.decode(headersJson));
       } catch (_) {}
@@ -438,6 +457,10 @@ class LocalServerService {
         final body = await streamedResponse.stream.bytesToString();
         final basePath = decodedUrl.substring(0, decodedUrl.lastIndexOf('/') + 1);
 
+        final hdrForRewrite = customHeaders.isEmpty
+            ? null
+            : _registerHlsProxyHeaders(customHeaders);
+
         final rewrittenLines = body.split('\n').map((line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty || trimmed.startsWith('#')) {
@@ -450,7 +473,10 @@ class LocalServerService {
                   final fullUri = uri.startsWith('http') ? uri
                       : uri.startsWith('/') ? '$serverBase$uri'
                       : '$basePath$uri';
-                  return 'URI="${getHlsProxyUrl(fullUri, customHeaders)}"';
+                  if (hdrForRewrite == null) {
+                    return 'URI="$fullUri"';
+                  }
+                  return 'URI="${_hlsProxyUrlWithHdrToken(fullUri, hdrForRewrite)}"';
                 },
               );
             }
@@ -460,7 +486,8 @@ class LocalServerService {
           final fullUrl = trimmed.startsWith('http') ? trimmed
               : trimmed.startsWith('/') ? '$serverBase$trimmed'
               : '$basePath$trimmed';
-          return getHlsProxyUrl(fullUrl, customHeaders);
+          if (hdrForRewrite == null) return fullUrl;
+          return _hlsProxyUrlWithHdrToken(fullUrl, hdrForRewrite);
         }).toList();
 
         return Response.ok(
@@ -490,11 +517,48 @@ class LocalServerService {
     }
   }
 
-  /// Returns a local proxy URL for an HLS stream with custom headers.
+  /// Registers [headers] and returns a short token (reused when JSON matches).
+  String _registerHlsProxyHeaders(Map<String, String> headers) {
+    _purgeExpiredHlsHeaderSessions();
+    final jsonStr = json.encode(headers);
+    if (_hlsHeadersJsonCache == jsonStr && _hlsHeadersTokenCache != null) {
+      final s = _hlsProxyHeaderSessions[_hlsHeadersTokenCache!];
+      if (s != null && s.expiresAt.isAfter(DateTime.now())) {
+        return _hlsHeadersTokenCache!;
+      }
+    }
+    final token = _newHlsHeaderSessionToken();
+    _hlsProxyHeaderSessions[token] =
+        _HlsProxyHeaderSession(jsonStr, DateTime.now());
+    _hlsHeadersJsonCache = jsonStr;
+    _hlsHeadersTokenCache = token;
+    return token;
+  }
+
+  void _purgeExpiredHlsHeaderSessions() {
+    final now = DateTime.now();
+    _hlsProxyHeaderSessions.removeWhere((_, s) => s.expiresAt.isBefore(now));
+  }
+
+  String _newHlsHeaderSessionToken() {
+    final b = List<int>.generate(16, (_) => _hlsSessionRandom.nextInt(256));
+    return b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Public: first hop from Dart — short `hdr=` query, not multi‑KB `headers=`.
   String getHlsProxyUrl(String targetUrl, Map<String, String> headers) {
+    if (headers.isEmpty) {
+      return '$baseUrl/hls-proxy?url=${Uri.encodeComponent(targetUrl)}';
+    }
+    final hdr = _registerHlsProxyHeaders(headers);
+    return _hlsProxyUrlWithHdrToken(targetUrl, hdr);
+  }
+
+  /// Internal: rewritten playlist lines share one [hdr] token (tiny URLs).
+  String _hlsProxyUrlWithHdrToken(String targetUrl, String hdrToken) {
     return '$baseUrl/hls-proxy'
         '?url=${Uri.encodeComponent(targetUrl)}'
-        '&headers=${Uri.encodeComponent(json.encode(headers))}';
+        '&hdr=${Uri.encodeComponent(hdrToken)}';
   }
 
   Future<void> stop() async {
@@ -502,4 +566,12 @@ class LocalServerService {
     _server = null;
     _port = 0;
   }
+}
+
+class _HlsProxyHeaderSession {
+  _HlsProxyHeaderSession(this.headersJson, DateTime createdAt)
+      : expiresAt = createdAt.add(const Duration(hours: 6));
+
+  final String headersJson;
+  final DateTime expiresAt;
 }
