@@ -22,6 +22,8 @@ Map<String, String> stremioProxyRequestHeadersFromStream(Map<String, dynamic> st
     if (ph == null) return;
     putFlatFromMap(ph['request'] as Map?);
     putFlatFromMap(ph['requests'] as Map?);
+    // Some addons omit `request` and put Referer/UA directly on [proxyHeaders].
+    putFlatFromMap(ph);
   }
 
   final bh = stream['behaviorHints'];

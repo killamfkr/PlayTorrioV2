@@ -44,10 +44,15 @@ Future<({String playUrl, Map<String, String>? openHeaders, bool usedLocalProxy})
     return (playUrl: effectiveUrl, openHeaders: requestHeaders, usedLocalProxy: false);
   }
   // FlixNest / dlstreams often use opaque URLs with no `.m3u8` in the string.
-  // If the addon sent proxyHeaders, **always** route through our proxy (like Stremio).
+  // If the addon sent proxyHeaders, route through our proxy when the server is up.
   try {
     await LocalServerService().start();
-    final proxied = LocalServerService().getHlsProxyUrl(effectiveUrl, requestHeaders);
+    final ls = LocalServerService();
+    if (ls.port <= 0) {
+      debugPrint('[StremioHls] Local server did not bind — direct URL + headers');
+      return (playUrl: effectiveUrl, openHeaders: requestHeaders, usedLocalProxy: false);
+    }
+    final proxied = ls.getHlsProxyUrl(effectiveUrl, requestHeaders);
     return (playUrl: proxied, openHeaders: null, usedLocalProxy: true);
   } catch (e) {
     debugPrint('[StremioHls] Local HLS proxy unavailable, using direct URL: $e');
