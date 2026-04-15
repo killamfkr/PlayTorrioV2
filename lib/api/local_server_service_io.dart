@@ -29,7 +29,10 @@ class LocalServerService {
   String? _hlsHeadersTokenCache;
 
   int get port => _port;
-  String get baseUrl => 'http://localhost:$_port';
+
+  /// Use numeric loopback — Android's native HTTP stack often resolves `localhost`
+  /// to IPv6 ::1 while we bind IPv4-only, which breaks mpv talking to this proxy.
+  String get baseUrl => 'http://127.0.0.1:$_port';
 
   Future<void> start() async {
     if (_server != null) return;
@@ -440,7 +443,20 @@ class LocalServerService {
     if (range != null) proxyHeaders['Range'] = range;
 
     try {
-      final req = http.Request(request.method, targetUri);
+      // mpv sends HEAD to probe; many CDNs return an empty body for HEAD on m3u8,
+      // so we never rewrite the playlist. Upgrade to GET when a playlist is likely.
+      final lowerUrl = decodedUrl.toLowerCase();
+      final likelyPlaylist = lowerUrl.contains('.m3u8') ||
+          lowerUrl.contains('m3u8') ||
+          lowerUrl.contains('/playlist') ||
+          lowerUrl.contains('master') ||
+          lowerUrl.contains('index.m3u');
+      var upstreamMethod = request.method;
+      if (upstreamMethod == 'HEAD' && likelyPlaylist) {
+        upstreamMethod = 'GET';
+      }
+
+      final req = http.Request(upstreamMethod, targetUri);
       req.headers.addAll(proxyHeaders);
       final streamedResponse = await _httpClient.send(req);
 
@@ -450,16 +466,32 @@ class LocalServerService {
 
       final contentType = streamedResponse.headers['content-type'] ?? '';
 
-      // HLS playlist? Rewrite URLs so sub-playlists & segments also go through proxy
-      if (contentType.contains('mpegurl') ||
-          contentType.contains('x-mpegurl') ||
-          decodedUrl.contains('.m3u8')) {
-        final body = await streamedResponse.stream.bytesToString();
-        final basePath = decodedUrl.substring(0, decodedUrl.lastIndexOf('/') + 1);
+      // Buffer once: must not decode binary segments (.ts) as UTF-8.
+      final raw = await streamedResponse.stream.toBytes();
+      final headLen = raw.length < 512 ? raw.length : 512;
+      final headUtf8 =
+          headLen > 0 ? utf8.decode(raw.sublist(0, headLen), allowMalformed: true) : '';
+      final trimmedHead = headUtf8.trimLeft();
+      // Some CDNs serve playlists as text/plain or application/octet-stream.
+      final looksLikePlaylist = streamedResponse.statusCode == 200 &&
+          (contentType.contains('mpegurl') ||
+              contentType.contains('x-mpegurl') ||
+              lowerUrl.contains('.m3u8') ||
+              trimmedHead.startsWith('#EXTM3U'));
 
-        final hdrForRewrite = customHeaders.isEmpty
-            ? null
-            : _registerHlsProxyHeaders(customHeaders);
+      // HLS playlist? Rewrite URLs so sub-playlists & segments also go through proxy
+      if (looksLikePlaylist) {
+        final body = utf8.decode(raw, allowMalformed: true);
+        final basePath = decodedUrl.contains('/')
+            ? decodedUrl.substring(0, decodedUrl.lastIndexOf('/') + 1)
+            : '$decodedUrl/';
+
+        // Reuse incoming hdr token for rewrites — avoids duplicate sessions.
+        final hdrForRewrite = hdrToken != null && hdrToken.isNotEmpty
+            ? hdrToken
+            : (customHeaders.isEmpty
+                ? null
+                : _registerHlsProxyHeaders(customHeaders));
 
         final rewrittenLines = body.split('\n').map((line) {
           final trimmed = line.trim();
@@ -499,7 +531,7 @@ class LocalServerService {
         );
       }
 
-      // Non-HLS (segments, mp4, etc.) — stream through
+      // Non-playlist (segments, keys, mp4): return raw bytes unchanged.
       final responseHeaders = <String, String>{
         'Access-Control-Allow-Origin': '*',
         'Accept-Ranges': 'bytes',
@@ -509,8 +541,13 @@ class LocalServerService {
         final v = streamedResponse.headers[h];
         if (v != null) responseHeaders[h] = v;
       }
+      responseHeaders['content-length'] = raw.length.toString();
 
-      return Response(streamedResponse.statusCode, body: streamedResponse.stream, headers: responseHeaders);
+      return Response(
+        streamedResponse.statusCode,
+        body: raw,
+        headers: responseHeaders,
+      );
     } catch (e) {
       debugPrint('[HlsProxy] Error: $e');
       return Response.internalServerError(body: 'HLS proxy error: $e');

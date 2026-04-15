@@ -2,11 +2,16 @@ import 'package:flutter/foundation.dart';
 
 import '../api/local_server_service.dart';
 
-bool _looksLikeHlsUrl(String url) {
+bool _looksLikeAdaptiveOrLiveStreamUrl(String url) {
   final lower = url.toLowerCase();
-  if (lower.contains('.m3u8')) return true;
-  // Some CDNs omit the extension on the master request
-  if (lower.contains('m3u8') || lower.contains('application/vnd.apple.mpegurl')) {
+  if (lower.contains('.m3u8') || lower.contains('m3u8')) return true;
+  if (lower.contains('.mpd') || lower.contains('/manifest')) return true;
+  if (lower.contains('application/vnd.apple.mpegurl')) return true;
+  // Path patterns without a clear extension
+  if (lower.contains('/playlist') ||
+      lower.contains('master') ||
+      lower.contains('index.m3u') ||
+      lower.contains('/hls/')) {
     return true;
   }
   return false;
@@ -39,8 +44,11 @@ Future<({String playUrl, Map<String, String>? openHeaders, bool usedLocalProxy})
       !isStremioLiveTv ||
       !isStremioDirect ||
       requestHeaders == null ||
-      requestHeaders.isEmpty ||
-      !_looksLikeHlsUrl(url)) {
+      requestHeaders.isEmpty) {
+    return (playUrl: url, openHeaders: requestHeaders, usedLocalProxy: false);
+  }
+  // Adaptive / typical live patterns — avoid proxying plain progressive MP4 (OOM risk).
+  if (!_looksLikeAdaptiveOrLiveStreamUrl(url)) {
     return (playUrl: url, openHeaders: requestHeaders, usedLocalProxy: false);
   }
   try {
