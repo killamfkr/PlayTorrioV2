@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as p;
 import 'audiobook_download_types.dart';
 import 'audiobook_service.dart';
@@ -20,13 +21,98 @@ class AudiobookDownloadService {
 
   final Set<String> _cancelledIds = {};
 
-  Future<String> get _baseDir async {
+  /// Legacy location (app private) — still scanned so older downloads appear.
+  Future<String> get _legacyAppDocAudiobooksDir async {
     final dir = await getApplicationDocumentsDirectory();
-    final audiobooksDir = Directory(p.join(dir.path, 'audiobooks'));
+    return p.join(dir.path, 'audiobooks');
+  }
+
+  Future<void> _requestAndroidDownloadPermissions() async {
+    if (!Platform.isAndroid) return;
+    await Permission.audio.request();
+    await Permission.storage.request();
+  }
+
+  /// Preferred on Android: **shared Downloads** (often under
+  /// `/storage/emulated/0/Download/...` when the OS allows it), else app-accessible
+  /// download dirs, else legacy app documents.
+  Future<String> get _baseDir async {
+    if (Platform.isAndroid) {
+      await _requestAndroidDownloadPermissions();
+      try {
+        final ext = await getExternalStorageDirectories(type: StorageDirectory.downloads);
+        if (ext != null && ext.isNotEmpty) {
+          final sub = Directory(p.join(ext.first.path, 'PlayTorrio', 'Audiobooks'));
+          if (!await sub.exists()) await sub.create(recursive: true);
+          debugPrint('[AudiobookDownload] Using external Downloads: ${sub.path}');
+          return sub.path;
+        }
+      } catch (e) {
+        debugPrint('[AudiobookDownload] external StorageDirectory.downloads: $e');
+      }
+      // Typical public Download path (visible in Files → Download) — may fail on
+      // strict scoped storage without MANAGE_EXTERNAL_STORAGE; then we fall back.
+      final publicRoot =
+          Directory(p.join('/storage/emulated/0/Download', 'PlayTorrio', 'Audiobooks'));
+      try {
+        if (!await publicRoot.exists()) {
+          await publicRoot.create(recursive: true);
+        }
+        final probe = File(p.join(publicRoot.path, '.playtorrio_write_probe'));
+        await probe.writeAsString('1', flush: true);
+        await probe.delete();
+        debugPrint('[AudiobookDownload] Using public Download folder: ${publicRoot.path}');
+        return publicRoot.path;
+      } catch (e) {
+        debugPrint('[AudiobookDownload] Public Download not writable: $e');
+      }
+      final dl = await getDownloadsDirectory();
+      if (dl != null) {
+        final sub = Directory(p.join(dl.path, 'PlayTorrio', 'Audiobooks'));
+        if (!await sub.exists()) await sub.create(recursive: true);
+        debugPrint('[AudiobookDownload] Using getDownloadsDirectory: ${sub.path}');
+        return sub.path;
+      }
+    } else if (!Platform.isIOS) {
+      final dl = await getDownloadsDirectory();
+      if (dl != null) {
+        final sub = Directory(p.join(dl.path, 'PlayTorrio', 'Audiobooks'));
+        if (!await sub.exists()) await sub.create(recursive: true);
+        return sub.path;
+      }
+    }
+
+    final legacy = await _legacyAppDocAudiobooksDir;
+    final audiobooksDir = Directory(legacy);
     if (!await audiobooksDir.exists()) {
       await audiobooksDir.create(recursive: true);
     }
+    debugPrint('[AudiobookDownload] Using app documents: ${audiobooksDir.path}');
     return audiobooksDir.path;
+  }
+
+  /// All roots that may contain downloaded books (merge + dedupe by id).
+  Future<List<String>> _allAudiobookBaseDirs() async {
+    final bases = <String>{};
+    bases.add(await _baseDir);
+    bases.add(await _legacyAppDocAudiobooksDir);
+    if (Platform.isAndroid) {
+      final public = '/storage/emulated/0/Download/PlayTorrio/Audiobooks';
+      if (await Directory(public).exists()) bases.add(public);
+      try {
+        final ext = await getExternalStorageDirectories(type: StorageDirectory.downloads);
+        if (ext != null && ext.isNotEmpty) {
+          final ed = p.join(ext.first.path, 'PlayTorrio', 'Audiobooks');
+          if (await Directory(ed).exists()) bases.add(ed);
+        }
+      } catch (_) {}
+      final gd = await getDownloadsDirectory();
+      if (gd != null) {
+        final gds = p.join(gd.path, 'PlayTorrio', 'Audiobooks');
+        if (await Directory(gds).exists()) bases.add(gds);
+      }
+    }
+    return bases.toList();
   }
 
   String _sanitizeFileName(String name) {
@@ -194,12 +280,12 @@ class AudiobookDownloadService {
   Future<void> cancelDownload(String audioBookId) async {
     _cancelledIds.add(audioBookId);
     _removeProgress(audioBookId);
-    // Immediately delete any partial files
-    final base = await _baseDir;
-    final bookDir = Directory(p.join(base, _sanitizeFileName(audioBookId)));
-    try {
-      if (await bookDir.exists()) await bookDir.delete(recursive: true);
-    } catch (_) {}
+    for (final base in await _allAudiobookBaseDirs()) {
+      final bookDir = Directory(p.join(base, _sanitizeFileName(audioBookId)));
+      try {
+        if (await bookDir.exists()) await bookDir.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 
   Future<void> _cleanup(Directory dir, String id) async {
@@ -317,24 +403,24 @@ class AudiobookDownloadService {
   }
 
   Future<void> checkDownloadedChapters(String audioBookId, int totalChapters) async {
-    final base = await _baseDir;
-    final bookDir = Directory(p.join(base, _sanitizeFileName(audioBookId)));
-    final metaFile = File(p.join(bookDir.path, 'metadata.json'));
-
-    if (!metaFile.existsSync()) return;
-
-    try {
-      final data = json.decode(await metaFile.readAsString());
-      final chapters = (data['chapters'] as List).cast<Map<String, dynamic>>();
-      final newKeys = <String>{};
-      for (final c in chapters) {
-        final match = RegExp(r'chapter_(\d+)').firstMatch(c['file'] ?? '');
-        if (match != null && (c['sizeBytes'] as int? ?? 0) > 0) {
-          newKeys.add(_chapterKey(audioBookId, int.parse(match.group(1)!)));
+    final newKeys = <String>{};
+    for (final base in await _allAudiobookBaseDirs()) {
+      final metaFile = File(
+          p.join(base, _sanitizeFileName(audioBookId), 'metadata.json'));
+      if (!metaFile.existsSync()) continue;
+      try {
+        final data = json.decode(await metaFile.readAsString());
+        final chapters = (data['chapters'] as List).cast<Map<String, dynamic>>();
+        for (final c in chapters) {
+          final match = RegExp(r'chapter_(\d+)').firstMatch(c['file'] ?? '');
+          if (match != null && (c['sizeBytes'] as int? ?? 0) > 0) {
+            newKeys.add(_chapterKey(audioBookId, int.parse(match.group(1)!)));
+          }
         }
-      }
-      downloadedChapterKeys.value = {...downloadedChapterKeys.value, ...newKeys};
-    } catch (_) {}
+      } catch (_) {}
+    }
+    if (newKeys.isEmpty) return;
+    downloadedChapterKeys.value = {...downloadedChapterKeys.value, ...newKeys};
   }
 
   Future<void> _downloadCover(
@@ -441,74 +527,70 @@ class AudiobookDownloadService {
   // --- Query downloaded books ---
 
   Future<List<DownloadedAudiobook>> getDownloadedBooks() async {
-    final base = await _baseDir;
-    final dir = Directory(base);
-    if (!await dir.exists()) return [];
-
-    List<DownloadedAudiobook> books = [];
-    await for (final entity in dir.list()) {
-      if (entity is Directory) {
+    final byId = <String, DownloadedAudiobook>{};
+    for (final base in await _allAudiobookBaseDirs()) {
+      final dir = Directory(base);
+      if (!await dir.exists()) continue;
+      await for (final entity in dir.list()) {
+        if (entity is! Directory) continue;
         final metaFile = File(p.join(entity.path, 'metadata.json'));
-        if (await metaFile.exists()) {
-          try {
-            final content = await metaFile.readAsString();
-            final data = json.decode(content) as Map<String, dynamic>;
-            books.add(DownloadedAudiobook.fromJson(data, entity.path));
-          } catch (e) {
-            debugPrint('[AudiobookDownload] Error reading metadata: $e');
+        if (!await metaFile.exists()) continue;
+        try {
+          final content = await metaFile.readAsString();
+          final data = json.decode(content) as Map<String, dynamic>;
+          final book = DownloadedAudiobook.fromJson(data, entity.path);
+          final id = book.book.audioBookId;
+          final existing = byId[id];
+          if (existing == null || book.downloadedAt.isAfter(existing.downloadedAt)) {
+            byId[id] = book;
           }
+        } catch (e) {
+          debugPrint('[AudiobookDownload] Error reading metadata: $e');
         }
       }
     }
-
-    // Sort by download date, newest first
+    final books = byId.values.toList();
     books.sort((a, b) => b.downloadedAt.compareTo(a.downloadedAt));
     return books;
   }
 
   Future<bool> isBookDownloaded(String audioBookId) async {
-    final base = await _baseDir;
-    final bookDir =
-        Directory(p.join(base, _sanitizeFileName(audioBookId)));
-    final metaFile = File(p.join(bookDir.path, 'metadata.json'));
-    return metaFile.existsSync();
+    for (final base in await _allAudiobookBaseDirs()) {
+      final metaFile =
+          File(p.join(base, _sanitizeFileName(audioBookId), 'metadata.json'));
+      if (await metaFile.exists()) return true;
+    }
+    return false;
   }
 
   Future<DownloadedAudiobook?> getDownloadedBook(String audioBookId) async {
-    final base = await _baseDir;
-    final bookDir =
-        Directory(p.join(base, _sanitizeFileName(audioBookId)));
-    final metaFile = File(p.join(bookDir.path, 'metadata.json'));
-    if (!await metaFile.exists()) return null;
-
-    try {
-      final content = await metaFile.readAsString();
-      final data = json.decode(content) as Map<String, dynamic>;
-      return DownloadedAudiobook.fromJson(data, bookDir.path);
-    } catch (e) {
-      debugPrint('[AudiobookDownload] Error reading metadata: $e');
+    DownloadedAudiobook? best;
+    for (final base in await _allAudiobookBaseDirs()) {
+      final bookDir = Directory(p.join(base, _sanitizeFileName(audioBookId)));
+      final metaFile = File(p.join(bookDir.path, 'metadata.json'));
+      if (!await metaFile.exists()) continue;
+      try {
+        final content = await metaFile.readAsString();
+        final data = json.decode(content) as Map<String, dynamic>;
+        final book = DownloadedAudiobook.fromJson(data, bookDir.path);
+        if (best == null || book.downloadedAt.isAfter(best.downloadedAt)) {
+          best = book;
+        }
+      } catch (e) {
+        debugPrint('[AudiobookDownload] Error reading metadata: $e');
+      }
     }
-    return null;
+    return best;
   }
 
   Future<void> deleteBook(String audioBookId) async {
-    final base = await _baseDir;
-    final bookDir =
-        Directory(p.join(base, _sanitizeFileName(audioBookId)));
-    if (await bookDir.exists()) {
-      await bookDir.delete(recursive: true);
-    }
-    // Also verify no lingering files
-    if (await bookDir.exists()) {
-      // Force list and delete individual files if recursive failed
-      await for (final entity in bookDir.list(recursive: true)) {
+    for (final base in await _allAudiobookBaseDirs()) {
+      final bookDir = Directory(p.join(base, _sanitizeFileName(audioBookId)));
+      if (await bookDir.exists()) {
         try {
-          await entity.delete();
+          await bookDir.delete(recursive: true);
         } catch (_) {}
       }
-      try {
-        await bookDir.delete(recursive: true);
-      } catch (_) {}
     }
   }
 
