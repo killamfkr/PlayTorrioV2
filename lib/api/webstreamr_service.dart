@@ -226,7 +226,7 @@ class WebStreamrService {
         if (Uri.tryParse(url)?.host.contains('1shows.app') ?? false) {
           final ls = LocalServerService();
           if (ls.port != 0) {
-            finalUrl = ls.getHlsProxyUrl(url, headers ?? {}, stripMode: 'png');
+            finalUrl = ls.getHlsProxyUrl(url, headers ?? {});
             // After proxying, the player no longer needs the upstream
             // referer/origin — the local proxy injects them.
             headers = null;

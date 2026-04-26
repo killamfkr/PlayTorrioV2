@@ -67,8 +67,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _prowlarrTestResult;
   
   bool _isRDLoggedIn = false;
-  String? _rdUserCode;
-  Timer? _rdPollTimer;
+  final TextEditingController _rdApiKeyController = TextEditingController();
+  bool _isVerifyingRD = false;
   
   // Trakt
   final TraktService _trakt = TraktService();
@@ -255,6 +255,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _useDebrid = useDebrid;
         _debridService = service;
         _torboxController.text = torboxKey ?? '';
+        _rdApiKeyController.text = rdToken ?? '';
         _isRDLoggedIn = rdToken != null;
         _isTraktLoggedIn = traktLoggedIn;
         _traktUsername = traktUser;
@@ -383,7 +384,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _mdblistApiKeyController.dispose();
     _traktClientIdController.dispose();
     _traktClientSecretController.dispose();
-    _rdPollTimer?.cancel();
+    _rdApiKeyController.dispose();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
     _jackett.dispose();
@@ -391,42 +392,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
-  void _startRDLogin() async {
-    final data = await _debrid.startRDLogin();
-    if (data != null) {
-      final userCode = data['user_code'];
-      setState(() {
-        _rdUserCode = userCode;
-      });
-
-      await Clipboard.setData(ClipboardData(text: userCode));
+  Future<void> _saveRDApiKey() async {
+    final key = _rdApiKeyController.text.trim();
+    if (key.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Code $userCode copied to clipboard!')),
+          const SnackBar(content: Text('Please enter an API token')),
         );
       }
-
-      _rdPollTimer?.cancel();
-      _rdPollTimer = Timer.periodic(Duration(seconds: data['interval']), (timer) async {
-        final success = await _debrid.pollRDCredentials(data['device_code']);
-        if (success) {
-          timer.cancel();
-          setState(() {
-            _rdUserCode = null;
-            _isRDLoggedIn = true;
-          });
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Real-Debrid Login Successful!')));
-          }
+      return;
+    }
+    setState(() => _isVerifyingRD = true);
+    try {
+      final user = await _debrid.verifyRDApiKey(key);
+      if (user == null) {
+        if (mounted) {
+          setState(() => _isVerifyingRD = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Token rejected. Copy your token from real-debrid.com/apitoken'),
+            ),
+          );
         }
+        return;
+      }
+      await _debrid.saveRDApiKey(key);
+      if (!mounted) return;
+      setState(() {
+        _isRDLoggedIn = true;
+        _isVerifyingRD = false;
+        _rdApiKeyController.clear();
       });
-
-      Future.delayed(Duration(seconds: data['expires_in']), () {
-        if (_rdPollTimer?.isActive ?? false) {
-          _rdPollTimer?.cancel();
-          setState(() => _rdUserCode = null);
-        }
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Real-Debrid connected (${user['username'] ?? user['email'] ?? 'ok'})',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isVerifyingRD = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
     }
   }
 
@@ -434,9 +444,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _debrid.logoutRD();
     setState(() {
       _isRDLoggedIn = false;
+      _rdApiKeyController.clear();
     });
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logged out of Real-Debrid')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logged out of Real-Debrid')),
+      );
     }
   }
 
@@ -1577,44 +1590,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_isRDLoggedIn)
+          const Text(
+            'Real-Debrid uses a personal API token (not device login).',
+            style: TextStyle(fontSize: 12, color: Colors.white54, height: 1.35),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Get yours at real-debrid.com/apitoken and paste it below.',
+            style: TextStyle(fontSize: 12, color: Colors.white38, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _rdApiKeyController,
+            obscureText: true,
+            decoration: InputDecoration(
+              hintText: 'API token',
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _isVerifyingRD ? null : _saveRDApiKey,
+                  icon: _isVerifyingRD
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.save),
+                  label: Text(_isVerifyingRD ? 'Verifying…' : 'Save token'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryColor,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(0, 50),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_isRDLoggedIn) ...[
+            const SizedBox(height: 12),
             ElevatedButton.icon(
               onPressed: _logoutRD,
               icon: const Icon(Icons.logout),
-              label: const Text('Logout from Real-Debrid'),
+              label: const Text('Logout (clear token)'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.redAccent.withValues(alpha: 0.1),
                 foregroundColor: Colors.redAccent,
                 minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            )
-          else if (_rdUserCode != null) ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12)),
-              child: Column(
-                children: [
-                  const Text('Enter this code at real-debrid.com/device:'),
-                  const SizedBox(height: 8),
-                  Text(_rdUserCode!, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: AppTheme.primaryColor, letterSpacing: 4)),
-                  const SizedBox(height: 8),
-                  const LinearProgressIndicator(color: AppTheme.primaryColor, backgroundColor: Colors.white10),
-                ],
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
-          ] else
-            ElevatedButton.icon(
-              onPressed: _startRDLogin,
-              icon: const Icon(Icons.login),
-              label: const Text('Login with Real-Debrid'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white10,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
+          ],
         ],
       ),
     );
