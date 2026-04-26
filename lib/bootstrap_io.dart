@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -17,6 +19,7 @@ import 'play_torrio_app.dart';
 import 'utils/device_profile.dart';
 import 'utils/tv_settings_remote_service.dart';
 import 'platform_flags.dart';
+import 'services/nuvio_sync_service.dart';
 
 void setupAppLogging() {
   Logger.root.level = Level.FINER;
@@ -101,6 +104,8 @@ Future<void> bootstrap() async {
   await SettingsService().getBuiltinPlayerSubtitlesEnabled();
 
   await _ensureBundledStremioAddons();
+
+  unawaited(NuvioSyncService.instance.pullOnStartup());
 
   runApp(const PlayTorrioApp());
 }

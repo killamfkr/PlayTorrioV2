@@ -77,6 +77,10 @@ class SettingsService {
   // Theme preset
   static const String _themePresetKey = 'theme_preset';
 
+  // Nuvio (nuvioapp.space) — sync continue-watching
+  static const String _nuvioSyncEnabledKey = 'nuvio_sync_enabled';
+  static const String _nuvioProfileIdKey = 'nuvio_profile_id';
+
   /// Notifier that fires when light mode changes so all widgets can react.
   static final ValueNotifier<bool> lightModeNotifier = ValueNotifier<bool>(false);
 
@@ -560,6 +564,31 @@ class SettingsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Nuvio sync
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<bool> isNuvioSyncEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_nuvioSyncEnabledKey) ?? false;
+  }
+
+  Future<void> setNuvioSyncEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_nuvioSyncEnabledKey, v);
+  }
+
+  /// Profile 1…4, matching the Nuvio account overview.
+  Future<int> getNuvioProfileId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt(_nuvioProfileIdKey) ?? 1).clamp(1, 4);
+  }
+
+  Future<void> setNuvioProfileId(int id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_nuvioProfileIdKey, id.clamp(1, 4));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Navbar Configuration
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -619,6 +648,8 @@ class SettingsService {
     'trakt_access_token',
     'trakt_refresh_token',
     'trakt_expires_at',
+    'nuvio_access_token',
+    'nuvio_refresh_token',
   ];
 
   /// Collects every setting (SharedPreferences + FlutterSecureStorage) into a
@@ -642,6 +673,7 @@ class SettingsService {
       _builtinPlayerSubtitlesEnabledKey,
       _autoAdvanceNextEpisodeKey,
       _subBoldKey,
+      _nuvioSyncEnabledKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -672,6 +704,7 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
+      _nuvioProfileIdKey,
     ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
@@ -731,6 +764,7 @@ class SettingsService {
       _builtinPlayerSubtitlesEnabledKey,
       _autoAdvanceNextEpisodeKey,
       _subBoldKey,
+      _nuvioSyncEnabledKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -765,6 +799,7 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
+      _nuvioProfileIdKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'nuvio_sync_service.dart';
+
 class WatchHistoryService {
   static final WatchHistoryService _instance = WatchHistoryService._internal();
   factory WatchHistoryService() => _instance;
@@ -110,8 +112,22 @@ class WatchHistoryService {
       // Emit update
       _current = list.cast<Map<String, dynamic>>();
       _controller.add(_current);
+
+      NuvioSyncService.instance.schedulePush(entry);
     } catch (e) {
       debugPrint('[WatchHistory] Error saving progress: $e');
+    }
+  }
+
+  /// Replaces the entire in-memory and persisted list (e.g. after a cloud sync merge).
+  Future<void> replaceAll(List<Map<String, dynamic>> items) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_key, json.encode(items));
+      _current = List<Map<String, dynamic>>.from(items);
+      _controller.add(_current);
+    } catch (e) {
+      debugPrint('[WatchHistory] replaceAll error: $e');
     }
   }
 

@@ -27,6 +27,7 @@ import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
 import 'settings_export.dart';
 import 'webstreamr_settings_screen.dart';
+import '../services/nuvio_sync_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -125,6 +126,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// LAN URL with token for phone → TV settings import (Android TV).
   String? _tvRemoteSettingsUrl;
 
+  // Nuvio (nuvioapp.space) — continue-watching sync
+  final TextEditingController _nuvioEmailController = TextEditingController();
+  final TextEditingController _nuvioPasswordController = TextEditingController();
+  bool _nuvioSyncEnabled = false;
+  int _nuvioProfileId = 1;
+  bool _nuvioSessionPresent = false;
+  bool _nuvioSigningIn = false;
+  bool _nuvioPulling = false;
+
   @override
   void initState() {
     super.initState();
@@ -215,6 +225,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? await _settings.getAndroidTvMaxStreamBitrateKbps()
         : null;
 
+    final nuvioSync = await _settings.isNuvioSyncEnabled();
+    final nuvioProfile = await _settings.getNuvioProfileId();
+    final nuvioSession = await NuvioSyncService.instance.hasStoredSession();
+
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
     // Full order: visible items first, then hidden items
@@ -290,6 +304,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _tvRemoteSettingsUrl = platformIsAndroid && DeviceProfile.isAndroidTv
             ? TvSettingsRemoteService().remoteUrl
             : null;
+        _nuvioSyncEnabled = nuvioSync;
+        _nuvioProfileId = nuvioProfile;
+        _nuvioSessionPresent = nuvioSession;
       });
     }
   }
@@ -385,6 +402,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _traktClientIdController.dispose();
     _traktClientSecretController.dispose();
     _rdApiKeyController.dispose();
+    _nuvioEmailController.dispose();
+    _nuvioPasswordController.dispose();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
     _jackett.dispose();
@@ -791,6 +810,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 32),
                     _buildSectionHeader('Simkl'),
                     _buildSimklSection(),
+                    const SizedBox(height: 32),
+                    _buildSectionHeader('Nuvio'),
+                    _buildNuvioSection(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('MDBlist'),
                     _buildMdblistSection(),
@@ -1985,6 +2007,221 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SnackBar(content: Text('Prowlarr settings saved!')),
       );
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Nuvio (nuvioapp.space)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  Future<void> _nuvioSignIn() async {
+    final email = _nuvioEmailController.text.trim();
+    final password = _nuvioPasswordController.text;
+    if (email.isEmpty || password.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter the email and password for your Nuvio account'),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _nuvioSigningIn = true);
+    try {
+      await NuvioSyncService.instance.signInWithPassword(
+        email: email,
+        password: password,
+      );
+      if (!mounted) return;
+      setState(() {
+        _nuvioSessionPresent = true;
+        _nuvioSigningIn = false;
+        _nuvioPasswordController.clear();
+      });
+      if (_nuvioSyncEnabled) {
+        unawaited(NuvioSyncService.instance.pullOnStartup());
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Signed in to Nuvio. Progress will sync when enabled.'),
+          ),
+        );
+      }
+    } on NuvioAuthException catch (e) {
+      if (mounted) {
+        setState(() => _nuvioSigningIn = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _nuvioSigningIn = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Nuvio: $e')));
+      }
+    }
+  }
+
+  Future<void> _nuvioSignOut() async {
+    await NuvioSyncService.instance.signOut();
+    if (mounted) {
+      setState(() {
+        _nuvioSessionPresent = false;
+        _nuvioPasswordController.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Signed out of Nuvio')),
+      );
+    }
+  }
+
+  Future<void> _nuvioSyncNow() async {
+    if (!_nuvioSessionPresent) return;
+    setState(() => _nuvioPulling = true);
+    try {
+      await NuvioSyncService.instance.pullAndMerge();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nuvio: progress merged into Continue watching')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Nuvio sync: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _nuvioPulling = false);
+    }
+  }
+
+  Widget _buildNuvioSection() {
+    if (kIsWeb) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Text(
+          'Nuvio sync is not available in the web build (local server / storage).',
+          style: TextStyle(color: Colors.white38, fontSize: 13),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              'Use the same Nuvio account as on https://nuvioapp.space — '
+              'this syncs Continue watching (TMDB) with your Nuvio watch progress. '
+              'Trakt / Simkl remain separate.',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildFocusableToggle(
+            'Sync Continue watching to Nuvio',
+            'When on, position is pushed after each save and can be pulled on startup (profile below).',
+            _nuvioSyncEnabled,
+            (val) async {
+              await _settings.setNuvioSyncEnabled(val);
+              if (mounted) {
+                setState(() => _nuvioSyncEnabled = val);
+              }
+            },
+          ),
+          const SizedBox(height: 8),
+          _buildFocusableDropdown(
+            'Nuvio profile (1–4)',
+            'Must match the active profile in your Nuvio account overview.',
+            'Profile $_nuvioProfileId',
+            const ['Profile 1', 'Profile 2', 'Profile 3', 'Profile 4'],
+            (val) async {
+              if (val == null) return;
+              final n = int.tryParse(val.split(' ').last ?? '') ?? 1;
+              await _settings.setNuvioProfileId(n);
+              if (mounted) setState(() => _nuvioProfileId = n);
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _nuvioEmailController,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Nuvio email',
+              hintText: 'Account email from nuvioapp.space',
+              filled: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _nuvioPasswordController,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              filled: true,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _nuvioSigningIn ? null : _nuvioSignIn,
+                  icon: _nuvioSigningIn
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.login),
+                  label: Text(_nuvioSigningIn ? 'Signing in…' : 'Sign in to Nuvio'),
+                ),
+              ),
+            ],
+          ),
+          if (_nuvioSessionPresent) ...[
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: _nuvioSignOut,
+              child: const Text('Sign out of Nuvio on this device'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: (!_nuvioSyncEnabled || _nuvioPulling) ? null : _nuvioSyncNow,
+              icon: _nuvioPulling
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_download_outlined, size: 20),
+              label: Text(
+                  _nuvioPulling ? 'Merging…' : 'Pull progress from Nuvio now'),
+            ),
+          ],
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () {
+              final u = Uri.parse('https://nuvioapp.space/account?tab=overview');
+              launchUrl(u, mode: LaunchMode.externalApplication);
+            },
+            icon: const Icon(Icons.open_in_new, size: 16),
+            label: const Text('Open nuvioapp.space account'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
