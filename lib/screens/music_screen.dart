@@ -46,8 +46,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   int _currentMusicOffset = 0;
   final int _musicLimit = 20;
 
-  // Palette colors for dynamic theming
-  static const Color _accentGlow = Color(0xFF7C4DFF);
+  // Palette colors — derived from active theme
+  Color get _accentGlow => AppTheme.current.primaryColor;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -178,17 +178,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0D0D1A),
-              Color(0xFF0A0A14),
-              Color(0xFF080812),
-            ],
-          ),
-        ),
+        decoration: AppTheme.effectiveBackground,
         child: SafeArea(
           child: _isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
         ),
@@ -254,7 +244,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                 Container(
                   width: 36, height: 36,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFFB47CFF)]),
+                    gradient: LinearGradient(colors: [AppTheme.current.primaryColor, Color.lerp(AppTheme.current.primaryColor, Colors.white, 0.3)!]),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 20),
@@ -329,7 +319,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
 
   Widget _sidebarItem(String label, IconData icon, MusicView view, {Color? color}) {
     final isActive = _currentView == view;
-    final itemColor = color ?? AppTheme.primaryColor;
+    final itemColor = color ?? AppTheme.current.primaryColor;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -382,7 +372,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                         Container(
                           width: 32, height: 32,
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFFB47CFF)]),
+                            gradient: LinearGradient(colors: [AppTheme.current.primaryColor, Color.lerp(AppTheme.current.primaryColor, Colors.white, 0.3)!]),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 18),
@@ -480,8 +470,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       child: Row(
         children: [
           _buildChip('Liked', Icons.favorite_rounded, MusicView.liked, Colors.pinkAccent),
-          _buildChip('Downloads', Icons.download_done_rounded, MusicView.downloaded, const Color(0xFF4DD0E1)),
-          _buildChip('Playlists', Icons.queue_music_rounded, MusicView.playlists, AppTheme.primaryColor),
+          _buildChip('Downloads', Icons.download_done_rounded, MusicView.downloaded, AppTheme.current.accentColor),
+          _buildChip('Playlists', Icons.queue_music_rounded, MusicView.playlists, AppTheme.current.primaryColor),
           _buildChip('Albums', Icons.album_rounded, MusicView.albums, Colors.amberAccent),
         ],
       ),
@@ -566,7 +556,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               Container(
                 width: 4, height: 22,
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryColor,
+                  color: AppTheme.current.primaryColor,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -576,12 +566,12 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                  color: AppTheme.current.primaryColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   'Page ${(_currentMusicOffset / _musicLimit).floor() + 1}',
-                  style: TextStyle(fontSize: 12, color: AppTheme.primaryColor, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 12, color: AppTheme.current.primaryColor, fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -656,7 +646,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
             _buildSectionHeader(
               'Downloads',
               icon: Icons.download_done_rounded,
-              iconColor: const Color(0xFF4DD0E1),
+              iconColor: AppTheme.current.accentColor,
               subtitle: '${downloaded.length} songs',
               onBack: () => setState(() => _currentView = MusicView.main),
               actions: [
@@ -695,7 +685,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         _buildSectionHeader(
           'Your Playlists',
           icon: Icons.queue_music_rounded,
-          iconColor: AppTheme.primaryColor,
+          iconColor: AppTheme.current.primaryColor,
           subtitle: '${_userPlaylists.length} playlists',
           onBack: () => setState(() => _currentView = MusicView.main),
           actions: [
@@ -745,7 +735,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [AppTheme.primaryColor.withValues(alpha: 0.3), AppTheme.primaryColor.withValues(alpha: 0.1)],
+                      colors: [AppTheme.current.primaryColor.withValues(alpha: 0.3), AppTheme.current.primaryColor.withValues(alpha: 0.1)],
                     ),
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -839,7 +829,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               indicatorSize: TabBarIndicatorSize.tab,
               dividerColor: Colors.transparent,
               indicator: BoxDecoration(
-                color: AppTheme.primaryColor.withValues(alpha: 0.2),
+                color: AppTheme.current.primaryColor.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(12),
               ),
               labelColor: Colors.white,
@@ -927,7 +917,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               final shouldDelete = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
-                  backgroundColor: const Color(0xFF1A1030),
+                  backgroundColor: AppTheme.bgCard,
                   title: const Text('Delete Playlist?'),
                   content: Text('Are you sure you want to delete "${p.name}"?'),
                   actions: [
@@ -950,7 +940,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: const Text('Playlist deleted'),
-                      backgroundColor: const Color(0xFF1A1030),
+                      backgroundColor: AppTheme.bgCard,
                       behavior: SnackBarBehavior.floating,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
@@ -1003,7 +993,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: const Text('Album saved!'),
-                    backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.9),
+                    backgroundColor: AppTheme.current.primaryColor.withValues(alpha: 0.9),
                     behavior: SnackBarBehavior.floating,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
@@ -1061,7 +1051,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                         end: Alignment.bottomCenter,
                         colors: [
                           Colors.black.withValues(alpha: 0.55),
-                          const Color(0xFF0D0D1A),
+                          AppTheme.bgDark,
                         ],
                       ),
                     ),
@@ -1076,7 +1066,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                             end: Alignment.bottomCenter,
                             colors: [
                               Colors.black.withValues(alpha: 0.4),
-                              const Color(0xFF0D0D1A),
+                              AppTheme.bgDark,
                             ],
                           ),
                         ),
@@ -1108,7 +1098,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                             ? _buildCoverImage(coverUrl, width: 140, height: 140)
                             : Container(
                                 width: 140, height: 140,
-                                color: AppTheme.primaryColor.withValues(alpha: 0.2),
+                                color: AppTheme.current.primaryColor.withValues(alpha: 0.2),
                                 child: const Icon(Icons.album_rounded, size: 56, color: Colors.white38),
                               ),
                       ),
@@ -1172,7 +1162,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           decoration: BoxDecoration(
-            color: filled ? AppTheme.primaryColor : Colors.transparent,
+            color: filled ? AppTheme.current.primaryColor : Colors.transparent,
             borderRadius: BorderRadius.circular(24),
             border: filled ? null : Border.all(color: Colors.white.withValues(alpha: 0.2)),
           ),
@@ -1267,9 +1257,9 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     child: Container(
                       width: 36, height: 36,
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF9C6FFF)]),
+                        gradient: LinearGradient(colors: [AppTheme.current.primaryColor, Color.lerp(AppTheme.current.primaryColor, Colors.white, 0.2)!]),
                         shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.4), blurRadius: 10, offset: const Offset(0, 2))],
+                        boxShadow: [BoxShadow(color: AppTheme.current.primaryColor.withValues(alpha: 0.4), blurRadius: 10, offset: const Offset(0, 2))],
                       ),
                       child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
                     ),
@@ -1315,9 +1305,9 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 decoration: BoxDecoration(
-                  color: isPlaying ? AppTheme.primaryColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.06),
+                  color: isPlaying ? AppTheme.current.primaryColor.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(12),
-                  border: isPlaying ? Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.3)) : Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                  border: isPlaying ? Border.all(color: AppTheme.current.primaryColor.withValues(alpha: 0.3)) : Border.all(color: Colors.white.withValues(alpha: 0.06)),
                 ),
                 child: Row(
                   children: [
@@ -1326,7 +1316,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       SizedBox(
                         width: 32,
                         child: isPlaying
-                            ? Icon(Icons.equalizer_rounded, color: AppTheme.primaryColor, size: 20)
+                            ? Icon(Icons.equalizer_rounded, color: AppTheme.current.primaryColor, size: 20)
                             : Text(
                                 '${(index ?? 0) + 1}',
                                 textAlign: TextAlign.center,
@@ -1338,7 +1328,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(10),
                         boxShadow: isPlaying
-                            ? [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.3), blurRadius: 12)]
+                            ? [BoxShadow(color: AppTheme.current.primaryColor.withValues(alpha: 0.3), blurRadius: 12)]
                             : null,
                       ),
                       child: ClipRRect(
@@ -1357,7 +1347,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                             maxLines: 1, overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontWeight: FontWeight.w600, fontSize: 14,
-                              color: isPlaying ? AppTheme.primaryColor : Colors.white,
+                              color: isPlaying ? AppTheme.current.primaryColor : Colors.white,
                             ),
                           ),
                           const SizedBox(height: 2),
@@ -1458,7 +1448,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(isSaved ? 'Album removed' : 'Album saved!'),
-                                backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.9),
+                                backgroundColor: AppTheme.current.primaryColor.withValues(alpha: 0.9),
                                 behavior: SnackBarBehavior.floating,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
@@ -1707,7 +1697,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0D1A),
+        color: AppTheme.bgDark,
         border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
       ),
       child: Row(
@@ -1743,7 +1733,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             color: isEnabled
-                ? (trailing ? AppTheme.primaryColor : Colors.white.withValues(alpha: 0.12))
+                ? (trailing ? AppTheme.current.primaryColor : Colors.white.withValues(alpha: 0.12))
                 : Colors.white.withValues(alpha: 0.04),
             borderRadius: BorderRadius.circular(12),
           ),
@@ -1820,16 +1810,16 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: AppTheme.primaryColor.withValues(alpha: 0.12),
+            color: AppTheme.current.primaryColor.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.15)),
+            border: Border.all(color: AppTheme.current.primaryColor.withValues(alpha: 0.15)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: AppTheme.primaryColor),
+              Icon(icon, size: 16, color: AppTheme.current.primaryColor),
               const SizedBox(width: 6),
-              Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primaryColor)),
+              Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.current.primaryColor)),
             ],
           ),
         ),
@@ -1901,7 +1891,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       isScrollControlled: true,
       builder: (context) => Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF141020),
+          color: AppTheme.bgCard,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
         ),
@@ -1918,7 +1908,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.2), blurRadius: 15)],
+                      boxShadow: [BoxShadow(color: AppTheme.current.primaryColor.withValues(alpha: 0.2), blurRadius: 15)],
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
@@ -1954,14 +1944,14 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   messenger.showSnackBar(
                     SnackBar(
                       content: const Text('Removed from playlist'),
-                      backgroundColor: const Color(0xFF1A1030),
+                      backgroundColor: AppTheme.bgCard,
                       behavior: SnackBarBehavior.floating,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   );
                 }
               }),
-            _buildMenuItem(Icons.playlist_add_rounded, 'Add to Playlist', AppTheme.primaryColor, () {
+            _buildMenuItem(Icons.playlist_add_rounded, 'Add to Playlist', AppTheme.current.primaryColor, () {
               Navigator.pop(context);
               _showPlaylistPicker(track);
             }),
@@ -2011,7 +2001,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       if (mounted) {
                         messenger.showSnackBar(SnackBar(
                           content: Text(success ? 'Added to download queue...' : 'Already in download queue'),
-                          backgroundColor: const Color(0xFF1A1030),
+                          backgroundColor: AppTheme.bgCard,
                           behavior: SnackBarBehavior.floating,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ));
@@ -2064,7 +2054,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     if (playlists.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: const Text('Create a playlist first!'),
-        backgroundColor: const Color(0xFF1A1030),
+        backgroundColor: AppTheme.bgCard,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ));
@@ -2075,7 +2065,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF141020),
+          color: AppTheme.bgCard,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
         ),
@@ -2101,7 +2091,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   navigator.pop();
                   messenger.showSnackBar(SnackBar(
                     content: Text('Added to ${p.name}'),
-                    backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.9),
+                    backgroundColor: AppTheme.current.primaryColor.withValues(alpha: 0.9),
                     behavior: SnackBarBehavior.floating,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ));
@@ -2113,10 +2103,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       Container(
                         width: 36, height: 36,
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryColor.withValues(alpha: 0.12),
+                          color: AppTheme.current.primaryColor.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Icon(Icons.queue_music_rounded, color: AppTheme.primaryColor, size: 20),
+                        child: Icon(Icons.queue_music_rounded, color: AppTheme.current.primaryColor, size: 20),
                       ),
                       const SizedBox(width: 16),
                       Expanded(child: Text(p.name, style: const TextStyle(fontSize: 15))),
@@ -2142,7 +2132,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        backgroundColor: const Color(0xFF141020),
+        backgroundColor: AppTheme.bgCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(28),
@@ -2155,10 +2145,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   Container(
                     width: 40, height: 40,
                     decoration: BoxDecoration(
-                      color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                      color: AppTheme.current.primaryColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.playlist_add_rounded, color: AppTheme.primaryColor, size: 22),
+                    child: Icon(Icons.playlist_add_rounded, color: AppTheme.current.primaryColor, size: 22),
                   ),
                   const SizedBox(width: 14),
                   const Text('New Playlist', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
@@ -2204,7 +2194,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [Color(0xFF7C4DFF), Color(0xFF9C6FFF)]),
+                          gradient: LinearGradient(colors: [AppTheme.current.primaryColor, Color.lerp(AppTheme.current.primaryColor, Colors.white, 0.2)!]),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Text('Create', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -2239,7 +2229,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        backgroundColor: const Color(0xFF141020),
+        backgroundColor: AppTheme.bgCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(28),
@@ -2252,10 +2242,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   Container(
                     width: 40, height: 40,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF4DD0E1).withValues(alpha: 0.15),
+                      color: AppTheme.current.accentColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.folder_open_rounded, color: Color(0xFF4DD0E1), size: 22),
+                    child: Icon(Icons.folder_open_rounded, color: AppTheme.current.accentColor, size: 22),
                   ),
                   const SizedBox(width: 14),
                   const Text('Downloads Location', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -2275,7 +2265,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
                 ),
-                child: Text(dirPath, style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: AppTheme.primaryColor)),
+                child: Text(dirPath, style: TextStyle(fontFamily: 'monospace', fontSize: 12, color: AppTheme.current.primaryColor)),
               ),
               const SizedBox(height: 12),
               Row(
@@ -2297,13 +2287,13 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                       Clipboard.setData(ClipboardData(text: dirPath));
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                         content: const Text('Path copied!'),
-                        backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.9),
+                        backgroundColor: AppTheme.current.primaryColor.withValues(alpha: 0.9),
                         behavior: SnackBarBehavior.floating,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       ));
                       Navigator.pop(context);
                     },
-                    child: const Text('Copy Path', style: TextStyle(color: AppTheme.primaryColor)),
+                    child: Text('Copy Path', style: TextStyle(color: AppTheme.current.primaryColor)),
                   ),
                   const SizedBox(width: 8),
                   TextButton(
@@ -2433,7 +2423,7 @@ class _HoverScaleCardState extends State<_HoverScaleCard> with SingleTickerProvi
               boxShadow: _isHovered
                   ? [
                       BoxShadow(
-                        color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                        color: AppTheme.current.primaryColor.withValues(alpha: 0.3),
                         blurRadius: 20,
                         spreadRadius: 1,
                       ),

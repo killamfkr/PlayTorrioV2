@@ -82,6 +82,10 @@ class MainActivity : AudioServiceActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     }
 
+    /**
+     * Re-apply immersive mode after configuration changes. Also works around a Flutter
+     * engine race where FlutterView may suppress viewport metrics during rapid resize.
+     */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         window.decorView.postDelayed({ applyImmersiveMode() }, 300)

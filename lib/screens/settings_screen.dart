@@ -26,6 +26,7 @@ import '../platform_flags.dart';
 import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
 import 'settings_export.dart';
+import 'webstreamr_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -102,6 +103,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Light mode
   bool _isLightMode = false;
+
+  /// App theme preset id (see [AppTheme.presets]).
+  String _selectedThemeId = 'cinematic';
 
   // Navbar config
   List<String> _navbarVisible = [];
@@ -198,6 +202,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Load light mode
     final lightMode = await _settings.isLightModeEnabled();
 
+    final themePreset = await _settings.getThemePreset();
+
     final xmltvEpg = await _settings.getXmltvEpgUrl();
     final defaultAddonUrl = await _settings.getDefaultStremioAddonBaseUrl();
     final bgPlay = await _settings.continuePlaybackInBackground();
@@ -267,6 +273,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _torrentCacheType = cacheType;
         _torrentRamCacheMb = ramCacheMb;
         _isLightMode = lightMode;
+        _selectedThemeId = themePreset;
         _navbarVisible = navVisible;
         _navbarOrder = navOrder;
         _xmltvEpgUrlController.text = xmltvEpg ?? '';
@@ -451,7 +458,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('Backup & Restore'),
                     _buildBackupRestore(),
                     const SizedBox(height: 32),
-                    _buildSectionHeader('Performance'),
+                    _buildSectionHeader('Appearance'),
                     _buildFocusableToggle(
                       'Light Mode',
                       'Disables blur effects, glows, shadows, and animations for better FPS on low-end devices.',
@@ -461,6 +468,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         setState(() => _isLightMode = val);
                       },
                     ),
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        'THEME',
+                        style: TextStyle(
+                          color: AppTheme.current.primaryColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildThemePicker(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Playback'),
                     _buildFocusableToggle(
@@ -654,6 +676,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 32),
                     _buildSectionHeader('Prowlarr'),
                     _buildProwlarrConfig(),
+                    const SizedBox(height: 20),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        'WEBSTREAMR (LOCAL)',
+                        style: TextStyle(
+                          color: AppTheme.current.primaryColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.language),
+                        title: const Text('WebStreamr settings'),
+                        subtitle: const Text(
+                            'Country toggles, MFP, FlareSolverr, TMDB token'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const WebStreamrSettingsScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Torrent Engine'),
                     _buildFocusableDropdown(
@@ -2767,6 +2817,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildThemePicker() {
+    final width = MediaQuery.of(context).size.width;
+    final cols = width > 900 ? 4 : (width > 550 ? 3 : 2);
+    final aspect = width > 550 ? 2.8 : 2.6;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            'Choose a vibe for your app.',
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+          ),
+        ),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            childAspectRatio: aspect,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+          ),
+          itemCount: AppTheme.presets.length,
+          itemBuilder: (context, index) {
+            final preset = AppTheme.presets[index];
+            final isSelected = preset.id == _selectedThemeId;
+            return GestureDetector(
+              onTap: () async {
+                await AppTheme.setPreset(preset.id);
+                setState(() => _selectedThemeId = preset.id);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: preset.bgCard,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isSelected ? preset.primaryColor : Colors.white12,
+                    width: isSelected ? 2 : 1,
+                  ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: preset.primaryColor.withValues(alpha: 0.25),
+                            blurRadius: 8,
+                            spreadRadius: 0,
+                          ),
+                        ]
+                      : [],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [preset.primaryColor, preset.accentColor],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
+                      child: Icon(preset.icon, size: 13, color: Colors.white),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        preset.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (isSelected)
+                      Icon(Icons.check_circle,
+                          size: 14, color: preset.primaryColor),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 

@@ -6,9 +6,56 @@ import '../services/jellyfin_service.dart';
 import '../utils/app_theme.dart';
 import 'jellyfin_details_screen.dart';
 
+// ─── Jellyfin Palette ────────────────────────────────────────────────────────
+const _jfBlue = Color(0xFF00A4DC);
+const _jfBlueDark = Color(0xFF0077B6);
+const _jfSurface = Color(0xFF13131E);
+const _jfSurfaceLight = Color(0xFF1A1A2E);
+
+// ─── Hover / Press Card ─────────────────────────────────────────────────────
+class _HoverCard extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  const _HoverCard({required this.child, this.onTap});
+  @override
+  State<_HoverCard> createState() => _HoverCardState();
+}
+
+class _HoverCardState extends State<_HoverCard> {
+  bool _hovered = false;
+  bool _pressed = false;
+  double get _scale => _pressed ? 0.96 : (_hovered ? 1.04 : 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) {
+          setState(() => _pressed = false);
+          widget.onTap?.call();
+        },
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _scale,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Jellyfin Screen
+// ═════════════════════════════════════════════════════════════════════════════
+
 class JellyfinScreen extends StatefulWidget {
   const JellyfinScreen({super.key});
-
   @override
   State<JellyfinScreen> createState() => _JellyfinScreenState();
 }
@@ -29,33 +76,36 @@ class _JellyfinScreenState extends State<JellyfinScreen>
   final FocusNode _librarySearchFocus = FocusNode();
   Timer? _librarySearchDebounce;
 
-  // Items grid when a library is selected
+  // Hero carousel
+  List<JellyfinItem> _featuredItems = [];
+  late final PageController _heroController = PageController();
+  Timer? _heroTimer;
+  int _heroPage = 0;
+
+  // Library view
   String? _selectedLibraryId;
   String? _selectedLibraryName;
-  List<JellyfinItem> _allLibraryItems = [];   // items for the current view
-  List<JellyfinItem> _libraryItems = [];       // current page / filter slice
+  List<JellyfinItem> _allLibraryItems = [];
+  List<JellyfinItem> _libraryItems = [];
   bool _isLoadingLibrary = false;
   String _librarySortBy = 'SortName';
   String _librarySortOrder = 'Ascending';
 
-  // Pagination
   static const int _pageSize = 50;
   int _libraryPage = 0;
   String _librarySearchTerm = '';
   bool _isBackgroundLoading = false;
 
-  // Persistent cache — survives navigating back to home and returning
-  final Map<String, List<JellyfinItem>> _libraryCache = {};    // key → items
-  final Set<String> _libraryCacheComplete = {};                // keys fully fetched
-  final Set<String> _libraryCacheFetching = {};                // keys currently fetching
-  final Map<String, int> _libraryFetchGen = {};                // key → gen (cancel stale fetches on sort change)
+  final Map<String, List<JellyfinItem>> _libraryCache = {};
+  final Set<String> _libraryCacheComplete = {};
+  final Set<String> _libraryCacheFetching = {};
+  final Map<String, int> _libraryFetchGen = {};
 
   String get _currentCacheKey =>
       '${_selectedLibraryId ?? ''}|$_librarySortBy|$_librarySortOrder';
   String _cacheKey(JellyfinItem lib) =>
       '${lib.id}|$_librarySortBy|$_librarySortOrder';
 
-  // Derived helpers
   int get _libraryTotalCount => _librarySearchTerm.isEmpty
       ? _allLibraryItems.length
       : _libraryItems.length;
@@ -72,11 +122,17 @@ class _JellyfinScreenState extends State<JellyfinScreen>
 
   @override
   void dispose() {
+    _heroTimer?.cancel();
+    _heroController.dispose();
     _librarySearchDebounce?.cancel();
     _librarySearchController.dispose();
     _librarySearchFocus.dispose();
     super.dispose();
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Data Loading
+  // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> _init() async {
     setState(() => _isLoading = true);
@@ -94,36 +150,53 @@ class _JellyfinScreenState extends State<JellyfinScreen>
 
   Future<void> _loadHomeData() async {
     try {
-      _libraries = await _jf.getLibraries();
-      // Filter to video libraries only
-      final videoLibraries = _libraries.where((l) =>
-          l.collectionType == 'movies' || l.collectionType == 'tvshows' || l.collectionType == null).toList();
+      final home = await _jf.loadHomeData();
+      _libraries = home.libraries;
+      _resumeItems = home.resumeItems;
+      _nextUpItems = home.nextUpItems;
+      _latestByLibrary = home.latestByLibrary;
 
-      final results = await Future.wait([
-        _jf.getResumeItems(limit: 12),
-        _jf.getNextUp(limit: 20),
-        ...videoLibraries.map((lib) => _jf.getLatestItems(parentId: lib.id, limit: 16)),
-      ]);
-
-      _resumeItems = results[0];
-      _nextUpItems = results[1];
-
-      _latestByLibrary = {};
-      for (var i = 0; i < videoLibraries.length; i++) {
-        final items = results[i + 2];
-        if (items.isNotEmpty) {
-          _latestByLibrary[videoLibraries[i].name] = items;
+      // Build featured items for hero — prefer items with backdrop images
+      _featuredItems = [];
+      for (final items in _latestByLibrary.values) {
+        for (final item in items) {
+          if (item.backdropImageTags.isNotEmpty && _featuredItems.length < 6) {
+            _featuredItems.add(item);
+          }
         }
       }
+      if (_featuredItems.isEmpty) {
+        for (final items in _latestByLibrary.values) {
+          _featuredItems.addAll(items.take(3));
+          if (_featuredItems.length >= 6) break;
+        }
+      }
+      _featuredItems = _featuredItems.take(6).toList();
+      _startHeroTimer();
+
       _error = null;
     } catch (e) {
-      _error = 'Failed to load data: $e';
+      _error = 'Failed to load: $e';
       debugPrint('[JellyfinScreen] Load error: $e');
     }
     if (mounted) setState(() {});
   }
 
-  // ─── filter / page helpers ────────────────────────────────────────────────
+  void _startHeroTimer() {
+    _heroTimer?.cancel();
+    if (_featuredItems.length <= 1) return;
+    _heroTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (!mounted || !_heroController.hasClients) return;
+      _heroPage = (_heroPage + 1) % _featuredItems.length;
+      _heroController.animateToPage(_heroPage,
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeInOutCubic);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Filter / Pagination
+  // ═══════════════════════════════════════════════════════════════════════════
 
   void _applyFilter(String query) {
     _librarySearchTerm = query.trim().toLowerCase();
@@ -138,7 +211,6 @@ class _JellyfinScreenState extends State<JellyfinScreen>
             .where((i) => i.name.toLowerCase().contains(_librarySearchTerm))
             .toList();
     if (_librarySearchTerm.isNotEmpty) {
-      // Show all matches without pagination when filtering
       _libraryItems = filtered;
     } else {
       final start = _libraryPage * _pageSize;
@@ -148,9 +220,7 @@ class _JellyfinScreenState extends State<JellyfinScreen>
     if (mounted) setState(() {});
   }
 
-  Future<void> _searchLibrary(String query) async {
-    _applyFilter(query);
-  }
+  Future<void> _searchLibrary(String query) async => _applyFilter(query);
 
   Future<void> _openLibrary(JellyfinItem library) async {
     _librarySearchController.clear();
@@ -161,7 +231,6 @@ class _JellyfinScreenState extends State<JellyfinScreen>
     final key = _cacheKey(library);
 
     if (_libraryCache.containsKey(key)) {
-      // ── Instant restore from cache ──
       final cached = _libraryCache[key]!;
       final bgLoading = _libraryCacheFetching.contains(key);
       setState(() {
@@ -172,12 +241,10 @@ class _JellyfinScreenState extends State<JellyfinScreen>
         _allLibraryItems = cached;
       });
       _rebuildPage();
-      // Resume background fetch if interrupted and not already running
       if (!_libraryCacheComplete.contains(key) && !_libraryCacheFetching.contains(key)) {
         _fetchLibraryItems(library, key);
       }
     } else {
-      // ── First visit ──
       setState(() {
         _selectedLibraryId = library.id;
         _selectedLibraryName = library.name;
@@ -201,70 +268,36 @@ class _JellyfinScreenState extends State<JellyfinScreen>
             ? 'Series'
             : null;
 
-    // Helper: is this fetch still valid (not superseded by a sort change)?
     bool valid() => _libraryFetchGen[key] == gen;
-    // Helper: is the user currently viewing this library?
     bool viewing() => _selectedLibraryId == library.id && _currentCacheKey == key;
 
     try {
-      // ── Step 1: first page — show grid fast ──
-      final first = await _jf.getItemsPaged(
+      // Fetch ALL items in a single request (no limit) — matches how
+      // jellyfin-web and Findroid handle it. The Jellyfin server has no
+      // rate-limiting on the Items endpoint; Limit is purely client-side.
+      final result = await _jf.getItemsPaged(
         parentId: library.id,
         includeItemTypes: type,
         sortBy: _librarySortBy,
         sortOrder: _librarySortOrder,
         startIndex: 0,
-        limit: _pageSize,
       );
       if (!valid()) { _libraryCacheFetching.remove(key); return; }
 
-      _libraryCache[key] = List.of(first.items);
+      _libraryCache[key] = List.of(result.items);
+      _libraryCacheComplete.add(key);
+      _libraryCacheFetching.remove(key);
+
       if (viewing()) {
         _allLibraryItems = _libraryCache[key]!;
         _rebuildPage();
-        if (mounted) setState(() => _isLoadingLibrary = false);
-      }
-
-      final total = first.totalCount;
-      if (total <= _pageSize) {
-        _libraryCacheComplete.add(key);
-        _libraryCacheFetching.remove(key);
-        if (viewing() && mounted) setState(() => _isBackgroundLoading = false);
-        return;
-      }
-
-      // ── Step 2: background pages — keep going even if user navigates away ──
-      if (viewing() && mounted) setState(() => _isBackgroundLoading = true);
-
-      int fetched = _pageSize;
-      while (fetched < total) {
-        if (!valid()) { _libraryCacheFetching.remove(key); return; }
-
-        final page = await _jf.getItemsPaged(
-          parentId: library.id,
-          includeItemTypes: type,
-          sortBy: _librarySortBy,
-          sortOrder: _librarySortOrder,
-          startIndex: fetched,
-          limit: 200,
-        );
-        if (!valid()) { _libraryCacheFetching.remove(key); return; }
-        if (page.items.isEmpty) break;
-
-        _libraryCache[key] = [..._libraryCache[key]!, ...page.items];
-        fetched += page.items.length;
-
-        // Update view only if user is still on this library
-        if (viewing()) {
-          _allLibraryItems = _libraryCache[key]!;
-          if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {
+            _isLoadingLibrary = false;
+            _isBackgroundLoading = false;
+          });
         }
       }
-
-      _libraryCacheComplete.add(key);
-      _libraryCacheFetching.remove(key);
-      if (viewing() && mounted) setState(() => _isBackgroundLoading = false);
-
     } catch (e) {
       if (!valid()) return;
       debugPrint('[JellyfinScreen] Library fetch error: $e');
@@ -281,14 +314,16 @@ class _JellyfinScreenState extends State<JellyfinScreen>
   }
 
   void _openDetails(JellyfinItem item) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => JellyfinDetailsScreen(item: item)),
-    );
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => JellyfinDetailsScreen(item: item))).then((_) {
+      // Refresh Continue Watching / Next Up after returning from details
+      _jf.invalidatePlaybackCache();
+      _loadHomeData();
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Add Account Dialog
+  // Account Dialogs
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> _showAddAccountDialog() async {
@@ -303,108 +338,79 @@ class _JellyfinScreenState extends State<JellyfinScreen>
       barrierColor: Colors.black87,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => Dialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: _jfSurfaceLight,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           child: Container(
-            width: 420,
-            padding: const EdgeInsets.all(28),
+            width: 400,
+            padding: const EdgeInsets.all(32),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Header
+                // Icon
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  width: 72, height: 72,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [
-                        AppTheme.primaryColor.withValues(alpha: 0.3),
-                        const Color(0xFF00A4DC).withValues(alpha: 0.3),
-                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [_jfBlue.withValues(alpha: 0.25), _jfBlueDark.withValues(alpha: 0.15)],
                     ),
-                    shape: BoxShape.circle,
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Icon(Icons.dns_rounded, size: 36, color: Color(0xFF00A4DC)),
+                  child: const Icon(Icons.dns_rounded, size: 32, color: _jfBlue),
                 ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Connect to Jellyfin',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: -0.5,
-                  ),
-                ),
+                const SizedBox(height: 20),
+                const Text('Connect Server',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700,
+                        color: Colors.white, letterSpacing: -0.5)),
                 const SizedBox(height: 6),
-                Text(
-                  'Enter your server details',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
-                ),
-                const SizedBox(height: 24),
-
-                // URL Field
-                _buildTextField(urlCtrl, 'Server URL', Icons.link_rounded,
-                    hint: 'http://192.168.1.100:8096'),
+                Text('Enter your Jellyfin server details',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 13)),
+                const SizedBox(height: 28),
+                _dialogField(urlCtrl, 'Server URL', Icons.link_rounded,
+                    hint: 'https://jellyfin.example.com'),
                 const SizedBox(height: 14),
-
-                // Username
-                _buildTextField(userCtrl, 'Username', Icons.person_rounded),
+                _dialogField(userCtrl, 'Username', Icons.person_outline_rounded),
                 const SizedBox(height: 14),
-
-                // Password
-                _buildTextField(passCtrl, 'Password', Icons.lock_rounded,
+                _dialogField(passCtrl, 'Password', Icons.lock_outline_rounded,
                     isPassword: true),
-
                 if (dialogError != null) ...[
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 14),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.error_outline, color: Colors.redAccent, size: 18),
+                        const Icon(Icons.error_outline, color: Colors.redAccent, size: 16),
                         const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(dialogError!,
-                              style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                        ),
+                        Expanded(child: Text(dialogError!,
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 12))),
                       ],
                     ),
                   ),
                 ],
-
-                const SizedBox(height: 24),
-
-                // Connect Button
+                const SizedBox(height: 28),
                 SizedBox(
                   width: double.infinity,
-                  height: 48,
+                  height: 50,
                   child: ElevatedButton(
                     onPressed: isLogging
                         ? null
                         : () async {
                             if (urlCtrl.text.trim().isEmpty || userCtrl.text.trim().isEmpty) {
-                              setDialogState(() => dialogError = 'Please fill in all fields');
+                              setDialogState(() => dialogError = 'Please fill in all required fields');
                               return;
                             }
-                            setDialogState(() {
-                              isLogging = true;
-                              dialogError = null;
-                            });
+                            setDialogState(() { isLogging = true; dialogError = null; });
                             try {
-                              await _jf.login(
-                                urlCtrl.text.trim(),
-                                userCtrl.text.trim(),
-                                passCtrl.text,
-                              );
+                              await _jf.login(urlCtrl.text.trim(), userCtrl.text.trim(), passCtrl.text);
                               if (ctx.mounted) Navigator.pop(ctx);
-                              setState(() {
-                                _isLoggedIn = true;
-                                _isLoading = true;
-                              });
+                              if (!mounted) return;
+                              setState(() { _isLoggedIn = true; _isLoading = true; });
                               await _loadHomeData();
                               if (mounted) setState(() => _isLoading = false);
                             } catch (e) {
@@ -415,17 +421,16 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                             }
                           },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00A4DC),
+                      backgroundColor: _jfBlue,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       elevation: 0,
                     ),
                     child: isLogging
-                        ? const SizedBox(
-                            width: 22, height: 22,
+                        ? const SizedBox(width: 22, height: 22,
                             child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Text('Connect',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],
@@ -436,13 +441,8 @@ class _JellyfinScreenState extends State<JellyfinScreen>
     );
   }
 
-  Widget _buildTextField(
-    TextEditingController ctrl,
-    String label,
-    IconData icon, {
-    String? hint,
-    bool isPassword = false,
-  }) {
+  Widget _dialogField(TextEditingController ctrl, String label, IconData icon,
+      {String? hint, bool isPassword = false}) {
     return TextField(
       controller: ctrl,
       obscureText: isPassword,
@@ -450,22 +450,22 @@ class _JellyfinScreenState extends State<JellyfinScreen>
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
-        hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
-        prefixIcon: Icon(icon, color: const Color(0xFF00A4DC), size: 20),
+        labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.55)),
+        hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.2)),
+        prefixIcon: Icon(icon, color: _jfBlue, size: 20),
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.06),
+        fillColor: Colors.white.withValues(alpha: 0.05),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFF00A4DC)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _jfBlue, width: 1.5),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       ),
@@ -478,129 +478,117 @@ class _JellyfinScreenState extends State<JellyfinScreen>
 
     await showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40, height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    const Icon(Icons.dns_rounded, color: Color(0xFF00A4DC)),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text('Jellyfin Accounts',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _showAddAccountDialog();
-                      },
-                      icon: const Icon(Icons.add_circle_outline, color: Color(0xFF00A4DC)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (accounts.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 30),
-                    child: Column(
-                      children: [
-                        Icon(Icons.cloud_off_rounded,
-                            size: 48, color: Colors.white.withValues(alpha: 0.2)),
-                        const SizedBox(height: 12),
-                        Text('No accounts added',
-                            style: TextStyle(color: Colors.white.withValues(alpha: 0.4))),
-                      ],
-                    ),
-                  )
-                else
-                  ...accounts.asMap().entries.map((entry) {
-                    final idx = entry.key;
-                    final acc = entry.value;
-                    final isActive =
-                        _jf.activeAccount?.normalizedUrl == acc.normalizedUrl &&
-                            _jf.activeAccount?.username == acc.username;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
+          return Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            decoration: BoxDecoration(
+              color: _jfSurfaceLight,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Handle bar
+                  Container(width: 40, height: 4,
                       decoration: BoxDecoration(
-                        color: isActive
-                            ? const Color(0xFF00A4DC).withValues(alpha: 0.15)
-                            : Colors.white.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(12),
-                        border: isActive
-                            ? Border.all(color: const Color(0xFF00A4DC).withValues(alpha: 0.4))
-                            : null,
-                      ),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: isActive
-                              ? const Color(0xFF00A4DC)
-                              : Colors.white.withValues(alpha: 0.1),
-                          child: Icon(Icons.person, color: isActive ? Colors.white : Colors.white54),
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      const Icon(Icons.dns_rounded, color: _jfBlue, size: 22),
+                      const SizedBox(width: 12),
+                      const Expanded(child: Text('Accounts',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white))),
+                      _HoverCard(
+                        onTap: () { Navigator.pop(ctx); _showAddAccountDialog(); },
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _jfBlue.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.add_rounded, color: _jfBlue, size: 20),
                         ),
-                        title: Text(acc.username,
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: isActive ? FontWeight.bold : FontWeight.normal)),
-                        subtitle: Text(acc.normalizedUrl,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.4), fontSize: 12)),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (!isActive)
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (accounts.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 32),
+                      child: Column(children: [
+                        Icon(Icons.cloud_off_rounded, size: 44, color: Colors.white.withValues(alpha: 0.15)),
+                        const SizedBox(height: 12),
+                        Text('No accounts', style: TextStyle(color: Colors.white.withValues(alpha: 0.35))),
+                      ]),
+                    )
+                  else
+                    ...accounts.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final acc = entry.value;
+                      final isActive = _jf.activeAccount?.normalizedUrl == acc.normalizedUrl &&
+                          _jf.activeAccount?.username == acc.username;
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: isActive ? _jfBlue.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: isActive ? Border.all(color: _jfBlue.withValues(alpha: 0.3), width: 1.5) : null,
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          leading: CircleAvatar(
+                            backgroundColor: isActive ? _jfBlue : Colors.white.withValues(alpha: 0.08),
+                            radius: 20,
+                            child: Icon(Icons.person_rounded, color: isActive ? Colors.white : Colors.white38, size: 20),
+                          ),
+                          title: Text(acc.username,
+                              style: TextStyle(color: Colors.white,
+                                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500, fontSize: 14)),
+                          subtitle: Text(acc.normalizedUrl,
+                              style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 11)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!isActive)
+                                IconButton(
+                                  icon: const Icon(Icons.login_rounded, color: _jfBlue, size: 20),
+                                  onPressed: () async {
+                                    Navigator.pop(ctx);
+                                    if (!mounted) return;
+                                    setState(() => _isLoading = true);
+                                    try {
+                                      await _jf.login(acc.serverUrl, acc.username, acc.password);
+                                      _isLoggedIn = true;
+                                      await _loadHomeData();
+                                    } catch (e) { _error = e.toString(); }
+                                    if (mounted) setState(() => _isLoading = false);
+                                  },
+                                ),
                               IconButton(
-                                icon: const Icon(Icons.login, color: Color(0xFF00A4DC), size: 20),
+                                icon: Icon(Icons.delete_outline_rounded,
+                                    color: Colors.redAccent.withValues(alpha: 0.6), size: 20),
                                 onPressed: () async {
-                                  Navigator.pop(ctx);
-                                  setState(() => _isLoading = true);
-                                  try {
-                                    await _jf.login(acc.serverUrl, acc.username, acc.password);
-                                    _isLoggedIn = true;
-                                    await _loadHomeData();
-                                  } catch (e) {
-                                    _error = e.toString();
-                                  }
-                                  if (mounted) setState(() => _isLoading = false);
+                                  await _jf.removeAccount(idx);
+                                  final updated = await _jf.getSavedAccounts();
+                                  setSheetState(() => accounts..clear()..addAll(updated));
+                                  if (!_jf.isLoggedIn) setState(() => _isLoggedIn = false);
                                 },
                               ),
-                            IconButton(
-                              icon: Icon(Icons.delete_outline,
-                                  color: Colors.redAccent.withValues(alpha: 0.7), size: 20),
-                              onPressed: () async {
-                                await _jf.removeAccount(idx);
-                                final updated = await _jf.getSavedAccounts();
-                                setSheetState(() => accounts
-                                  ..clear()
-                                  ..addAll(updated));
-                                if (!_jf.isLoggedIn) {
-                                  setState(() => _isLoggedIn = false);
-                                }
-                              },
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    );
-                  }),
-                const SizedBox(height: 8),
-              ],
+                      );
+                    }),
+                  const SizedBox(height: 8),
+                ],
+              ),
             ),
           );
         },
@@ -615,286 +603,483 @@ class _JellyfinScreenState extends State<JellyfinScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-
     if (_isLoading) {
       return Container(
         decoration: AppTheme.backgroundDecoration,
-        child: const Center(
-          child: CircularProgressIndicator(color: Color(0xFF00A4DC)),
-        ),
+        child: const Center(child: CircularProgressIndicator(color: _jfBlue)),
       );
     }
-
     if (!_isLoggedIn) return _buildWelcome();
-
     if (_selectedLibraryId != null) return _buildLibraryView();
-
     return _buildHome();
   }
 
-  // ─── Welcome / Not Logged In ─────────────────────────────────────────────
+  // ─── Welcome ─────────────────────────────────────────────────────────────
 
   Widget _buildWelcome() {
     return Container(
       decoration: AppTheme.backgroundDecoration,
       child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  colors: [
-                    const Color(0xFF00A4DC).withValues(alpha: 0.2),
-                    Colors.transparent,
-                  ],
-                  radius: 0.8,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Glow orb behind icon
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 160, height: 160,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [_jfBlue.withValues(alpha: 0.2), Colors.transparent],
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: 88, height: 88,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [_jfBlue, _jfBlueDark],
+                      ),
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(color: _jfBlue.withValues(alpha: 0.3), blurRadius: 30, spreadRadius: 2),
+                      ],
+                    ),
+                    child: const Icon(Icons.play_arrow_rounded, size: 44, color: Colors.white),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+              const Text('Jellyfin',
+                  style: TextStyle(fontSize: 36, fontWeight: FontWeight.w800,
+                      color: Colors.white, letterSpacing: -1.5)),
+              const SizedBox(height: 8),
+              Text('Stream your media, anywhere',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 15)),
+              const SizedBox(height: 48),
+              SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: ElevatedButton(
+                  onPressed: _showAddAccountDialog,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _jfBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    elevation: 0,
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.add_rounded, size: 22),
+                      SizedBox(width: 10),
+                      Text('Connect Server', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
                 ),
-                shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.dns_rounded, size: 72, color: Color(0xFF00A4DC)),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Jellyfin',
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                letterSpacing: -1,
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: _showAccountManager,
+                child: Text('Manage Accounts',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 13)),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Connect to your media server',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 15),
-            ),
-            const SizedBox(height: 36),
-            ElevatedButton.icon(
-              onPressed: () => _showAddAccountDialog(),
-              icon: const Icon(Icons.add, size: 20),
-              label: const Text('Add Account', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00A4DC),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                elevation: 0,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Home ────────────────────────────────────────────────────────────────
+
+  Widget _buildHome() {
+    return Container(
+      decoration: AppTheme.backgroundDecoration,
+      child: RefreshIndicator(
+        color: _jfBlue,
+        backgroundColor: _jfSurface,
+        onRefresh: () async {
+          await _loadHomeData();
+          if (mounted) setState(() {});
+        },
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            // App bar
+            SliverAppBar(
+              floating: true,
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              toolbarHeight: 64,
+              title: Row(
+                children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [_jfBlue, _jfBlueDark]),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_jf.activeAccount?.username ?? 'Jellyfin',
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700,
+                                color: Colors.white, letterSpacing: -0.3)),
+                        Text(
+                          _jf.activeAccount?.normalizedUrl.replaceAll(RegExp(r'https?://'), '') ?? '',
+                          style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.3)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
+              actions: [
+                IconButton(
+                  icon: Icon(Icons.manage_accounts_rounded, color: Colors.white.withValues(alpha: 0.6)),
+                  onPressed: _showAccountManager,
+                  tooltip: 'Accounts',
+                ),
+                const SizedBox(width: 4),
+              ],
             ),
+
+            // Hero section
+            if (_featuredItems.isNotEmpty)
+              SliverToBoxAdapter(child: _buildHeroSection()),
+
+            // Libraries
+            if (_libraries.isNotEmpty)
+              SliverToBoxAdapter(child: _buildLibraryRow()),
+
+            // Continue Watching
+            if (_resumeItems.isNotEmpty)
+              SliverToBoxAdapter(child: _buildLandscapeSection(
+                  'Continue Watching', _resumeItems, showProgress: true)),
+
+            // Next Up
+            if (_nextUpItems.isNotEmpty)
+              SliverToBoxAdapter(child: _buildLandscapeSection(
+                  'Next Up', _nextUpItems, showEpisodeInfo: true)),
+
+            // Latest per library
+            ..._latestByLibrary.entries.map((entry) =>
+              SliverToBoxAdapter(child: _buildPosterSection('Latest in ${entry.key}', entry.value))),
+
+            // Error
+            if (_error != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Center(child: Text(_error!, style: const TextStyle(color: Colors.redAccent))),
+                ),
+              ),
+
+            const SliverToBoxAdapter(child: SizedBox(height: 100)),
           ],
         ),
       ),
     );
   }
 
-  // ─── Home View ───────────────────────────────────────────────────────────
+  // ─── Hero Carousel ───────────────────────────────────────────────────────
 
-  Widget _buildHome() {
-    return Container(
-      decoration: AppTheme.backgroundDecoration,
-      child: CustomScrollView(
-        slivers: [
-          // ── App Bar ──
-          SliverAppBar(
-            floating: true,
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            title: Row(
-              children: [
-                const Icon(Icons.dns_rounded, color: Color(0xFF00A4DC), size: 24),
-                const SizedBox(width: 10),
-                Text(
-                  _jf.activeAccount?.username ?? 'Jellyfin',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+  Widget _buildHeroSection() {
+    final isPhone = MediaQuery.of(context).size.width < 600;
+    final heroHeight = isPhone ? 280.0 : 360.0;
+
+    return Column(
+      children: [
+        SizedBox(
+          height: heroHeight,
+          child: PageView.builder(
+            controller: _heroController,
+            itemCount: _featuredItems.length,
+            onPageChanged: (i) => setState(() => _heroPage = i),
+            itemBuilder: (context, index) {
+              final item = _featuredItems[index];
+              final backdropUrl = item.backdropImageTags.isNotEmpty
+                  ? _jf.getBackdropUrl(item.id, tag: item.backdropImageTags.first)
+                  : (item.imageTags.containsKey('Primary')
+                      ? _jf.getPosterUrl(item.id, tag: item.imageTags['Primary'], maxWidth: 1200)
+                      : null);
+
+              return _HoverCard(
+                onTap: () => _openDetails(item),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: _jfSurface,
+                  ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Backdrop
+                      if (backdropUrl != null)
+                        CachedNetworkImage(
+                          imageUrl: backdropUrl,
+                          fit: BoxFit.cover,
+                          placeholder: (c, u) => Shimmer.fromColors(
+                            baseColor: _jfSurface, highlightColor: _jfSurfaceLight,
+                            child: Container(color: _jfSurface)),
+                          errorWidget: (c, u, e) => Container(color: _jfSurface),
+                        )
+                      else
+                        Container(color: _jfSurface),
+
+                      // Cinematic gradient overlay
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.1),
+                              Colors.black.withValues(alpha: 0.7),
+                              Colors.black.withValues(alpha: 0.9),
+                            ],
+                            stops: const [0.0, 0.3, 0.65, 1.0],
+                          ),
+                        ),
+                      ),
+
+                      // Content at bottom
+                      Positioned(
+                        bottom: 20, left: 20, right: 20,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Type badge
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _jfBlue.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: _jfBlue.withValues(alpha: 0.3)),
+                              ),
+                              child: Text(
+                                item.type == 'Series' ? 'SERIES' : 'MOVIE',
+                                style: const TextStyle(color: _jfBlue, fontSize: 10,
+                                    fontWeight: FontWeight.w700, letterSpacing: 1),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            // Title
+                            Text(item.name,
+                                maxLines: 2, overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
+                                    color: Colors.white, letterSpacing: -0.5, height: 1.15)),
+                            const SizedBox(height: 8),
+                            // Meta row
+                            Row(
+                              children: [
+                                if (item.productionYear != null)
+                                  _heroBadge('${item.productionYear}'),
+                                if (item.communityRating != null) ...[
+                                  const SizedBox(width: 8),
+                                  _heroBadge('★ ${item.communityRating!.toStringAsFixed(1)}'),
+                                ],
+                                if (item.runtime.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  _heroBadge(item.runtime),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  '• ${_jf.activeAccount?.normalizedUrl.replaceAll(RegExp(r'https?://'), '') ?? ''}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.white.withValues(alpha: 0.35),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.manage_accounts_rounded, color: Colors.white70),
-                onPressed: () => _showAccountManager(),
-                tooltip: 'Accounts',
-              ),
-              IconButton(
-                icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-                onPressed: () async {
-                  setState(() => _isLoading = true);
-                  await _loadHomeData();
-                  if (mounted) setState(() => _isLoading = false);
-                },
-                tooltip: 'Refresh',
-              ),
-              const SizedBox(width: 8),
-            ],
+              );
+            },
           ),
-
-          // ── Home content ──
-          ...[
-            // ── Libraries ──
-            if (_libraries.isNotEmpty)
-              SliverToBoxAdapter(child: _buildLibraryChips()),
-
-            // ── Continue Watching ──
-            if (_resumeItems.isNotEmpty)
-              _buildHorizontalSection('Continue Watching', _resumeItems, showProgress: true),
-
-            // ── Next Up ──
-            if (_nextUpItems.isNotEmpty)
-              _buildHorizontalSection('Next Up', _nextUpItems, showEpisodeInfo: true),
-
-            // ── Latest by Library ──
-            ..._latestByLibrary.entries.map((entry) =>
-              _buildHorizontalSection('Latest in ${entry.key}', entry.value)),
-
-            // ── Error ──
-            if (_error != null)
-              SliverToBoxAdapter(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+        ),
+        // Page dots
+        if (_featuredItems.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_featuredItems.length, (i) =>
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: i == _heroPage ? 24 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: i == _heroPage ? _jfBlue : Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(3),
                   ),
                 ),
               ),
-
-            const SliverToBoxAdapter(child: SizedBox(height: 80)),
-          ],
-        ],
-      ),
+            ),
+          ),
+        const SizedBox(height: 8),
+      ],
     );
   }
 
-  // ─── Library Chips ─────────────────────────────────────────────────────────
+  Widget _heroBadge(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text,
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.85),
+              fontSize: 11, fontWeight: FontWeight.w600)),
+    );
+  }
 
-  Widget _buildLibraryChips() {
+  // ─── Library Row ────────────────────────────────────────────────────────
+
+  Widget _buildLibraryRow() {
     final videoLibs = _libraries.where((l) =>
         l.collectionType == 'movies' || l.collectionType == 'tvshows' || l.collectionType == null).toList();
     if (videoLibs.isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 8,
-        children: videoLibs.map((lib) {
-          final icon = lib.collectionType == 'movies'
-              ? Icons.movie_outlined
-              : lib.collectionType == 'tvshows'
-                  ? Icons.tv_outlined
-                  : Icons.video_library_outlined;
-          return ActionChip(
-            avatar: Icon(icon, size: 18, color: const Color(0xFF00A4DC)),
-            label: Text(lib.name),
-            labelStyle: const TextStyle(color: Colors.white, fontSize: 13),
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-            onPressed: () => _openLibrary(lib),
-          );
-        }).toList(),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: SizedBox(
+        height: 48,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: videoLibs.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          itemBuilder: (_, i) {
+            final lib = videoLibs[i];
+            final icon = lib.collectionType == 'movies'
+                ? Icons.movie_rounded
+                : lib.collectionType == 'tvshows'
+                    ? Icons.live_tv_rounded
+                    : Icons.video_library_rounded;
+            return _HoverCard(
+              onTap: () => _openLibrary(lib),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 18, color: _jfBlue),
+                    const SizedBox(width: 10),
+                    Text(lib.name, style: const TextStyle(color: Colors.white,
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.chevron_right_rounded, size: 16, color: Colors.white.withValues(alpha: 0.3)),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─── Horizontal Section ──────────────────────────────────────────────────
+  // ─── Section Header ────────────────────────────────────────────────────
 
-  SliverToBoxAdapter _buildHorizontalSection(
-    String title,
-    List<JellyfinItem> items, {
-    bool showProgress = false,
-    bool showEpisodeInfo = false,
-  }) {
-    return SliverToBoxAdapter(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 14),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Text(title,
-                style: const TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-          ),
-          SizedBox(
-            height: showEpisodeInfo ? 230 : 210,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: _buildPosterCard(item,
-                      showProgress: showProgress, showEpisodeInfo: showEpisodeInfo),
-                );
-              },
+          Container(
+            width: 4, height: 18,
+            decoration: BoxDecoration(
+              color: _jfBlue,
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(width: 10),
+          Text(title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700,
+                  color: Colors.white, letterSpacing: -0.3)),
         ],
       ),
     );
   }
 
-  // ─── Poster Card ─────────────────────────────────────────────────────────
+  // ─── Landscape Section (Continue Watching / Next Up) ───────────────────
 
-  Widget _buildPosterCard(
-    JellyfinItem item, {
-    bool showProgress = false,
-    bool showEpisodeInfo = false,
-    bool inGrid = false,
-  }) {
-    final imageUrl = item.imageTags.containsKey('Primary')
-        ? _jf.getPosterUrl(item.id, tag: item.imageTags['Primary'])
-        : (item.seriesId != null
-            ? _jf.getPosterUrl(item.seriesId!, maxWidth: 300)
-            : null);
+  Widget _buildLandscapeSection(String title, List<JellyfinItem> items,
+      {bool showProgress = false, bool showEpisodeInfo = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionHeader(title),
+        SizedBox(
+          height: showEpisodeInfo ? 180 : 170,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: items.length,
+            itemBuilder: (_, i) => Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: _buildLandscapeCard(items[i],
+                  showProgress: showProgress, showEpisodeInfo: showEpisodeInfo),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-    final width = inGrid ? double.infinity : 140.0;
+  Widget _buildLandscapeCard(JellyfinItem item,
+      {bool showProgress = false, bool showEpisodeInfo = false}) {
+    // Use backdrop or primary image
+    final imageUrl = item.backdropImageTags.isNotEmpty
+        ? _jf.getBackdropUrl(item.id, tag: item.backdropImageTags.first, maxWidth: 600)
+        : (item.imageTags.containsKey('Primary')
+            ? _jf.getPosterUrl(item.id, tag: item.imageTags['Primary'], maxWidth: 500)
+            : (item.seriesId != null
+                ? _jf.getPosterUrl(item.seriesId!, maxWidth: 500)
+                : null));
 
-    return GestureDetector(
+    return _HoverCard(
       onTap: () {
         if (item.type == 'Episode' && item.seriesId != null) {
-          // Open the series details, not the episode itself
           _openDetails(JellyfinItem(id: item.seriesId!, name: item.seriesName ?? item.name, type: 'Series'));
         } else {
           _openDetails(item);
         }
       },
       child: SizedBox(
-        width: inGrid ? null : width,
+        width: 260,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Thumbnail (16:9)
             Expanded(
               child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  color: AppTheme.bgCard,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 8,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  color: _jfSurface,
+                  borderRadius: BorderRadius.circular(14),
                 ),
                 child: Stack(
                   fit: StackFit.expand,
@@ -904,151 +1089,255 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                         imageUrl: imageUrl,
                         fit: BoxFit.cover,
                         placeholder: (c, u) => Shimmer.fromColors(
-                          baseColor: AppTheme.bgCard,
-                          highlightColor: Colors.white10,
-                          child: Container(color: AppTheme.bgCard),
-                        ),
-                        errorWidget: (c, u, e) =>
-                            const Center(child: Icon(Icons.broken_image, color: Colors.white24)),
+                          baseColor: _jfSurface, highlightColor: _jfSurfaceLight,
+                          child: Container(color: _jfSurface)),
+                        errorWidget: (c, u, e) => _emptyThumb(item),
                       )
                     else
-                      Center(
-                        child: Icon(
-                          item.type == 'Series' ? Icons.tv : Icons.movie,
-                          size: 40,
-                          color: Colors.white24,
-                        ),
-                      ),
+                      _emptyThumb(item),
 
-                    // Gradient overlay
+                    // Bottom gradient
                     Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      height: 60,
+                      bottom: 0, left: 0, right: 0, height: 60,
                       child: Container(
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Colors.black87],
+                            colors: [Colors.transparent, Colors.black.withValues(alpha: 0.8)],
                           ),
                         ),
                       ),
                     ),
 
-                    // Rating badge
-                    if (item.communityRating != null)
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.star_rounded, size: 12, color: Color(0xFFFFD700)),
-                              const SizedBox(width: 2),
-                              Text(
-                                item.communityRating!.toStringAsFixed(1),
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                              ),
-                            ],
-                          ),
+                    // Play overlay
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
                         ),
+                        child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
                       ),
+                    ),
 
-                    // Played indicator
+                    // Played badge
                     if (item.isPlayed)
                       Positioned(
-                        top: 6,
-                        left: 6,
+                        top: 8, right: 8,
                         child: Container(
-                          padding: const EdgeInsets.all(3),
+                          padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF00A4DC),
+                            color: _jfBlue,
                             shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF00A4DC).withValues(alpha: 0.5),
-                                blurRadius: 8,
-                              ),
-                            ],
+                            boxShadow: [BoxShadow(color: _jfBlue.withValues(alpha: 0.4), blurRadius: 8)],
                           ),
-                          child: const Icon(Icons.check, size: 12, color: Colors.white),
+                          child: const Icon(Icons.check_rounded, size: 10, color: Colors.white),
                         ),
                       ),
 
-                    // Unplayed count
-                    if (item.unplayedCount > 0)
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00A4DC),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            '${item.unplayedCount}',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
-
-                    // Progress bar
+                    // Progress
                     if (showProgress && item.playbackProgress > 0)
                       Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: LinearProgressIndicator(
-                          value: item.playbackProgress,
-                          minHeight: 3,
-                          backgroundColor: Colors.white.withValues(alpha: 0.1),
-                          valueColor: const AlwaysStoppedAnimation(Color(0xFF00A4DC)),
+                        bottom: 0, left: 0, right: 0,
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.only(
+                            bottomLeft: Radius.circular(14),
+                            bottomRight: Radius.circular(14)),
+                          child: LinearProgressIndicator(
+                            value: item.playbackProgress,
+                            minHeight: 3,
+                            backgroundColor: Colors.white.withValues(alpha: 0.1),
+                            valueColor: const AlwaysStoppedAnimation(_jfBlue),
+                          ),
                         ),
                       ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
+            // Title
             Text(
               showEpisodeInfo && item.seriesName != null ? item.seriesName! : item.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+              maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
             ),
             if (showEpisodeInfo && item.type == 'Episode')
               Text(
-                'S${item.parentIndexNumber ?? '?'}E${item.indexNumber ?? '?'} • ${item.name}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4), fontSize: 10),
+                'S${item.parentIndexNumber ?? '?'}E${item.indexNumber ?? '?'} · ${item.name}',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
               )
             else if (item.productionYear != null)
-              Text(
-                '${item.productionYear}',
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4), fontSize: 10),
-              ),
+              Text('${item.productionYear}',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 11)),
           ],
         ),
       ),
     );
   }
 
-  // ─── Library Items View ──────────────────────────────────────────────────
+  Widget _emptyThumb(JellyfinItem item) {
+    return Center(
+      child: Icon(
+        item.type == 'Series' || item.type == 'Episode' ? Icons.live_tv_rounded : Icons.movie_rounded,
+        size: 32, color: Colors.white.withValues(alpha: 0.15)),
+    );
+  }
+
+  // ─── Poster Section (Latest in Library) ────────────────────────────────
+
+  Widget _buildPosterSection(String title, List<JellyfinItem> items) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionHeader(title),
+        SizedBox(
+          height: 230,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: items.length,
+            itemBuilder: (_, i) => Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: SizedBox(width: 130, child: _buildPosterCard(items[i])),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Poster Card ─────────────────────────────────────────────────────────
+
+  Widget _buildPosterCard(JellyfinItem item, {bool inGrid = false}) {
+    final imageUrl = item.imageTags.containsKey('Primary')
+        ? _jf.getPosterUrl(item.id, tag: item.imageTags['Primary'])
+        : (item.seriesId != null ? _jf.getPosterUrl(item.seriesId!, maxWidth: 300) : null);
+
+    return _HoverCard(
+      onTap: () {
+        if (item.type == 'Episode' && item.seriesId != null) {
+          _openDetails(JellyfinItem(id: item.seriesId!, name: item.seriesName ?? item.name, type: 'Series'));
+        } else {
+          _openDetails(item);
+        }
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Container(
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: _jfSurface,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4)),
+                ],
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (imageUrl != null)
+                    CachedNetworkImage(
+                      imageUrl: imageUrl,
+                      fit: BoxFit.cover,
+                      placeholder: (c, u) => Shimmer.fromColors(
+                        baseColor: _jfSurface, highlightColor: _jfSurfaceLight,
+                        child: Container(color: _jfSurface)),
+                      errorWidget: (c, u, e) => _emptyThumb(item),
+                    )
+                  else
+                    _emptyThumb(item),
+
+                  // Subtle bottom gradient for text readability
+                  Positioned(
+                    bottom: 0, left: 0, right: 0, height: 50,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter
+                          , end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.6)],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Rating badge
+                  if (item.communityRating != null)
+                    Positioned(
+                      top: 8, right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.star_rounded, size: 11, color: Color(0xFFFFD700)),
+                            const SizedBox(width: 3),
+                            Text(item.communityRating!.toStringAsFixed(1),
+                                style: const TextStyle(color: Colors.white, fontSize: 10,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // Played indicator
+                  if (item.isPlayed)
+                    Positioned(
+                      top: 8, left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: _jfBlue,
+                          shape: BoxShape.circle,
+                          boxShadow: [BoxShadow(color: _jfBlue.withValues(alpha: 0.4), blurRadius: 6)],
+                        ),
+                        child: const Icon(Icons.check_rounded, size: 10, color: Colors.white),
+                      ),
+                    ),
+
+                  // Unplayed count badge
+                  if (!item.isPlayed && item.unplayedCount > 0)
+                    Positioned(
+                      top: 8, right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _jfBlue,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text('${item.unplayedCount}',
+                            style: const TextStyle(color: Colors.white, fontSize: 10,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+          if (item.productionYear != null)
+            Text('${item.productionYear}',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  // ─── Library View ────────────────────────────────────────────────────────
 
   Widget _buildLibraryView() {
     final currentPage = _libraryPage + 1;
@@ -1082,27 +1371,34 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                     },
                   ),
                   Expanded(
-                    child: Text(
-                      _selectedLibraryName ?? 'Library',
-                      style: const TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_selectedLibraryName ?? 'Library',
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700,
+                                color: Colors.white, letterSpacing: -0.3)),
+                        if (_allLibraryItems.isNotEmpty)
+                          Text(
+                            _librarySearchTerm.isNotEmpty
+                                ? '${_libraryItems.length} of ${_allLibraryItems.length} items'
+                                : '${_allLibraryItems.length} items',
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 11),
+                          ),
+                      ],
                     ),
                   ),
-                  // Sort dropdown
                   PopupMenuButton<String>(
-                    icon: const Icon(Icons.sort_rounded, color: Colors.white70),
-                    color: const Color(0xFF1A1A2E),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    icon: Icon(Icons.sort_rounded, color: Colors.white.withValues(alpha: 0.6)),
+                    color: _jfSurfaceLight,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     onSelected: (val) {
                       final parts = val.split('|');
                       _librarySortBy = parts[0];
                       _librarySortOrder = parts[1];
-                      // Sort changed — invalidate cache for this library and re-fetch
                       if (_selectedLibraryId != null) {
                         final lib = _libraries.firstWhere((l) => l.id == _selectedLibraryId);
-                        final oldKeys = _libraryCache.keys
-                            .where((k) => k.startsWith('${lib.id}|'))
-                            .toList();
+                        final oldKeys = _libraryCache.keys.where((k) => k.startsWith('${lib.id}|')).toList();
                         for (final k in oldKeys) {
                           _libraryCache.remove(k);
                           _libraryCacheComplete.remove(k);
@@ -1111,49 +1407,38 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                       }
                     },
                     itemBuilder: (_) => [
-                      _sortMenuItem('Name (A-Z)', 'SortName|Ascending'),
-                      _sortMenuItem('Name (Z-A)', 'SortName|Descending'),
-                      _sortMenuItem('Date Added (New)', 'DateCreated|Descending'),
-                      _sortMenuItem('Date Added (Old)', 'DateCreated|Ascending'),
-                      _sortMenuItem('Release Date (New)', 'PremiereDate|Descending'),
-                      _sortMenuItem('Release Date (Old)', 'PremiereDate|Ascending'),
-                      _sortMenuItem('Rating (High)', 'CommunityRating|Descending'),
-                      _sortMenuItem('Rating (Low)', 'CommunityRating|Ascending'),
-                      _sortMenuItem('Runtime (Long)', 'Runtime|Descending'),
-                      _sortMenuItem('Runtime (Short)', 'Runtime|Ascending'),
+                      _sortItem('Name (A-Z)', 'SortName|Ascending'),
+                      _sortItem('Name (Z-A)', 'SortName|Descending'),
+                      _sortItem('Date Added ↓', 'DateCreated|Descending'),
+                      _sortItem('Date Added ↑', 'DateCreated|Ascending'),
+                      _sortItem('Release Date ↓', 'PremiereDate|Descending'),
+                      _sortItem('Release Date ↑', 'PremiereDate|Ascending'),
+                      _sortItem('Rating ↓', 'CommunityRating|Descending'),
+                      _sortItem('Rating ↑', 'CommunityRating|Ascending'),
+                      _sortItem('Runtime ↓', 'Runtime|Descending'),
+                      _sortItem('Runtime ↑', 'Runtime|Ascending'),
                     ],
                   ),
-                  if (_allLibraryItems.isNotEmpty)
-                    Text(
-                      _librarySearchTerm.isNotEmpty
-                          ? '${_libraryItems.length} of ${_allLibraryItems.length}'
-                          : '${_allLibraryItems.length} total',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
-                    ),
-                  const SizedBox(width: 8),
                 ],
               ),
             ),
           ),
 
-          // ── Background-loading progress bar ──
+          // Loading bar
           if (_isBackgroundLoading)
-            LinearProgressIndicator(
-              minHeight: 2,
-              backgroundColor: Colors.transparent,
-              valueColor: AlwaysStoppedAnimation<Color>(
-                const Color(0xFF00A4DC).withValues(alpha: 0.6)),
-            ),
+            LinearProgressIndicator(minHeight: 2,
+                backgroundColor: Colors.transparent,
+                valueColor: AlwaysStoppedAnimation(_jfBlue.withValues(alpha: 0.5))),
 
-          // ── Search Bar ──
+          // Search
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
             child: TextField(
               controller: _librarySearchController,
               focusNode: _librarySearchFocus,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               onChanged: (q) {
-                setState(() {}); // rebuild suffix icon visibility
+                setState(() {});
                 _librarySearchDebounce?.cancel();
                 _librarySearchDebounce = Timer(
                   const Duration(milliseconds: 400),
@@ -1162,13 +1447,13 @@ class _JellyfinScreenState extends State<JellyfinScreen>
               },
               decoration: InputDecoration(
                 hintText: _isBackgroundLoading
-                    ? 'Loading all items for search... (${_allLibraryItems.length} so far)'
+                    ? 'Loading items... (${_allLibraryItems.length} so far)'
                     : 'Search ${_selectedLibraryName ?? 'library'}...',
-                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
-                prefixIcon: const Icon(Icons.search, color: Color(0xFF00A4DC), size: 20),
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                prefixIcon: const Icon(Icons.search_rounded, color: _jfBlue, size: 20),
                 suffixIcon: _librarySearchController.text.isNotEmpty
                     ? IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white54, size: 18),
+                        icon: const Icon(Icons.close_rounded, color: Colors.white38, size: 18),
                         onPressed: () {
                           _librarySearchController.clear();
                           _librarySearchFocus.unfocus();
@@ -1177,9 +1462,9 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                       )
                     : null,
                 filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.06),
+                fillColor: Colors.white.withValues(alpha: 0.05),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide.none,
                 ),
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -1190,27 +1475,32 @@ class _JellyfinScreenState extends State<JellyfinScreen>
           // Grid
           Expanded(
             child: _isLoadingLibrary
-                ? const Center(child: CircularProgressIndicator(color: Color(0xFF00A4DC)))
+                ? const Center(child: CircularProgressIndicator(color: _jfBlue))
                 : _libraryItems.isEmpty
                     ? Center(
-                        child: Text(
-                          _librarySearchTerm.isNotEmpty
-                              ? 'No results for "$_librarySearchTerm"'
-                              : 'No items found',
-                          style: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.search_off_rounded, size: 48,
+                                color: Colors.white.withValues(alpha: 0.1)),
+                            const SizedBox(height: 12),
+                            Text(
+                              _librarySearchTerm.isNotEmpty
+                                  ? 'No results for "$_librarySearchTerm"'
+                                  : 'No items found',
+                              style: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+                            ),
+                          ],
                         ),
                       )
                     : LayoutBuilder(
                         builder: (context, constraints) {
-                          final crossAxisCount = constraints.maxWidth > 1200
-                              ? 8
-                              : constraints.maxWidth > 900
-                                  ? 6
-                                  : constraints.maxWidth > 600
-                                      ? 4
-                                      : 3;
+                          final crossAxisCount = constraints.maxWidth > 1200 ? 8
+                              : constraints.maxWidth > 900 ? 6
+                              : constraints.maxWidth > 600 ? 4 : 3;
+
                           return GridView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: crossAxisCount,
                               childAspectRatio: 0.55,
@@ -1218,59 +1508,61 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                               crossAxisSpacing: 12,
                             ),
                             itemCount: _libraryItems.length,
-                            itemBuilder: (context, index) =>
-                                _buildPosterCard(_libraryItems[index], inGrid: true),
+                            itemBuilder: (_, i) => _buildPosterCard(_libraryItems[i], inGrid: true),
                           );
                         },
                       ),
           ),
 
-          // ── Pagination (hidden when a filter is active since all matches are shown) ──
+          // Pagination
           if (!_isLoadingLibrary && _librarySearchTerm.isEmpty && _allLibraryItems.length > _pageSize)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.3),
-                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
+                color: _jfSurface.withValues(alpha: 0.8),
+                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.04))),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Previous
-                  IconButton(
-                    onPressed: _libraryPage > 0 ? () => _loadLibraryPage(_libraryPage - 1) : null,
-                    icon: const Icon(Icons.chevron_left_rounded),
-                    color: _libraryPage > 0 ? const Color(0xFF00A4DC) : Colors.white24,
-                    tooltip: 'Previous page',
-                  ),
-                  const SizedBox(width: 8),
-                  // Page indicator — tappable to jump
+                  _paginationButton(Icons.chevron_left_rounded,
+                      enabled: _libraryPage > 0,
+                      onTap: () => _loadLibraryPage(_libraryPage - 1)),
+                  const SizedBox(width: 12),
                   GestureDetector(
                     onTap: () => _showPageJumpDialog(_totalPages),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.07),
+                        color: Colors.white.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text(
-                        'Page $currentPage of $_totalPages',
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
-                      ),
+                      child: Text('$currentPage / $_totalPages',
+                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  // Next
-                  IconButton(
-                    onPressed: currentPage < _totalPages ? () => _loadLibraryPage(_libraryPage + 1) : null,
-                    icon: const Icon(Icons.chevron_right_rounded),
-                    color: currentPage < _totalPages ? const Color(0xFF00A4DC) : Colors.white24,
-                    tooltip: 'Next page',
-                  ),
+                  const SizedBox(width: 12),
+                  _paginationButton(Icons.chevron_right_rounded,
+                      enabled: currentPage < _totalPages,
+                      onTap: () => _loadLibraryPage(_libraryPage + 1)),
                 ],
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _paginationButton(IconData icon, {required bool enabled, required VoidCallback onTap}) {
+    return _HoverCard(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: enabled ? _jfBlue.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: enabled ? _jfBlue : Colors.white24, size: 22),
       ),
     );
   }
@@ -1280,8 +1572,9 @@ class _JellyfinScreenState extends State<JellyfinScreen>
     final result = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text('Go to page', style: TextStyle(color: Colors.white)),
+        backgroundColor: _jfSurfaceLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Go to page', style: TextStyle(color: Colors.white, fontSize: 18)),
         content: TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
@@ -1289,36 +1582,37 @@ class _JellyfinScreenState extends State<JellyfinScreen>
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             hintText: '1 – $totalPages',
-            hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+            hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
             filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.06),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            fillColor: Colors.white.withValues(alpha: 0.05),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
           ),
           onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v)),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: Colors.white.withValues(alpha: 0.5)))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text)),
-            child: const Text('Go', style: TextStyle(color: Color(0xFF00A4DC))),
+            child: const Text('Go', style: TextStyle(color: _jfBlue, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
     if (result != null) {
-      final page = (result - 1).clamp(0, totalPages - 1);
-      _loadLibraryPage(page);
+      _loadLibraryPage((result - 1).clamp(0, totalPages - 1));
     }
   }
 
-  PopupMenuItem<String> _sortMenuItem(String label, String value) {
+  PopupMenuItem<String> _sortItem(String label, String value) {
     final isActive = value == '$_librarySortBy|$_librarySortOrder';
     return PopupMenuItem(
       value: value,
       child: Text(label,
           style: TextStyle(
-            color: isActive ? const Color(0xFF00A4DC) : Colors.white,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+            color: isActive ? _jfBlue : Colors.white,
+            fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
+            fontSize: 13,
           )),
     );
   }

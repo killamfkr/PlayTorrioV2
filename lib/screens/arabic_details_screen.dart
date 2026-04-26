@@ -31,6 +31,8 @@ class _ArabicDetailsScreenState extends State<ArabicDetailsScreen> {
     final ArabicShowDetail detail;
     if (widget.show.source == 'dimatoon') {
       detail = await _service.getDimaToonDetails(widget.show.url);
+    } else if (widget.show.source == 'brstej') {
+      detail = await _service.getBrstejDetails(widget.show.id);
     } else {
       detail = await _service.getShowDetails(widget.show.id);
     }

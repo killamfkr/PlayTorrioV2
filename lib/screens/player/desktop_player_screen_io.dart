@@ -594,6 +594,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       tmdbId: widget.movie!.id,
       season: widget.selectedSeason,
       episode: widget.selectedEpisode,
+      imdbId: widget.movie!.imdbId,
     );
     if (mounted && data != null && data.hasAnySegments) {
       setState(() => _introDbData = data);

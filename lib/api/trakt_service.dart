@@ -655,8 +655,10 @@ class TraktService {
           continue;
         }
 
-        // Fetch poster from TMDB
-        posterPath = await _fetchTmdbPoster(tmdbId, mediaType);
+        // Fetch poster + runtime from TMDB
+        final tmdbInfo = await _fetchTmdbInfo(tmdbId, mediaType);
+        posterPath = tmdbInfo['poster'] as String;
+        final durationMs = tmdbInfo['runtimeMs'] as int;
 
         // Check if already in local history
         final existing = await WatchHistoryService().getProgress(
@@ -666,11 +668,8 @@ class TraktService {
         );
         if (existing != null) continue;
 
-        // Estimate position/duration from progress percentage.
-        // We don't have real duration from Trakt playback, use 100min default.
-        // The actual position matters less — what matters is having the entry.
-        const estimatedDurationMs = 6000000; // 100 minutes
-        final estimatedPositionMs = (progress / 100 * estimatedDurationMs).round();
+        // Derive position from Trakt progress % + real TMDB runtime.
+        final estimatedPositionMs = (progress / 100 * durationMs).round();
 
         await WatchHistoryService().saveProgress(
           tmdbId: tmdbId,
@@ -680,7 +679,7 @@ class TraktService {
           method: 'trakt_import',
           sourceId: 'trakt',
           position: estimatedPositionMs,
-          duration: estimatedDurationMs,
+          duration: durationMs,
           season: season,
           episode: episode,
           episodeTitle: episodeTitle,
@@ -1258,7 +1257,9 @@ class TraktService {
       debugPrint('[Trakt] Starting smart sync...');
       final activities = await _getLastActivities();
       final lastWatchlist = activities?['watchlist']?['updated_at']?.toString() ?? '';
-      final lastScrobble = activities?['episodes']?['paused_at']?.toString() ?? '';
+      final lastEpisodeScrobble = activities?['episodes']?['paused_at']?.toString() ?? '';
+      final lastMovieScrobble = activities?['movies']?['paused_at']?.toString() ?? '';
+      final lastScrobble = '${lastEpisodeScrobble}_$lastMovieScrobble';
       final lastWatched = activities?['episodes']?['watched_at']?.toString() ?? '';
 
       final savedWatchlist = await _storage.read(key: 'trakt_last_watchlist');
@@ -1595,6 +1596,12 @@ class TraktService {
   /// Fetch the TMDB poster_path for a given TMDB ID.
   /// Returns the relative path (e.g. "/abc123.jpg") or empty string.
   Future<String> _fetchTmdbPoster(int tmdbId, String mediaType) async {
+    final info = await _fetchTmdbInfo(tmdbId, mediaType);
+    return info['poster'] as String;
+  }
+
+  /// Fetch poster + runtime (in ms) from TMDB in a single call.
+  Future<Map<String, dynamic>> _fetchTmdbInfo(int tmdbId, String mediaType) async {
     try {
       final type = (mediaType == 'tv' || mediaType == 'series') ? 'tv' : 'movie';
       final resp = await http.get(
@@ -1602,11 +1609,22 @@ class TraktService {
       );
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body) as Map<String, dynamic>;
-        return data['poster_path']?.toString() ?? '';
+        final poster = data['poster_path']?.toString() ?? '';
+        // runtime in minutes → milliseconds
+        int runtimeMs = 6000000; // fallback 100 min
+        if (type == 'movie' && data['runtime'] is int && (data['runtime'] as int) > 0) {
+          runtimeMs = (data['runtime'] as int) * 60000;
+        } else if (type == 'tv') {
+          final epRuntimes = data['episode_run_time'] as List?;
+          if (epRuntimes != null && epRuntimes.isNotEmpty) {
+            runtimeMs = ((epRuntimes.first as int?) ?? 100) * 60000;
+          }
+        }
+        return {'poster': poster, 'runtimeMs': runtimeMs};
       }
     } catch (e) {
-      debugPrint('[Trakt] TMDB poster fetch failed for $tmdbId: $e');
+      debugPrint('[Trakt] TMDB info fetch failed for $tmdbId: $e');
     }
-    return '';
+    return {'poster': '', 'runtimeMs': 6000000};
   }
 }

@@ -69,9 +69,13 @@ class SettingsService {
   // Prowlarr settings
   static const String _prowlarrBaseUrlKey = 'prowlarr_base_url';
   static const String _prowlarrApiKeyKey = 'prowlarr_api_key';
+  static const String _prowlarrTagIdsKey = 'prowlarr_tag_ids';
 
   // Light mode (performance)
   static const String _lightModeKey = 'light_mode';
+
+  // Theme preset
+  static const String _themePresetKey = 'theme_preset';
 
   /// Notifier that fires when light mode changes so all widgets can react.
   static final ValueNotifier<bool> lightModeNotifier = ValueNotifier<bool>(false);
@@ -145,6 +149,70 @@ class SettingsService {
       map[k] = epgChannelId.trim();
     }
     await setXmltvChannelMap(map);
+  }
+
+  // Subtitle preferences
+  static const String _subSizeKey = 'sub_size';
+  static const String _subColorKey = 'sub_color';
+  static const String _subBgOpacityKey = 'sub_bg_opacity';
+  static const String _subBoldKey = 'sub_bold';
+  static const String _subBottomPaddingKey = 'sub_bottom_padding';
+  static const String _subFontKey = 'sub_font';
+
+  // ── Subtitle getters/setters ──────────────────────────────────────────────
+
+  Future<double> getSubSize({bool isDesktop = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subSizeKey) ?? (isDesktop ? 44.0 : 24.0);
+  }
+  Future<void> setSubSize(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subSizeKey, v);
+  }
+
+  Future<int> getSubColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_subColorKey) ?? 0xFFFFFFFF; // white
+  }
+  Future<void> setSubColor(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_subColorKey, v);
+  }
+
+  Future<double> getSubBgOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBgOpacityKey) ?? 0.67;
+  }
+  Future<void> setSubBgOpacity(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBgOpacityKey, v);
+  }
+
+  Future<bool> getSubBold() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_subBoldKey) ?? false;
+  }
+  Future<void> setSubBold(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_subBoldKey, v);
+  }
+
+  Future<double> getSubBottomPadding() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_subBottomPaddingKey) ?? 24.0;
+  }
+  Future<void> setSubBottomPadding(double v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_subBottomPaddingKey, v);
+  }
+
+  Future<String> getSubFont() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_subFontKey) ?? 'Default';
+  }
+  Future<void> setSubFont(String v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_subFontKey, v);
   }
 
   Future<List<Map<String, dynamic>>> getStremioAddons() async {
@@ -480,6 +548,21 @@ class SettingsService {
            apiKey != null && apiKey.isNotEmpty;
   }
 
+  Future<List<int>> getProwlarrTagIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(_prowlarrTagIdsKey) ?? [];
+    return stored
+        .map((s) => int.tryParse(s) ?? -1)
+        .where((id) => id >= 0)
+        .toList();
+  }
+
+  Future<void> setProwlarrTagIds(List<int> tagIds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+        _prowlarrTagIdsKey, tagIds.map((id) => id.toString()).toList());
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Torrent Cache Settings
   // ═══════════════════════════════════════════════════════════════════════════
@@ -524,6 +607,20 @@ class SettingsService {
   /// Call once at app startup to hydrate the notifier from disk.
   Future<void> initLightMode() async {
     lightModeNotifier.value = await isLightModeEnabled();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Theme Preset
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<String> getThemePreset() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_themePresetKey) ?? 'cinematic';
+  }
+
+  Future<void> setThemePreset(String preset) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themePresetKey, preset);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -629,6 +726,7 @@ class SettingsService {
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
+      _themePresetKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -655,6 +753,7 @@ class SettingsService {
     for (final key in [
       _stremioAddonsKey,
       _navbarConfigKey,
+      _prowlarrTagIdsKey,
       MusicStorageService.prefsLikedSongsKey,
       MusicStorageService.prefsPlaylistsKey,
     ]) {
@@ -719,6 +818,7 @@ class SettingsService {
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
+      _themePresetKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);
@@ -748,6 +848,7 @@ class SettingsService {
     for (final key in [
       _stremioAddonsKey,
       _navbarConfigKey,
+      _prowlarrTagIdsKey,
       MusicStorageService.prefsLikedSongsKey,
       MusicStorageService.prefsPlaylistsKey,
     ]) {

@@ -5,6 +5,7 @@ import 'package:html/parser.dart' as hp;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'local_server_service.dart';
 import 'comic_page_extractor.dart';
+import 'readcomicsonline_scraper.dart';
 
 class Comic {
   final String title;
@@ -13,6 +14,9 @@ class Comic {
   final String status;
   final String publication;
   final String summary;
+  /// Source tag identifying which scraper produced this comic.
+  /// '' or 'rco' = readcomiconline.li (default), 'rcoru' = readcomicsonline.ru.
+  final String source;
 
   Comic({
     required this.title,
@@ -21,6 +25,7 @@ class Comic {
     required this.status,
     required this.publication,
     required this.summary,
+    this.source = '',
   });
 
   factory Comic.fromJson(Map<String, dynamic> json) {
@@ -31,6 +36,7 @@ class Comic {
       status: json['status'] ?? '',
       publication: json['publication'] ?? '',
       summary: json['summary'] ?? '',
+      source: json['source'] ?? '',
     );
   }
 
@@ -42,6 +48,7 @@ class Comic {
       'status': status,
       'publication': publication,
       'summary': summary,
+      'source': source,
     };
   }
 }
@@ -97,6 +104,26 @@ class ComicsService {
   }
 
   Future<List<Comic>> searchComics(String query) async {
+    // Run both sources in parallel and merge, deduping by normalized title.
+    final results = await Future.wait<List<Comic>>([
+      _searchRco(query),
+      ReadComicsOnlineScraper.searchComics(query),
+    ]);
+
+    final seen = <String>{};
+    final merged = <Comic>[];
+    for (final list in results) {
+      for (final c in list) {
+        final key = c.title.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (key.isEmpty || seen.contains(key)) continue;
+        seen.add(key);
+        merged.add(c);
+      }
+    }
+    return merged;
+  }
+
+  Future<List<Comic>> _searchRco(String query) async {
     try {
       final url = '$_baseUrl/Search/Comic';
       final response = await http.post(
@@ -118,6 +145,11 @@ class ComicsService {
   }
 
   Future<ComicDetails?> getComicDetails(Comic comic) async {
+    // Dispatch by source / host.
+    if (comic.source == ReadComicsOnlineScraper.sourceTag ||
+        ReadComicsOnlineScraper.ownsUrl(comic.url)) {
+      return ReadComicsOnlineScraper.getComicDetails(comic);
+    }
     try {
       var url = comic.url.startsWith('http') ? comic.url : '$_baseUrl${comic.url}';
       // Ensure we don't have duplicate s2
@@ -198,6 +230,10 @@ class ComicsService {
   }
 
   Future<List<String>> getChapterPages(String chapterUrl, ComicPageExtractor extractor) async {
+    // Dispatch by host.
+    if (ReadComicsOnlineScraper.ownsUrl(chapterUrl)) {
+      return ReadComicsOnlineScraper.getChapterPages(chapterUrl);
+    }
     try {
       // MANDATORY: Add &s=s2 to the URL
       var url = chapterUrl.startsWith('http') ? chapterUrl : '$_baseUrl$chapterUrl';
@@ -206,22 +242,76 @@ class ComicsService {
       }
 
       debugPrint('[ComicsService] Loading chapter: $url');
-      
-      final pageCount = await extractor.getPageCount(url);
-      
-      if (pageCount == null || pageCount == 0) {
-        debugPrint('[ComicsService] Could not determine page count');
-        throw Exception('Page count is ${pageCount ?? 'null'} — WebView could not parse the chapter page. The site may require JavaScript execution that failed on this platform.');
+
+      // Pure HTTP scrape — the headless WebView was crashing the app on Windows
+      // when running the page's heavily-obfuscated JS. We replicate the site's
+      // decoder (beau/baeu from rguard.min.js) directly in Dart.
+      final response = await http.get(Uri.parse(url), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      });
+
+      if (response.statusCode != 200) {
+        throw Exception('Chapter page returned HTTP ${response.statusCode}');
       }
-      
-      debugPrint('[ComicsService] Comic has $pageCount pages');
-      
-      // Return URLs for each page (they'll be loaded on-demand via getPageImage)
-      final pageUrls = List.generate(
-        pageCount,
-        (index) => '$url#${index + 1}',
+
+      final html = response.body;
+
+      // Locate decoder call site in SetImage: src="' + <fname>(3, <arr>[cImgIndex])
+      // Both function and array names are randomized per request.
+      final callMatch = RegExp(
+        r"""src\s*=\s*"'\s*\+\s*(f\w+)\s*\(\s*3\s*,\s*(\w+)\[""",
+      ).firstMatch(html);
+      if (callMatch == null) {
+        throw Exception('Could not locate decoder call site in chapter HTML.');
+      }
+      final funcName = callMatch.group(1)!;
+      final arrName = callMatch.group(2)!;
+
+      // Extract outer replace rules from the decoder function body:
+      //   function <fname>(z, l) { l = l.replace(/X/g, 'Y'); ... return baeu(l, '<base>'); }
+      final funcBodyMatch = RegExp(
+        'function\\s+${RegExp.escape(funcName)}\\s*\\(\\s*z\\s*,\\s*l\\s*\\)\\s*\\{([\\s\\S]*?)\\}',
+      ).firstMatch(html);
+      final outerRules = <List<String>>[];
+      String baseUrl = 'https://ano1.rconet.biz/pic';
+      if (funcBodyMatch != null) {
+        final body = funcBodyMatch.group(1)!;
+        final ruleRe = RegExp(r"l\s*=\s*l\.replace\(/([^/]+)/g,\s*'([^']*)'\)");
+        for (final m in ruleRe.allMatches(body)) {
+          outerRules.add([m.group(1)!, m.group(2)!]);
+        }
+        final baseMatch = RegExp(r"baeu\s*\(\s*l\s*,\s*'([^']+)'\s*\)").firstMatch(body);
+        if (baseMatch != null) baseUrl = baseMatch.group(1)!;
+      }
+
+      // Extract encoded values. The page emits `<arr>xnz = '<value>';` before
+      // each `<arr>.push(<arr>xnz);`. We read the literal assignments in order.
+      final encVarName = '${arrName}xnz';
+      final valueRe = RegExp(
+        RegExp.escape(encVarName) + r"\s*=\s*'([^']+)'",
       );
-      
+      final encodedValues = valueRe.allMatches(html).map((m) => m.group(1)!).toList();
+
+      if (encodedValues.isEmpty) {
+        debugPrint('[ComicsService] No encoded page values found for $encVarName');
+        throw Exception('No comic pages found on this chapter page.');
+      }
+
+      debugPrint('[ComicsService] Comic has ${encodedValues.length} pages (decoder=$funcName, arr=$arrName)');
+
+      // Decode each value via the replicated beau/baeu pipeline.
+      final proxy = LocalServerService();
+      final pageUrls = <String>[];
+      for (final enc in encodedValues) {
+        final decoded = _decodeEncodedValue(enc, outerRules, baseUrl);
+        if (decoded.isEmpty) continue;
+        pageUrls.add(proxy.getComicProxyUrl(decoded));
+      }
+
+      if (pageUrls.isEmpty) {
+        throw Exception('Failed to decode any comic page URLs.');
+      }
+
       return pageUrls;
     } catch (e) {
       debugPrint('Error getting chapter pages: $e');
@@ -229,94 +319,90 @@ class ComicsService {
     }
   }
 
-  // Get a single page image URL (called on-demand when user navigates)
-  Future<String?> getPageImage(String pageUrl, ComicPageExtractor extractor) async {
+  // Replicates rguard.min.js's `baeu(l, m)` for the non-https branch,
+  // combined with the outer wrapper function's replace rules.
+  //
+  // Outer wrapper applies rules like:
+  //   l = l.replace(/Vz__x2OdwP_/g, 'g');
+  //   l = l.replace(/b/g, 'pw_.g28x');
+  //   l = l.replace(/h/g, 'd2pr.x_27');
+  // then calls baeu(l, '<base>'). Inside baeu the first thing is a reverse:
+  //   l = l.replace(/pw_.g28x/g, 'b').replace(/d2pr.x_27/g, 'h');
+  // so the `b`/`h` rules cancel out. Only non-reversible rules have net effect.
+  String _decodeEncodedValue(String enc, List<List<String>> outerRules, String baseUrl) {
     try {
-      debugPrint('[ComicsService] Fetching single page: $pageUrl');
-      
-      // Use provided extractor instance
-      final imageUrl = await extractor.extractSinglePage(pageUrl);
-      
-      if (imageUrl == null || imageUrl.isEmpty) {
-        debugPrint('[ComicsService] No image found for page');
-        return null;
+      String l = enc;
+      // Apply outer rules in order
+      for (final rule in outerRules) {
+        l = l.replaceAll(RegExp(rule[0]), rule[1]);
       }
-      
-      debugPrint('[ComicsService] Page image: $imageUrl');
-      
-      // Proxy the URL
-      return LocalServerService().getComicProxyUrl(imageUrl);
-    } catch (e) {
-      debugPrint('Error getting page image: $e');
-      return null;
-    }
-  }
+      // baeu reverse replacements (cancels the b/h obfuscation)
+      l = l.replaceAll(RegExp(r'pw_\.g28x'), 'b').replaceAll(RegExp(r'd2pr\.x_27'), 'h');
 
-  String _step1(String l) {
-    if (l.length < 50) return l;
-    return l.substring(15, 33) + l.substring(50);
-  }
-
-  String _step2(String l) {
-    if (l.length < 11) return l;
-    return l.substring(0, l.length - 11) + l[l.length - 2] + l[l.length - 1];
-  }
-
-  String decodeComicUrl(String encodedStr, {String baseUrl = 'https://ano1.rconet.biz/pic'}) {
-    try {
-      String l = encodedStr;
-      
-      // 1. If it's a full URL, extract just the encoded part after the domain
-      if (l.startsWith('http')) {
-        final uri = Uri.tryParse(l);
-        if (uri != null) {
-          // Extract path without leading slash
-          l = uri.path;
-          if (l.startsWith('/')) l = l.substring(1);
-          // Add back query params if they exist
-          if (uri.query.isNotEmpty) {
-            l = '$l?${uri.query}';
+      // Value does not start with https, so we execute baeu's decoding branch.
+      final qi = l.indexOf('?');
+      final trailer = qi >= 0 ? l.substring(qi) : '';
+      String e;
+      String suffix;
+      final s0Idx = l.indexOf('=s0?');
+      if (s0Idx > 0) {
+        e = l.substring(0, s0Idx);
+        suffix = '=s0';
+      } else {
+        final s16Idx = l.indexOf('=s1600?');
+        if (s16Idx > 0) {
+          e = l.substring(0, s16Idx);
+          suffix = '=s1600';
+        } else {
+          // Fallback: strip trailing =s1600 / =s0 without query
+          if (l.endsWith('=s0')) {
+            e = l.substring(0, l.length - 3);
+            suffix = '=s0';
+          } else if (l.endsWith('=s1600')) {
+            e = l.substring(0, l.length - 6);
+            suffix = '=s1600';
+          } else {
+            e = l;
+            suffix = '=s1600';
           }
         }
       }
-      
-      // 2. Initial Cleanup - the obfuscated 'e'
-      l = l.replaceAll('c5__OydMWk_', 'e');
-      
-      // 3. Identify and separate query params
-      String query = '';
-      int queryIndex = l.indexOf('?');
-      if (queryIndex != -1) {
-        query = l.substring(queryIndex);
-        l = l.substring(0, queryIndex);
-      }
-      
-      // 4. Remove quality suffix before processing
-      l = l.replaceAll('=s1600', '').replaceAll('=s0', '');
 
-      // 5. Run Steps
-      l = _step1(l);
-      l = _step2(l);
-      
-      // 6. Base64 Decode
-      List<int> bytes = base64.decode(l);
-      
-      // 7. Decode binary to string using latin1 (ISO-8859-1)
-      String decoded = latin1.decode(bytes);
-      
-      // 8. Final character removal (Remove 4 chars at index 13)
-      if (decoded.length > 17) {
-        decoded = decoded.substring(0, 13) + decoded.substring(17);
-      }
-      
-      // 9. Reconstruct URL - prepend baseUrl and append quality/query
-      String finalBase = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
-      return '$finalBase/$decoded=s1600$query';
-    } catch (e) {
-      debugPrint('[ComicsService] Decode error for string: ${encodedStr.length > 20 ? encodedStr.substring(0, 20) : encodedStr}... -> $e');
+      // step1(l) = l.substring(15, 15+18) + l.substring(15+18+17) = [15,33) + [50,)
+      if (e.length < 50) return '';
+      e = e.substring(15, 33) + e.substring(50);
+      // step2(l) = l.substring(0, len-11) + l[len-2] + l[len-1]
+      if (e.length < 11) return '';
+      e = e.substring(0, e.length - 11) + e.substring(e.length - 2);
+
+      // atob + decodeURIComponent(escape(...)) == base64 decode then UTF-8
+      final padded = e + '=' * ((4 - e.length % 4) % 4);
+      final bytes = base64.decode(padded);
+      String d = utf8.decode(bytes, allowMalformed: true);
+
+      // substring(0, 13) + substring(17)
+      if (d.length <= 17) return '';
+      d = d.substring(0, 13) + d.substring(17);
+
+      // strip last 2 chars then append suffix
+      if (d.length < 2) return '';
+      d = d.substring(0, d.length - 2) + suffix;
+
+      final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+      return '$base/$d$trailer';
+    } catch (err) {
+      debugPrint('[ComicsService] Decode error: $err');
       return '';
     }
   }
+
+  // Get a single page image URL (called on-demand when user navigates).
+  // Pages are now fully resolved up-front in getChapterPages, so this is a
+  // pass-through for backward compatibility with the reader UI.
+  Future<String?> getPageImage(String pageUrl, ComicPageExtractor extractor) async {
+    return pageUrl;
+  }
+
 
   List<Comic> _parseComics(String html) {
     final List<Comic> comics = [];

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import '../services/youtube_audio_extractor.dart';
 
 class _CachedUrl {
   final String url;
@@ -226,8 +227,22 @@ class MusicService {
       return _videoIdCache[cacheKey];
     }
 
+    // Fast path: YouTube results-page HTML + regex (ported from PlayTorrio TV).
     try {
-      final searchQuery = '$title - $artist (Official Audio)';
+      final fastId = await YoutubeAudioExtractor.instance
+          .searchVideoId(title, artist);
+      if (fastId != null) {
+        _videoIdCache[cacheKey] = fastId;
+        debugPrint('MusicService: Fast videoId match for "$title"');
+        return fastId;
+      }
+    } catch (e) {
+      debugPrint('MusicService: Fast search failed: $e');
+    }
+
+    // Fallback: youtube_explode_dart full search.
+    try {
+      final searchQuery = '$title - $artist lyrics';
       final searchList = await _yt.search.search(searchQuery);
       if (searchList.isNotEmpty) {
         for (final video in searchList) {
@@ -253,7 +268,20 @@ class MusicService {
       return cached.url;
     }
 
-    // Try clients in order: androidVr works best with visitor data, tv as fallback
+    // Fast path: direct InnerTube call (ported from PlayTorrio TV).
+    try {
+      final fastUrl =
+          await YoutubeAudioExtractor.instance.getAudioUrl(videoId);
+      if (fastUrl != null) {
+        _streamUrlCache[videoId] = _CachedUrl(fastUrl);
+        debugPrint('MusicService: Got stream URL via fast extractor');
+        return fastUrl;
+      }
+    } catch (e) {
+      debugPrint('MusicService: Fast extractor failed: $e');
+    }
+
+    // Fallback: youtube_explode_dart.
     final clientSets = [
       [YoutubeApiClient.androidVr],
       [YoutubeApiClient.tv],

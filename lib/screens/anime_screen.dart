@@ -29,6 +29,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
   bool _isSearching = false;
   bool _isSearchLoading = false;
   bool _isShowingLiked = false;
+  bool _isAdultSearch = false;
   List<AnimeCard> _likedAnime = [];
   int _heroIndex = 0;
 
@@ -87,7 +88,8 @@ class _AnimeScreenState extends State<AnimeScreen> {
       _isShowingLiked = false;
     });
     try {
-      final results = await _service.search(query, perPage: 30);
+      final results =
+          await _service.search(query, perPage: 30, isAdult: _isAdultSearch);
       if (mounted) {
         setState(() {
           _searchResults = results;
@@ -213,6 +215,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
             const SizedBox(height: 16),
             _buildHeader(),
             _buildSearchBar(),
+            _buildAdultToggle(),
             if (_isShowingLiked || _isSearching)
               _buildBackChip(),
             Expanded(
@@ -371,6 +374,66 @@ class _AnimeScreenState extends State<AnimeScreen> {
         ),
         onSubmitted: _doSearch,
         onChanged: (v) => setState(() {}),
+      ),
+    );
+  }
+
+  Widget _buildAdultToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () {
+              setState(() => _isAdultSearch = !_isAdultSearch);
+              // Re-run the search with the new filter so the user sees the
+              // change immediately, mirroring the Discover screen behaviour.
+              if (_searchController.text.trim().isNotEmpty) {
+                _doSearch(_searchController.text);
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _isAdultSearch
+                    ? const Color(0xFFFF6B9D).withValues(alpha: 0.15)
+                    : Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _isAdultSearch
+                      ? const Color(0xFFFF6B9D)
+                      : Colors.white12,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _isAdultSearch
+                        ? Icons.eighteen_up_rating
+                        : Icons.eighteen_up_rating_outlined,
+                    color: _isAdultSearch
+                        ? const Color(0xFFFF6B9D)
+                        : Colors.white38,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '18+',
+                    style: TextStyle(
+                      color: _isAdultSearch
+                          ? const Color(0xFFFF6B9D)
+                          : Colors.white38,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

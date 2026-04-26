@@ -122,14 +122,23 @@ class AnimeService {
     return AnimeSources.fromJson(data);
   }
 
-  /// Search anime.
-  Future<List<AnimeCard>> search(String query, {int page = 1, int perPage = 20}) async {
-    final data = await _apiGet('search/browse', query: {
+  /// Search anime. Pass [isAdult]=true to include 18+ titles. The Miruro
+  /// `search/browse` endpoint filters them OUT by default, so we mirror the
+  /// same `isAdult=true` opt-in used by [browse].
+  Future<List<AnimeCard>> search(
+    String query, {
+    int page = 1,
+    int perPage = 20,
+    bool isAdult = false,
+  }) async {
+    final q = <String, String>{
       'search': query,
       'type': 'ANIME',
       'page': '$page',
       'perPage': '$perPage',
-    });
+    };
+    if (isAdult) q['isAdult'] = 'true';
+    final data = await _apiGet('search/browse', query: q);
     if (data is List) {
       return data.map((e) => AnimeCard.fromJson(e)).toList();
     }

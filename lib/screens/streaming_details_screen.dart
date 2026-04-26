@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -12,8 +11,11 @@ import '../api/webstreamr_service.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
 import '../api/torrent_stream_service.dart';
+import '../api/site111477_service.dart';
+import '../api/site111477_proxy.dart' as site111477_proxy;
 import '../widgets/loading_overlay.dart';
 import '../services/episode_watched_service.dart';
+import '../widgets/movie_atmosphere.dart';
 import 'player_screen.dart';
 
 class StreamingDetailsScreen extends StatefulWidget {
@@ -34,7 +36,7 @@ class StreamingDetailsScreen extends StatefulWidget {
   State<StreamingDetailsScreen> createState() => _StreamingDetailsScreenState();
 }
 
-class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
+class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with AtmosphereMixin {
   bool _isExtracting = false;
   bool _extractionCancelled = false;
   String? _statusMessage;
@@ -67,6 +69,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   final ScrollController _similarScrollController = ScrollController();
   final ScrollController _screenshotsScrollController = ScrollController();
   final ScrollController _episodeScrollController = ScrollController();
+  final ScrollController _seasonScrollController = ScrollController();
 
   final Map<String, dynamic> _providers = StreamProviders.providers;
 
@@ -76,6 +79,9 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
     _movie = widget.movie;
     if (widget.initialSeason != null) _selectedSeason = widget.initialSeason!;
     if (widget.initialEpisode != null) _selectedEpisode = widget.initialEpisode!;
+    // Start atmosphere color extraction
+    final url = (_movie.posterPath.isNotEmpty ? _movie.posterPath : _movie.backdropPath);
+    loadAtmosphere(url.startsWith('http') ? url : TmdbApi.getImageUrl(url));
     _loadWatchedEpisodes();
     _fetchDetails();
   }
@@ -142,6 +148,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
     _similarScrollController.dispose();
     _screenshotsScrollController.dispose();
     _episodeScrollController.dispose();
+    _seasonScrollController.dispose();
     super.dispose();
   }
 
@@ -361,56 +368,113 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
 
     bool found = false;
 
-    // 1. Try WebStreamr first if IMDB ID is available
-    if (_movie.imdbId != null && _movie.imdbId!.isNotEmpty) {
-      setState(() => _statusMessage = 'Searching WebStreamr...');
+    // Top priority: try the 111477.xyz direct-file index.
+    if (!_extractionCancelled) {
+      if (mounted) setState(() => _statusMessage = 'Searching 111477.xyz…');
       try {
-        final webStreamrSources = await _webStreamr.getStreams(
-          imdbId: _movie.imdbId!,
-          isMovie: _movie.mediaType == 'movie',
-          season: _selectedSeason,
-          episode: _selectedEpisode,
-        );
-
-        if (_extractionCancelled) return;
-        if (webStreamrSources.isNotEmpty) {
-          found = true;
-          if (mounted && !_extractionCancelled) {
+        final svc = Site111477Service();
+        List<Site111477Match> hits;
+        if (_movie.mediaType == 'tv') {
+          hits = await svc.findEpisodeSources(
+            showTitle: _movie.title,
+            season: _selectedSeason,
+            episode: _selectedEpisode,
+          );
+        } else {
+          final year = _movie.releaseDate.length >= 4
+              ? _movie.releaseDate.substring(0, 4)
+              : null;
+          hits = await svc.findMovieSources(title: _movie.title, year: year);
+        }
+        if (!_extractionCancelled && hits.isNotEmpty) {
+          final hit = hits.first;
+          if (mounted) setState(() => _statusMessage = 'Starting 111477 proxy…');
+          final proxiedUrl = await site111477_proxy.start111477Proxy(hit.fileUrl);
+          if (!_extractionCancelled && mounted) {
+            found = true;
             if (Navigator.canPop(context)) Navigator.pop(context);
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (context) => PlayerScreen(
-                  streamUrl: webStreamrSources.first.url,
-                  title: _movie.mediaType == 'tv' 
-                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode' 
+                  streamUrl: proxiedUrl,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
                       : _movie.title,
                   movie: _movie,
                   providers: _providers,
-                  activeProvider: 'webstreamr',
+                  activeProvider: 'service111477',
                   selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
                   selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
                   startPosition: widget.startPosition,
-                  sources: webStreamrSources,
+                  sources: Site111477Service.toStreamSources(hits),
                 ),
               ),
             );
           }
         }
       } catch (e) {
-        debugPrint('Error fetching from WebStreamr: $e');
+        debugPrint('Error extracting from 111477: $e');
       }
     }
 
+    // Secondary: try the local WebStreamr port.
+    if (!found && !_extractionCancelled && _movie.imdbId != null && _movie.imdbId!.isNotEmpty) {
+      if (mounted) setState(() => _statusMessage = 'Searching WebStreamr…');
+      try {
+        final webStreamr = WebStreamrService();
+        final isMovie = _movie.mediaType != 'tv';
+        final wsSources = await webStreamr.getStreams(
+          imdbId: _movie.imdbId!,
+          isMovie: isMovie,
+          season: isMovie ? null : _selectedSeason,
+          episode: isMovie ? null : _selectedEpisode,
+          tmdbId: _movie.id,
+        );
+        if (!_extractionCancelled && wsSources.isNotEmpty) {
+          found = true;
+          if (mounted && !_extractionCancelled) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+            final first = wsSources.first;
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PlayerScreen(
+                  streamUrl: first.url,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                      : _movie.title,
+                  headers: first.headers,
+                  movie: _movie,
+                  providers: _providers,
+                  activeProvider: 'webstreamr',
+                  selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
+                  selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+                  startPosition: widget.startPosition,
+                  sources: wsSources,
+                ),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error extracting from WebStreamr: $e');
+      }
+    }
+
+    // Fallback: web embeds (VidLink/etc.) if WebStreamr returned nothing.
     if (!found) {
       final providerKeys = _providers.keys.toList();
 
       for (var key in providerKeys) {
         if (!mounted || _extractionCancelled) break;
-        if (key == 'webstreamr') continue; // Already tried directly
-        
+
         final provider = _providers[key];
-        
+
+        // Skip service-style providers (no embed URL builder) — they're
+        // handled by their own dedicated paths above.
+        if (provider['movie'] == null || provider['tv'] == null) continue;
+
         final String url;
         if (_movie.mediaType == 'tv') {
           url = provider['tv'](
@@ -545,29 +609,23 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildFixedBackground() {
+    final url = _movie.backdropPath.isNotEmpty
+        ? TmdbApi.getBackdropUrl(_movie.backdropPath)
+        : (_movie.posterPath.isNotEmpty ? TmdbApi.getImageUrl(_movie.posterPath) : '');
+    if (url.isEmpty) return Container(color: const Color(0xFF0A0A0A));
+    // Strip the Positioned.fill from buildAtmosphereBackdrop — we're already inside one
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (_movie.backdropPath.isNotEmpty)
-          CachedNetworkImage(
-            imageUrl: TmdbApi.getBackdropUrl(_movie.backdropPath),
-            fit: BoxFit.cover,
-          ),
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: 0.7),
-                  Colors.black.withValues(alpha: 0.85),
-                  Colors.black,
-                ],
-                stops: const [0.0, 0.5, 1.0],
-              ),
-            ),
+        KenBurnsBackdrop(
+          imageUrl: url,
+          colors: atmosphereColors,
+          blurSigma: 4,
+        ),
+        IgnorePointer(
+          child: GenreParticles(
+            genres: _movie.genres,
+            colors: atmosphereColors,
           ),
         ),
       ],
@@ -613,26 +671,25 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
     final posterWidth = isMobile ? screenWidth * 0.5 : 180.0;
     final posterHeight = posterWidth * 1.5;
     
-    return Hero(
-      tag: 'movie-poster-${_movie.id}',
-      child: Container(
-        width: posterWidth,
-        height: posterHeight,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.5),
-              blurRadius: 20,
-              spreadRadius: 5,
+    return wrapPosterGlow(
+      width: posterWidth,
+      height: posterHeight,
+      borderRadius: 12,
+      genres: _movie.genres,
+      child: Hero(
+        tag: 'movie-poster-${_movie.id}',
+        child: Container(
+          width: posterWidth,
+          height: posterHeight,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: CachedNetworkImage(
+              imageUrl: TmdbApi.getImageUrl(_movie.posterPath),
+              fit: BoxFit.cover,
             ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: CachedNetworkImage(
-            imageUrl: TmdbApi.getImageUrl(_movie.posterPath),
-            fit: BoxFit.cover,
           ),
         ),
       ),
@@ -1017,24 +1074,53 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> {
   }
 
   Widget _buildSeasonsAndEpisodes() {
+    void scrollSeasonsBy(double delta) {
+      if (!_seasonScrollController.hasClients) return;
+      final target = (_seasonScrollController.offset + delta)
+          .clamp(0.0, _seasonScrollController.position.maxScrollExtent);
+      _seasonScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeInOut,
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Text(
-            'Episodes',
-            style: GoogleFonts.montserrat(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Episodes',
+                style: GoogleFonts.montserrat(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_rounded, size: 18, color: Colors.white70),
+                    onPressed: () => scrollSeasonsBy(-200),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_forward_ios_rounded, size: 18, color: Colors.white70),
+                    onPressed: () => scrollSeasonsBy(200),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
         SizedBox(
           height: 50,
           child: ListView.builder(
+            controller: _seasonScrollController,
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 24),
             itemCount: _movie.numberOfSeasons,

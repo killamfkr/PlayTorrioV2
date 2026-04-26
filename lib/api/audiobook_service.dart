@@ -24,7 +24,7 @@ class Audiobook {
   });
 
   String get thumbUrl {
-    if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks') return coverImage;
+    if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks' || source == 'ezaudiobookforsoul') return coverImage;
     return 'https://tokybook.com/images/$audioBookId';
   }
 
@@ -38,7 +38,7 @@ class Audiobook {
       title: json['title'] ?? '',
       coverImage: json['coverImage'] ?? '',
       source: source,
-      pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook') ? uuid : null),
+      pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook' || source == 'ezaudiobookforsoul') ? uuid : null),
     );
   }
 
@@ -147,12 +147,14 @@ class AudiobookService {
         _searchAppAudiobooks(query),
         _searchTokybook(query),
         _searchAudiozaic(query),
+        _searchEzAudiobookForSoul(query),
       ]);
 
       final goldenResults = results[0];
       final appAudioResults = results[1];
       final tokyResults = results[2];
       final audiozaicResults = results[3];
+      final ezResults = results[4];
       
       final Map<String, Audiobook> uniqueBooks = {};
       
@@ -180,6 +182,14 @@ class AudiobookService {
       
       // 4. Add Audiozaic results
       for (var book in audiozaicResults) {
+        final key = _normalizeTitle(book.title);
+        if (key.isNotEmpty && !uniqueBooks.containsKey(key)) {
+          uniqueBooks[key] = book;
+        }
+      }
+
+      // 5. Add EzAudiobookForSoul results
+      for (var book in ezResults) {
         final key = _normalizeTitle(book.title);
         if (key.isNotEmpty && !uniqueBooks.containsKey(key)) {
           uniqueBooks[key] = book;
@@ -331,6 +341,9 @@ class AudiobookService {
     }
     if (book.source == 'appaudiobooks') {
       return _getAppAudiobooksChapters(book);
+    }
+    if (book.source == 'ezaudiobookforsoul') {
+      return _getEzAudiobookForSoulChapters(book);
     }
     return _getTokyChapters(book);
   }
@@ -616,6 +629,143 @@ class AudiobookService {
       return chapters;
     } catch (e) {
       debugPrint('AudiobookService Error (_getAppAudiobooksChapters): $e');
+    }
+    return [];
+  }
+
+  // --- EzAudiobookForSoul.com ---
+
+  static const String _ezUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  Future<List<Audiobook>> _searchEzAudiobookForSoul(String query) async {
+    try {
+      final searchUrl =
+          'https://ezaudiobookforsoul.com/?s=${Uri.encodeComponent(query)}&post_type=product';
+      final response = await http.get(Uri.parse(searchUrl), headers: {
+        'User-Agent': _ezUserAgent,
+      });
+      if (response.statusCode != 200) return [];
+
+      final document = hp.parse(response.body);
+      final products = document.querySelectorAll('li.product');
+
+      final List<Audiobook> results = [];
+      final seen = <String>{};
+      for (final product in products) {
+        final titleAnchor = product.querySelector(
+            'h2.woocommerce-loop-product__title a.woocommerce-loop-product__link');
+        final pageUrl = titleAnchor?.attributes['href'] ?? '';
+        if (pageUrl.isEmpty || seen.contains(pageUrl)) continue;
+        seen.add(pageUrl);
+
+        final rawTitle = titleAnchor?.text.trim() ?? '';
+        if (rawTitle.isEmpty) continue;
+        // Don't strip aggressively — keep "Book 2" / series info that _cleanTitle would drop.
+        final title = rawTitle
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .replaceAll(RegExp(r'audiobook', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\s*[–-]\s*$'), '')
+            .trim();
+
+        final img = product.querySelector('img.wp-post-image');
+        var coverUrl =
+            img?.attributes['data-src'] ?? img?.attributes['src'] ?? '';
+        if (coverUrl.startsWith('data:')) {
+          coverUrl = img?.attributes['data-src'] ?? '';
+        }
+        if (coverUrl.contains('-') && coverUrl.contains('x')) {
+          coverUrl = coverUrl.replaceFirstMapped(
+              RegExp(r'-\d+x\d+\.(jpg|jpeg|png|webp)'),
+              (m) => '.${m.group(1)}');
+        }
+
+        final uri = Uri.parse(pageUrl);
+        final pathSegments =
+            uri.pathSegments.where((s) => s.isNotEmpty).toList();
+        final slug = pathSegments.isNotEmpty
+            ? pathSegments.last
+            : pageUrl.hashCode.toString();
+
+        results.add(Audiobook(
+          uuid: pageUrl,
+          audioBookId: 'ez_$slug',
+          dynamicSlugId: pageUrl,
+          title: title,
+          coverImage: coverUrl,
+          source: 'ezaudiobookforsoul',
+          pageUrl: pageUrl,
+        ));
+      }
+      return results;
+    } catch (e) {
+      debugPrint('AudiobookService Error (_searchEzAudiobookForSoul): $e');
+    }
+    return [];
+  }
+
+  Future<List<AudiobookChapter>> _getEzAudiobookForSoulChapters(
+      Audiobook book) async {
+    try {
+      if (book.pageUrl == null) return [];
+
+      // Fetch the audiobook detail page (the #tab-videos fragment is rendered server-side
+      // and lives inside the same HTML document, so a single GET is enough).
+      final pageRes = await http.get(Uri.parse(book.pageUrl!), headers: {
+        'User-Agent': _ezUserAgent,
+      });
+      if (pageRes.statusCode != 200) return [];
+
+      final document = hp.parse(pageRes.body);
+      final sources =
+          document.querySelectorAll('.simp-playlist .simp-source[data-src]');
+
+      final stdHeaders = {
+        'User-Agent': _ezUserAgent,
+        'Referer': book.pageUrl!,
+      };
+
+      // Build (title, encrypted) pairs first, skipping the promo intro track.
+      final List<MapEntry<String, String>> raw = [];
+      for (final src in sources) {
+        final encrypted = src.attributes['data-src'] ?? '';
+        if (encrypted.isEmpty) continue;
+        final title = src.text.trim();
+        // The site prepends a promo "Soulful_Exploration" track on every book.
+        if (title.toLowerCase().contains('soulful_exploration')) continue;
+        raw.add(MapEntry(title.isEmpty ? 'Chapter ${raw.length + 1}' : title,
+            encrypted));
+      }
+
+      // Resolve each encrypted blob through the site's public decrypt endpoint (parallel).
+      final futures = raw.map((e) async {
+        try {
+          final decryptUrl = Uri.parse(
+              'https://ezaudiobookforsoul.com/wp-content/plugins/custom-story-audio/inc/security/decrypt.php?encrypted=${Uri.encodeQueryComponent(e.value)}');
+          final r = await http.get(decryptUrl, headers: stdHeaders);
+          if (r.statusCode != 200) return null;
+          final body = r.body.trim();
+          if (!body.startsWith('http')) return null;
+          return AudiobookChapter(
+            title: e.key,
+            url: body,
+            headers: {
+              'User-Agent': _ezUserAgent,
+              'Referer': 'https://ezaudiobookforsoul.com/',
+            },
+          );
+        } catch (err) {
+          debugPrint(
+              'AudiobookService Error (ezaudiobookforsoul decrypt): $err');
+          return null;
+        }
+      }).toList();
+
+      final resolved = await Future.wait(futures);
+      return resolved.whereType<AudiobookChapter>().toList();
+    } catch (e) {
+      debugPrint(
+          'AudiobookService Error (_getEzAudiobookForSoulChapters): $e');
     }
     return [];
   }

@@ -1048,7 +1048,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                   Row(
                     children: [
                       // Play button with glow
-                      Container(
+                      Flexible(
+                        child: Container(
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(28),
                           boxShadow: AppTheme.isLightMode ? null : [
@@ -1075,9 +1076,11 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                           ),
                         ),
                       ),
+                      ),
                       const SizedBox(width: 12),
                       // More Info — frosted glass pill (simplified in light mode)
-                      _buildFrostedPill(
+                      Flexible(
+                        child: _buildFrostedPill(
                         onTap: () => _openDetails(heroMovie),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
@@ -1090,6 +1093,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                             ],
                           ),
                         ),
+                      ),
                       ),
                       const SizedBox(width: 12),
                       // My List — frosted circle (simplified in light mode)
@@ -1848,7 +1852,46 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       final title = item['title'] as String;
       final posterPath = item['posterPath'] as String; 
       final startPos = Duration(milliseconds: item['position'] as int);
-      
+
+      // Streaming-mode entries (stream/amri/stremio_direct) don't keep a
+      // re-playable URL — extraction tokens expire. The cleanest UX is to
+      // re-open the StreamingDetailsScreen which auto-runs the extraction
+      // splash and then forwards startPosition to the player so it seeks
+      // once the duration loads.
+      final isStreamingEntry = method == 'stream' ||
+          method == 'amri' ||
+          method == 'stremio_direct';
+      if (isStreamingEntry) {
+        if (mounted) {
+          final mediaType =
+              item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final movie = Movie(
+            id: tmdbId,
+            title: title,
+            posterPath: posterPath,
+            backdropPath: '',
+            overview: '',
+            releaseDate: '',
+            voteAverage: 0,
+            mediaType: mediaType,
+            genres: [],
+            imdbId: item['imdbId'],
+          );
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => StreamingDetailsScreen(
+                movie: movie,
+                initialSeason: season,
+                initialEpisode: episode,
+                startPosition: startPos,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
       // Get saved magnet link and file index for torrents
       final savedMagnetLink = item['magnetLink'] as String?;
       final savedFileIndex = item['fileIndex'] as int?;
@@ -1926,7 +1969,13 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               };
             }
             Navigator.push(context, MaterialPageRoute(
-              builder: (_) => DetailsScreen(movie: movie, stremioItem: stremioItem),
+              builder: (_) => DetailsScreen(
+                movie: movie,
+                stremioItem: stremioItem,
+                initialSeason: season,
+                initialEpisode: episode,
+                startPosition: startPos,
+              ),
             ));
           }
           return; // Skip the player launch below
@@ -2037,24 +2086,21 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         if (useDebrid) {
           debugPrint('[Resume] Using debrid service: $debridService');
           if (debridService == 'Real-Debrid') {
-             final files = await DebridApi().resolveRealDebrid(magnetLink);
-             if (fileIndex != null && fileIndex < files.length) {
-               // Use saved file index
-               streamUrl = files[fileIndex].downloadUrl;
-               debugPrint('[Resume] Using file at index $fileIndex: ${files[fileIndex].filename}');
-             } else {
-               // Fallback to largest file
-               files.sort((a, b) => b.filesize.compareTo(a.filesize));
-               if (files.isNotEmpty) streamUrl = files.first.downloadUrl;
+             final files = await DebridApi().resolveRealDebrid(magnetLink,
+                 season: season, episode: episode);
+             if (files.isNotEmpty) {
+               // resolveRealDebrid now returns a single, pre-picked file.
+               streamUrl = files.first.downloadUrl;
+               fileIndex = 0;
+               debugPrint('[Resume] Picked: ${files.first.filename}');
              }
           } else if (debridService == 'TorBox') {
-             final files = await DebridApi().resolveTorBox(magnetLink);
-             if (fileIndex != null && fileIndex < files.length) {
-               streamUrl = files[fileIndex].downloadUrl;
-               debugPrint('[Resume] Using file at index $fileIndex: ${files[fileIndex].filename}');
-             } else {
-               files.sort((a, b) => b.filesize.compareTo(a.filesize));
-               if (files.isNotEmpty) streamUrl = files.first.downloadUrl;
+             final files = await DebridApi().resolveTorBox(magnetLink,
+                 season: season, episode: episode);
+             if (files.isNotEmpty) {
+               streamUrl = files.first.downloadUrl;
+               fileIndex = 0;
+               debugPrint('[Resume] Picked: ${files.first.filename}');
              }
           } else {
              throw Exception("No Debrid service configured");
@@ -2094,6 +2140,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                     movie: movie,
                     initialSeason: season,
                     initialEpisode: episode,
+                    startPosition: startPos,
                   ),
           ));
         }

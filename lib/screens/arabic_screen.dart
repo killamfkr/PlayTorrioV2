@@ -77,15 +77,36 @@ class _ArabicScreenState extends State<ArabicScreen> {
       _currentPage = 1;
     });
 
-    // Search both sources in parallel
+    // Search all sources in parallel
     final results = await Future.wait([
+      _service.searchBrstej(query),
       _service.search(query),
       _service.searchDimaToon(query),
     ]);
-    final merged = [...results[0], ...results[1]];
+    // Merge order determines priority when titles collide: brstej first,
+    // then larozaa, then dimatoon.
+    final merged = [...results[0], ...results[1], ...results[2]];
+
+    // Cross-source dedup: collapse entries that look like the same show
+    // (same normalized title) into one — prefer larozaa, then brstej, then
+    // dimatoon, matching the order results were appended in.
+    String norm(String t) => t
+        .toLowerCase()
+        .replaceAll(RegExp(r'^مسلسل\s+'), '')
+        .replaceAll(RegExp(r'\s*الحلقة\s+.*$'), '')
+        .replaceAll(RegExp(r'\s*(hd|مترجم(ة)?|مدبلج(ة)?)\s*$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final seen = <String>{};
+    final deduped = <ArabicShow>[];
+    for (final s in merged) {
+      final key = norm(s.title);
+      if (key.isEmpty || seen.add(key)) deduped.add(s);
+    }
+
     // Sort by relevancy to query
     final q = query.trim().toLowerCase();
-    merged.sort((a, b) {
+    deduped.sort((a, b) {
       int score(ArabicShow s) {
         final t = s.title.toLowerCase();
         if (t == q) return 0;
@@ -99,7 +120,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
     });
     if (mounted) {
       setState(() {
-        _shows = merged;
+        _shows = deduped;
         _isLoading = false;
       });
     }

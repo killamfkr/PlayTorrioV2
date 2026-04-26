@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import 'home_screen.dart';
 import 'discover_screen.dart';
 import 'search_screen.dart';
@@ -43,6 +43,8 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _selectedIndex = 0;
+  Timer? _metricsDebounce;
+  Timer? _metricsSafety;
 
   /// All screens keyed by nav ID — created once, never recreated.
   late final Map<String, Widget> _allScreens;
@@ -133,10 +135,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   /// Re-apply immersive mode after metrics changes settle (rotation, etc.).
-  /// Some Android devices (especially Samsung) reset system-bar visibility on
-  /// configuration changes. This callback debounces to let the rotation
-  /// animation finish first, then re-hides the bars.  No `setState` needed —
-  /// Flutter already rebuilds widgets that depend on `MediaQuery`.
+  /// Upstream: debounced + safety timers to recover from viewport metric storms
+  /// on some Android chipsets. We also re-hide system bars after a short delay.
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
@@ -147,16 +147,23 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         }
       });
     }
+    _metricsDebounce?.cancel();
+    _metricsDebounce = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() {});
+    });
+    _metricsSafety ??= Timer(const Duration(seconds: 4), () {
+      _metricsSafety = null;
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed && platformIsAndroid) {
-      if (!DeviceProfile.isAndroidTv) {
-        AutoOrientation.fullAutoMode(forceSensor: true);
-        SystemChrome.setPreferredOrientations([]);
-      }
+      // Only re-apply immersive mode; do not reset preferred orientations here
+      // — it can fight the in-player orientation lock when the player is
+      // pushed on top of this screen.
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       if (DeviceProfile.isAndroidTv) {
         TvSettingsRemoteService().refreshLanIp();
@@ -191,6 +198,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _metricsDebounce?.cancel();
+    _metricsSafety?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     MainScreen.stremioSearchNotifier.removeListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.removeListener(_onNavbarConfigChanged);

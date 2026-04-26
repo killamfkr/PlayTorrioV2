@@ -30,6 +30,7 @@ import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
 import 'main_screen.dart';
+import '../widgets/movie_atmosphere.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -40,13 +41,15 @@ class DetailsScreen extends StatefulWidget {
   final int? initialSeason;
   /// Optional: pre-select an episode (e.g. from Continue Watching / Trakt import).
   final int? initialEpisode;
-  const DetailsScreen({super.key, required this.movie, this.stremioItem, this.initialSeason, this.initialEpisode});
+  /// Optional: resume position from Trakt/Simkl import (used when no local progress matches).
+  final Duration? startPosition;
+  const DetailsScreen({super.key, required this.movie, this.stremioItem, this.initialSeason, this.initialEpisode, this.startPosition});
 
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
 }
 
-class _DetailsScreenState extends State<DetailsScreen> {
+class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   late Movie _movie;
   bool _isLoading = true;
   final TmdbApi _api = TmdbApi();
@@ -130,6 +133,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _movie = widget.movie;
     if (widget.initialSeason != null) _selectedSeason = widget.initialSeason!;
     if (widget.initialEpisode != null) _selectedEpisode = widget.initialEpisode!;
+    // Start atmosphere color extraction
+    final url = (_movie.posterPath.isNotEmpty ? _movie.posterPath : _movie.backdropPath);
+    loadAtmosphere(url.startsWith('http') ? url : TmdbApi.getImageUrl(url));
     _checkHistory();
     _loadSortPreference();
     _checkIndexerConfiguration();
@@ -1278,12 +1284,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
       if (baseUrl == null || apiKey == null) throw Exception('Prowlarr configuration missing');
 
+      // Resolve any saved tag filter to indexer IDs for this session.
+      // Empty tag selection means no filter — use all torrent indexers.
+      final tagIds = await _settings.getProwlarrTagIds();
+      List<int>? allowedIndexerIds;
+      if (tagIds.isNotEmpty) {
+        final resolved = await _prowlarr.resolveTagIndexerIds(baseUrl, apiKey, tagIds);
+        if (resolved.isNotEmpty) allowedIndexerIds = resolved;
+        // If resolved is empty (tags exist but no matching indexers), fall back to all.
+      }
+
       if (_movie.mediaType == 'tv') {
         final s = _selectedSeason.toString().padLeft(2, '0');
         final e = _selectedEpisode.toString().padLeft(2, '0');
         final results = await Future.wait([
-          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S$s'),
-          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S${s}E$e'),
+          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S$s', indexerIds: allowedIndexerIds),
+          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S${s}E$e', indexerIds: allowedIndexerIds),
         ]);
         if (mounted) {
           final filteredSeason = await TorrentFilter.filterTorrentsAsync(results[0], _movie.title, requiredSeason: _selectedSeason);
@@ -1303,7 +1319,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       } else {
         final year = _movie.releaseDate.length >= 4 ? _movie.releaseDate.substring(0, 4) : '';
         final query = year.isNotEmpty ? '${_movie.title} $year' : _movie.title;
-        final results = await _prowlarr.search(baseUrl, apiKey, query);
+        final results = await _prowlarr.search(baseUrl, apiKey, query, indexerIds: allowedIndexerIds);
         if (mounted) {
           final filtered = await TorrentFilter.filterTorrentsAsync(results, _movie.title);
           if (mounted) {
@@ -1410,25 +1426,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
       try {
         if (useDebrid && debridService != 'None') {
           final debrid = DebridApi();
-          final files = debridService == 'Real-Debrid'
-              ? await debrid.resolveRealDebrid(magnet) : await debrid.resolveTorBox(magnet);
+          final isTv = _movie.mediaType == 'tv';
+          final files = await debrid.resolveByService(
+            debridService,
+            magnet,
+            season: isTv ? _selectedSeason : null,
+            episode: isTv ? _selectedEpisode : null,
+          );
           if (_streamCancelled) return;
           if (files.isNotEmpty) {
-            if (_movie.mediaType == 'tv') {
-              final s = 'S${_selectedSeason.toString().padLeft(2, '0')}';
-              final e = 'E${_selectedEpisode.toString().padLeft(2, '0')}';
-              final match = files.where((f) => f.filename.toUpperCase().contains(s) && f.filename.toUpperCase().contains(e)).toList();
-              if (match.isNotEmpty) {
-                resolvedFileIndex = files.indexOf(match.first);
-                url = match.first.downloadUrl;
-              } else {
-                files.sort((a, b) => b.filesize.compareTo(a.filesize));
-                url = files.first.downloadUrl;
-              }
-            } else {
-              files.sort((a, b) => b.filesize.compareTo(a.filesize));
-              url = files.first.downloadUrl;
-            }
+            // resolveX always returns a single, pre-picked file.
+            resolvedFileIndex = 0;
+            url = files.first.downloadUrl;
           }
         } else {
           url = await TorrentStreamService().streamTorrent(magnet,
@@ -1571,26 +1580,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
       if (useDebrid && debridService != 'None') {
         final debrid = DebridApi();
-        final files = debridService == 'Real-Debrid'
-            ? await debrid.resolveRealDebrid(magnetLink)
-            : await debrid.resolveTorBox(magnetLink);
+        final isTv = _movie.mediaType == 'tv';
+        final files = await debrid.resolveByService(
+          debridService,
+          magnetLink,
+          season: isTv ? _selectedSeason : null,
+          episode: isTv ? _selectedEpisode : null,
+        );
         if (_streamCancelled) return;
         if (files.isNotEmpty) {
-          if (_movie.mediaType == 'tv') {
-            final s = 'S${_selectedSeason.toString().padLeft(2, '0')}';
-            final e = 'E${_selectedEpisode.toString().padLeft(2, '0')}';
-            final match = files.where((f) => f.filename.toUpperCase().contains(s) && f.filename.toUpperCase().contains(e)).toList();
-            if (match.isNotEmpty) {
-              resolvedFileIndex = files.indexOf(match.first);
-              url = match.first.downloadUrl;
-            } else {
-              files.sort((a, b) => b.filesize.compareTo(a.filesize));
-              url = files.first.downloadUrl;
-            }
-          } else {
-            files.sort((a, b) => b.filesize.compareTo(a.filesize));
-            url = files.first.downloadUrl;
-          }
+          resolvedFileIndex = 0;
+          url = files.first.downloadUrl;
         }
       } else {
         url = await TorrentStreamService().streamTorrent(magnetLink,
@@ -1692,25 +1692,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Widget _buildBackdropWidget() {
     final url = _imageUrl(_movie.backdropPath.isNotEmpty ? _movie.backdropPath : _movie.posterPath);
-    return Positioned.fill(
-      child: Stack(fit: StackFit.expand, children: [
-        CachedNetworkImage(
-          imageUrl: url,
-          fit: BoxFit.cover,
-          alignment: Alignment.topCenter,
-          errorWidget: (c, u, e) => Container(color: const Color(0xFF0A0A1A)),
-        ),
-        if (PerformanceTuning.skipBackdropBlur)
-          Container(color: Colors.black.withValues(alpha: 0.35))
-        else
-          BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-            child: Container(color: Colors.transparent),
-          ),
-        Container(decoration: const BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [Color(0xD5050510), Color(0xE8000000)]))),
-      ]),
+    return buildAtmosphereBackdrop(
+      imageUrl: url,
+      genres: _movie.genres,
+      blurSigma: 12,
     );
   }
 
@@ -2035,13 +2020,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Hero(
-                  tag: 'movie-poster-${_movie.id}',
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: CachedNetworkImage(
-                      imageUrl: _imageUrl(_movie.posterPath),
-                      width: 90, height: 132, fit: BoxFit.cover,
+                wrapPosterGlow(
+                  width: 90,
+                  height: 132,
+                  borderRadius: 10,
+                  genres: _movie.genres,
+                  child: Hero(
+                    tag: 'movie-poster-${_movie.id}',
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CachedNetworkImage(
+                        imageUrl: _imageUrl(_movie.posterPath),
+                        width: 90, height: 132, fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                 ),
@@ -2111,13 +2102,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Hero(
-              tag: 'movie-poster-${_movie.id}',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: CachedNetworkImage(
-                  imageUrl: _imageUrl(_movie.posterPath),
-                  width: 260, height: 380, fit: BoxFit.cover),
+            wrapPosterGlow(
+              width: 260,
+              height: 380,
+              borderRadius: 12,
+              genres: _movie.genres,
+              child: Hero(
+                tag: 'movie-poster-${_movie.id}',
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: CachedNetworkImage(
+                    imageUrl: _imageUrl(_movie.posterPath),
+                    width: 260, height: 380, fit: BoxFit.cover),
+                ),
               ),
             ),
             const SizedBox(width: 24),
@@ -2791,11 +2788,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     return FocusableControl(
       onTap: () => _playTorrent(result,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
-          color: isResumable ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04),
+          color: (isResumable || widget.startPosition != null) ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isResumable
               ? AppTheme.primaryColor.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.07)),
@@ -2855,7 +2852,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   }),
                   const SizedBox(height: 6),
                   _iconBtn(Icons.play_arrow_rounded, true, () => _playTorrent(result,
-                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null)),
+                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition)),
                 ]),
               ],
             ),
@@ -2925,13 +2922,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     return FocusableControl(
       onTap: () => _playStremioStream(stream,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
           color: isExternal
               ? leadingColor.withValues(alpha: 0.06)
-              : (isResumable ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04)),
+              : ((isResumable || widget.startPosition != null) ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04)),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isExternal
               ? leadingColor.withValues(alpha: 0.25)
@@ -2963,7 +2960,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               ),
               const SizedBox(width: 8),
               _iconBtn(actionIcon, true, () => _playStremioStream(stream,
-                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null)),
+                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition)),
             ]),
           ),
           if (isResumable && progress > 0 && !isExternal)
