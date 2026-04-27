@@ -22,7 +22,7 @@ const String kPlaytorrioSupabaseUrl = String.fromEnvironment(
 const String kPlaytorrioSupabaseAnonKey = String.fromEnvironment(
   'PLAYTORRIO_SUPABASE_ANON_KEY',
   defaultValue:
-      'sb_publishable_kg9O7hjt0PKdXDpvuC9scQ_KRsw4MLg',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx4YXBhenpsZHV3d2VjYXRlYnRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyOTI2NDQsImV4cCI6MjA5Mjg2ODY0NH0.a9e7zUEdWDmf4Qor-rbYZ6G0sMTEYcfKnwTrXjVrBWY',
 );
 
 class PlaytorrioCloudSyncService {
