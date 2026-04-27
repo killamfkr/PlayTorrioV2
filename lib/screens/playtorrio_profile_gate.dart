@@ -360,6 +360,17 @@ class _PlaytorrioProfileGateState extends State<PlaytorrioProfileGate> {
                       style: TextStyle(color: Colors.amber, fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
+                  )
+                else if (!PlaytorrioCloudSyncService.instance.isAnonKeyJwtFormat)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text(
+                      'This build’s API key is not the Supabase anon JWT. Auth may work, but saving '
+                      'watch history to the database will fail. In Supabase: Project → API → '
+                      'copy the anon (legacy) key (starts with eyJ…) and set PLAYTORRIO_SUPABASE_ANON_KEY.',
+                      style: TextStyle(color: Colors.amber, fontSize: 12, height: 1.35),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 if (_session) ...[
                   const Align(

@@ -58,6 +58,14 @@ class PlaytorrioCloudSyncService {
 
   bool get isConfigured => _base != null && _anon != null;
 
+  /// PostgREST/Auth need the **anon (legacy) JWT** from Project Settings → API, not
+  /// the newer `sb_publishable_` key. If this is false, every REST call returns 401/404.
+  bool get isAnonKeyJwtFormat {
+    final k = _anon;
+    if (k == null || k.isEmpty) return false;
+    return k.split('.').length == 3 && k.startsWith('eyJ');
+  }
+
   void _requireConfig() {
     if (!isConfigured) {
       throw const PlaytorrioCloudException(
@@ -122,6 +130,13 @@ class PlaytorrioCloudSyncService {
     if (kIsWeb) return;
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
+    if (!isAnonKeyJwtFormat) {
+      debugPrint(
+        '[PT Cloud] pushFullProfileBackup skipped: apikey must be legacy anon JWT (eyJ…), '
+        'not sb_publishable — PostgREST will reject writes.',
+      );
+      return;
+    }
     try {
       await _ensureAccess();
       final wh = WatchHistoryService();
@@ -321,7 +336,11 @@ class PlaytorrioCloudSyncService {
       return;
     }
     if (res.statusCode != 200) {
-      debugPrint('[PT Cloud] pull history: ${res.statusCode} ${res.body}');
+      debugPrint(
+        '[PT Cloud] pull history FAILED: ${res.statusCode} body=${res.body} '
+        'anonKeyJwt=${isAnonKeyJwtFormat} — use legacy anon JWT in Project → API, '
+        'or run supabase/migrations for profile_id + tables.',
+      );
       return;
     }
     final decoded = json.decode(res.body);
@@ -414,7 +433,10 @@ class PlaytorrioCloudSyncService {
       return;
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      debugPrint('[PT Cloud] push history: ${res.statusCode} ${res.body}');
+      debugPrint(
+        '[PT Cloud] push history FAILED: ${res.statusCode} ${res.body} '
+        'anonKeyJwt=${isAnonKeyJwtFormat}',
+      );
     }
   }
 
@@ -616,6 +638,12 @@ class PlaytorrioCloudSyncService {
     if (kIsWeb) return;
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
+    if (!isAnonKeyJwtFormat) {
+      debugPrint(
+        '[PT Cloud] pullOnStartup skipped: set legacy anon JWT for apikey (see isAnonKeyJwtFormat).',
+      );
+      return;
+    }
     try {
       await pullProfileMeta();
       if (await isProgressSyncEnabled()) {

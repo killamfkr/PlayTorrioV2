@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -112,6 +113,24 @@ Future<void> bootstrap() async {
   DebridApi.onDebridKeysChanged = () {
     unawaited(PlaytorrioCloudSyncService.instance.scheduleDebridPush());
   };
+
+  // Restore from cloud when the profile gate is not used (TV, or user disabled gate),
+  // so data is not only synced on the phone profile picker.
+  unawaited(() async {
+    if (kIsWeb) return;
+    try {
+      if (DeviceProfile.isAndroidTv) {
+        await PlaytorrioCloudSyncService.instance.pullOnStartup();
+        return;
+      }
+      final showGate = await SettingsService().getPlaytorrioProfileGateEnabled();
+      if (!showGate) {
+        await PlaytorrioCloudSyncService.instance.pullOnStartup();
+      }
+    } catch (e) {
+      debugPrint('[Boot] cloud pull: $e');
+    }
+  }());
 
   runApp(const PlayTorrioApp());
 }

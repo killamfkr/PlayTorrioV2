@@ -2067,15 +2067,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudSigningIn = false;
         _ptCloudPasswordController.clear();
       });
-      if (_ptCloudProgressSync ||
-          _ptCloudSettingsSync ||
-          _ptCloudDebridSync) {
-        unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
-      }
+      await PlaytorrioCloudSyncService.instance.pullOnStartup();
+      await PlaytorrioCloudSyncService.instance.pushFullProfileBackup();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Signed in. Turn on sync options below to use the cloud.'),
+          SnackBar(
+            content: Text(
+              PlaytorrioCloudSyncService.instance.isAnonKeyJwtFormat
+                  ? 'Signed in — cloud data merged and backup sent for this profile.'
+                  : 'Signed in, but the API key in this build is not the Supabase anon JWT — '
+                      'replace it in Project → API (see logs).',
+            ),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
@@ -2130,10 +2133,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudRegistering = false;
         _ptCloudPasswordController.clear();
       });
+      await PlaytorrioCloudSyncService.instance.pullOnStartup();
+      await PlaytorrioCloudSyncService.instance.pushFullProfileBackup();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Account ready. If email confirmation is on, confirm then sign in.'),
+          SnackBar(
+            content: Text(
+              PlaytorrioCloudSyncService.instance.isAnonKeyJwtFormat
+                  ? 'Account ready — data synced. If email confirmation is required, confirm then sign in.'
+                  : 'Account created, but set the legacy anon JWT in the app build for database sync.',
+            ),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
