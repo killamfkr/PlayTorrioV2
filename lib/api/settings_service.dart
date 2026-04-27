@@ -599,9 +599,14 @@ class SettingsService {
 
   /// All available nav items in default order. 'settings' is always last and locked.
   /// Search, My List, and Magnet are intentionally last (before Settings in the UI).
+  ///
+  /// - [live_matches]: Stremio TV channel catalogs + TV guide
+  /// - [sports]: live sports (streamed.pk) — upstream [LiveMatchesScreen]
+  /// - [iptv]: M3U / Xtream (legacy IPTV flow)
+  /// - [iptv_pt]: PlayTorrio TV (hardcoded / Pastesh stack)
   static const List<String> allNavIds = [
-    'home', 'discover', 'live_matches',
-    'iptv', 'audiobooks', 'books', 'music', 'comics', 'manga',
+    'home', 'discover', 'live_matches', 'sports',
+    'iptv', 'iptv_pt', 'audiobooks', 'books', 'music', 'comics', 'manga',
     'jellyfin', 'anime', 'search', 'mylist', 'magnet',
   ];
 
@@ -615,7 +620,24 @@ class SettingsService {
     if (raw == null) return List.from(allNavIds);
 
     // Drop stale / removed ids; keep user order except tail ids always last.
-    final filtered = raw.where((id) => allNavIds.contains(id)).toList();
+    var filtered = raw.where((id) => allNavIds.contains(id)).toList();
+    // Upgrade: insert new upstream tab ids for existing installs
+    if (!filtered.contains('sports')) {
+      final lm = filtered.indexOf('live_matches');
+      if (lm >= 0) {
+        filtered = [...filtered.sublist(0, lm + 1), 'sports', ...filtered.sublist(lm + 1)];
+      } else {
+        filtered = ['sports', ...filtered];
+      }
+    }
+    if (!filtered.contains('iptv_pt')) {
+      final ip = filtered.indexOf('iptv');
+      if (ip >= 0) {
+        filtered = [...filtered.sublist(0, ip + 1), 'iptv_pt', ...filtered.sublist(ip + 1)];
+      } else {
+        filtered = [...filtered, 'iptv_pt'];
+      }
+    }
     final middle = <String>[];
     for (final id in filtered) {
       if (!_navTailIds.contains(id)) middle.add(id);
