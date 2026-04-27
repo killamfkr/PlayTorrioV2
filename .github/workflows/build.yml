@@ -23,6 +23,10 @@ on:
 
 env:
   FLUTTER_CHANNEL: stable
+  # Pin so org-wide FLUTTER_VERSION (e.g. 3.41.8) cannot break subosito/flutter-action
+  # when that build is missing from the action’s release index for this arch.
+  # Bump when you upgrade the project’s Flutter / .metadata channel revision.
+  FLUTTER_VERSION: '3.41.0'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
@@ -48,6 +52,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - run: flutter pub get
 
@@ -122,6 +127,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - run: flutter pub get
       - run: >
@@ -234,6 +240,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - name: Configure macOS platform files
         run: |
@@ -322,6 +329,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           architecture: x64
 
       - name: Configure macOS platform files
@@ -389,6 +397,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
 
       - name: Generate iOS platform files
         run: |
