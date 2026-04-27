@@ -639,7 +639,8 @@ class SettingsService {
 
   Future<bool> isPlaytorrioCloudProgressSyncEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_ptCloudProgressSyncKey) ?? false;
+    // Default on: profile cloud backup should sync without opening Settings.
+    return prefs.getBool(_ptCloudProgressSyncKey) ?? true;
   }
 
   Future<void> setPlaytorrioCloudProgressSyncEnabled(bool v) async {
@@ -649,7 +650,7 @@ class SettingsService {
 
   Future<bool> isPlaytorrioCloudSettingsSyncEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_ptCloudSettingsSyncKey) ?? false;
+    return prefs.getBool(_ptCloudSettingsSyncKey) ?? true;
   }
 
   Future<void> setPlaytorrioCloudSettingsSyncEnabled(bool v) async {
