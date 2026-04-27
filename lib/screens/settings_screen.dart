@@ -27,7 +27,7 @@ import 'lists_screen.dart';
 import 'epg_channel_mapping_screen.dart';
 import 'settings_export.dart';
 import 'webstreamr_settings_screen.dart';
-import '../services/nuvio_sync_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -126,14 +126,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// LAN URL with token for phone → TV settings import (Android TV).
   String? _tvRemoteSettingsUrl;
 
-  // Nuvio (nuvioapp.space) — continue-watching sync
-  final TextEditingController _nuvioEmailController = TextEditingController();
-  final TextEditingController _nuvioPasswordController = TextEditingController();
-  bool _nuvioSyncEnabled = false;
-  int _nuvioProfileId = 1;
-  bool _nuvioSessionPresent = false;
-  bool _nuvioSigningIn = false;
-  bool _nuvioPulling = false;
+  // PlayTorrio cloud (your Supabase project — email/password)
+  final TextEditingController _ptCloudEmailController = TextEditingController();
+  final TextEditingController _ptCloudPasswordController = TextEditingController();
+  bool _ptCloudProgressSync = false;
+  bool _ptCloudSettingsSync = false;
+  bool _ptCloudSessionPresent = false;
+  bool _ptCloudSigningIn = false;
+  bool _ptCloudRegistering = false;
+  bool _ptCloudSyncing = false;
+  bool _ptCloudConfigured = false;
 
   @override
   void initState() {
@@ -225,9 +227,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? await _settings.getAndroidTvMaxStreamBitrateKbps()
         : null;
 
-    final nuvioSync = await _settings.isNuvioSyncEnabled();
-    final nuvioProfile = await _settings.getNuvioProfileId();
-    final nuvioSession = await NuvioSyncService.instance.hasStoredSession();
+    final ptProg = await _settings.isPlaytorrioCloudProgressSyncEnabled();
+    final ptSet = await _settings.isPlaytorrioCloudSettingsSyncEnabled();
+    final ptSession = await PlaytorrioCloudSyncService.instance.hasStoredSession();
+    final ptCfg = PlaytorrioCloudSyncService.instance.isConfigured;
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -304,9 +307,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _tvRemoteSettingsUrl = platformIsAndroid && DeviceProfile.isAndroidTv
             ? TvSettingsRemoteService().remoteUrl
             : null;
-        _nuvioSyncEnabled = nuvioSync;
-        _nuvioProfileId = nuvioProfile;
-        _nuvioSessionPresent = nuvioSession;
+        _ptCloudProgressSync = ptProg;
+        _ptCloudSettingsSync = ptSet;
+        _ptCloudSessionPresent = ptSession;
+        _ptCloudConfigured = ptCfg;
       });
     }
   }
@@ -402,8 +406,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _traktClientIdController.dispose();
     _traktClientSecretController.dispose();
     _rdApiKeyController.dispose();
-    _nuvioEmailController.dispose();
-    _nuvioPasswordController.dispose();
+    _ptCloudEmailController.dispose();
+    _ptCloudPasswordController.dispose();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
     _jackett.dispose();
@@ -811,8 +815,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('Simkl'),
                     _buildSimklSection(),
                     const SizedBox(height: 32),
-                    _buildSectionHeader('Nuvio'),
-                    _buildNuvioSection(),
+                    _buildSectionHeader('PlayTorrio account (Supabase)'),
+                    _buildPlaytorrioCloudSection(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('MDBlist'),
                     _buildMdblistSection(),
@@ -2012,99 +2016,179 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Nuvio (nuvioapp.space)
+  // PlayTorrio cloud (Supabase — your project)
   // ═══════════════════════════════════════════════════════════════════════
 
-  Future<void> _nuvioSignIn() async {
-    final email = _nuvioEmailController.text.trim();
-    final password = _nuvioPasswordController.text;
+  Future<void> _ptCloudSignIn() async {
+    final email = _ptCloudEmailController.text.trim();
+    final password = _ptCloudPasswordController.text;
     if (email.isEmpty || password.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Enter the email and password for your Nuvio account'),
+            content: Text('Enter email and password for your Supabase user'),
           ),
         );
       }
       return;
     }
-    setState(() => _nuvioSigningIn = true);
+    if (!PlaytorrioCloudSyncService.instance.isConfigured) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Supabase is not configured in this build. Add '
+              'PLAYTORRIO_SUPABASE_URL and PLAYTORRIO_SUPABASE_ANON_KEY, '
+              'or set values in playtorrio_cloud_sync_service.dart for dev.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _ptCloudSigningIn = true);
     try {
-      await NuvioSyncService.instance.signInWithPassword(
+      await PlaytorrioCloudSyncService.instance.signInWithPassword(
         email: email,
         password: password,
       );
       if (!mounted) return;
       setState(() {
-        _nuvioSessionPresent = true;
-        _nuvioSigningIn = false;
-        _nuvioPasswordController.clear();
+        _ptCloudSessionPresent = true;
+        _ptCloudSigningIn = false;
+        _ptCloudPasswordController.clear();
       });
-      if (_nuvioSyncEnabled) {
-        unawaited(NuvioSyncService.instance.pullOnStartup());
+      if (_ptCloudProgressSync || _ptCloudSettingsSync) {
+        unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Signed in to Nuvio. Progress will sync when enabled.'),
+            content: Text('Signed in. Turn on sync options below to use the cloud.'),
           ),
         );
       }
-    } on NuvioAuthException catch (e) {
+    } on PlaytorrioCloudException catch (e) {
       if (mounted) {
-        setState(() => _nuvioSigningIn = false);
+        setState(() => _ptCloudSigningIn = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.message)),
         );
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _nuvioSigningIn = false);
+        setState(() => _ptCloudSigningIn = false);
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Nuvio: $e')));
+            .showSnackBar(SnackBar(content: Text('Account: $e')));
       }
     }
   }
 
-  Future<void> _nuvioSignOut() async {
-    await NuvioSyncService.instance.signOut();
+  Future<void> _ptCloudRegister() async {
+    final email = _ptCloudEmailController.text.trim();
+    final password = _ptCloudPasswordController.text;
+    if (email.isEmpty || password.length < 6) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Use a valid email and password (6+ characters)'),
+          ),
+        );
+      }
+      return;
+    }
+    if (!PlaytorrioCloudSyncService.instance.isConfigured) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Supabase URL/anon key not set in this build.'),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _ptCloudRegistering = true);
+    try {
+      await PlaytorrioCloudSyncService.instance.signUpWithPassword(
+        email: email,
+        password: password,
+      );
+      if (!mounted) return;
+      setState(() {
+        _ptCloudSessionPresent = true;
+        _ptCloudRegistering = false;
+        _ptCloudPasswordController.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Account ready. If email confirmation is on, confirm then sign in.'),
+          ),
+        );
+      }
+    } on PlaytorrioCloudException catch (e) {
+      if (mounted) {
+        setState(() => _ptCloudRegistering = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _ptCloudRegistering = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Register: $e')));
+      }
+    }
+  }
+
+  Future<void> _ptCloudSignOut() async {
+    await PlaytorrioCloudSyncService.instance.signOut();
     if (mounted) {
       setState(() {
-        _nuvioSessionPresent = false;
-        _nuvioPasswordController.clear();
+        _ptCloudSessionPresent = false;
+        _ptCloudPasswordController.clear();
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Signed out of Nuvio')),
+        const SnackBar(content: Text('Signed out of PlayTorrio cloud')),
       );
     }
   }
 
-  Future<void> _nuvioSyncNow() async {
-    if (!_nuvioSessionPresent) return;
-    setState(() => _nuvioPulling = true);
+  Future<void> _ptCloudSyncNow() async {
+    if (!_ptCloudSessionPresent) return;
+    if (!PlaytorrioCloudSyncService.instance.isConfigured) return;
+    setState(() => _ptCloudSyncing = true);
     try {
-      await NuvioSyncService.instance.pullAndMerge();
+      if (_ptCloudProgressSync) {
+        await PlaytorrioCloudSyncService.instance.pullAndMergeProgress();
+      }
+      if (_ptCloudSettingsSync) {
+        await PlaytorrioCloudSyncService.instance.pullUserSettings();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nuvio: progress merged into Continue watching')),
+          const SnackBar(
+            content: Text('Cloud: merged into this device (per enabled options)'),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Nuvio sync: $e')));
+            .showSnackBar(SnackBar(content: Text('Cloud sync: $e')));
       }
     } finally {
-      if (mounted) setState(() => _nuvioPulling = false);
+      if (mounted) setState(() => _ptCloudSyncing = false);
     }
   }
 
-  Widget _buildNuvioSection() {
+  Widget _buildPlaytorrioCloudSection() {
     if (kIsWeb) {
       return const Padding(
         padding: EdgeInsets.all(16),
         child: Text(
-          'Nuvio sync is not available in the web build (local server / storage).',
+          'PlayTorrio cloud sync is not available in the web build.',
           style: TextStyle(color: Colors.white38, fontSize: 13),
         ),
       );
@@ -2114,13 +2198,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Text(
-              'Use the same Nuvio account as on https://nuvioapp.space — '
-              'this syncs Continue watching (TMDB) with your Nuvio watch progress. '
-              'Trakt / Simkl remain separate.',
-              style: TextStyle(
+              _ptCloudConfigured
+                  ? 'Sign in with the email/password you use in your Supabase project. '
+                      'Run the SQL in `supabase/migrations/` in the Supabase SQL editor to create tables. '
+                      'Trakt / Simkl are unchanged.'
+                  : 'This build has no Supabase URL/key. Set PLAYTORRIO_SUPABASE_URL and '
+                      'PLAYTORRIO_SUPABASE_ANON_KEY (Project Settings → API) or edit '
+                      'lib/services/playtorrio_cloud_sync_service.dart for local testing.',
+              style: const TextStyle(
                 color: Colors.white38,
                 fontSize: 13,
                 height: 1.35,
@@ -2129,42 +2217,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 12),
           _buildFocusableToggle(
-            'Sync Continue watching to Nuvio',
-            'When on, position is pushed after each save and can be pulled on startup (profile below).',
-            _nuvioSyncEnabled,
+            'Sync Continue watching (TMDB) to the cloud',
+            'When on, new progress is saved to your account and merged on pull / startup.',
+            _ptCloudProgressSync,
             (val) async {
-              await _settings.setNuvioSyncEnabled(val);
-              if (mounted) {
-                setState(() => _nuvioSyncEnabled = val);
-              }
+              await _settings.setPlaytorrioCloudProgressSyncEnabled(val);
+              if (mounted) setState(() => _ptCloudProgressSync = val);
             },
           ),
           const SizedBox(height: 8),
-          _buildFocusableDropdown(
-            'Nuvio profile (1–4)',
-            'Must match the active profile in your Nuvio account overview.',
-            'Profile $_nuvioProfileId',
-            const ['Profile 1', 'Profile 2', 'Profile 3', 'Profile 4'],
+          _buildFocusableToggle(
+            'Sync app settings to the cloud',
+            'Stremio addons, theme, player toggles, liked songs & playlists, etc. '
+            '(API keys and debrid tokens stay on this device only.)',
+            _ptCloudSettingsSync,
             (val) async {
-              if (val == null) return;
-              final n = int.tryParse(val.split(' ').last ?? '') ?? 1;
-              await _settings.setNuvioProfileId(n);
-              if (mounted) setState(() => _nuvioProfileId = n);
+              await _settings.setPlaytorrioCloudSettingsSyncEnabled(val);
+              if (mounted) setState(() => _ptCloudSettingsSync = val);
             },
           ),
           const SizedBox(height: 12),
           TextField(
-            controller: _nuvioEmailController,
+            controller: _ptCloudEmailController,
             keyboardType: TextInputType.emailAddress,
             decoration: const InputDecoration(
-              labelText: 'Nuvio email',
-              hintText: 'Account email from nuvioapp.space',
+              labelText: 'Email',
               filled: true,
             ),
           ),
           const SizedBox(height: 8),
           TextField(
-            controller: _nuvioPasswordController,
+            controller: _ptCloudPasswordController,
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'Password',
@@ -2176,8 +2259,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _nuvioSigningIn ? null : _nuvioSignIn,
-                  icon: _nuvioSigningIn
+                  onPressed: _ptCloudSigningIn ? null : _ptCloudSignIn,
+                  icon: _ptCloudSigningIn
                       ? const SizedBox(
                           width: 20,
                           height: 20,
@@ -2187,40 +2270,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         )
                       : const Icon(Icons.login),
-                  label: Text(_nuvioSigningIn ? 'Signing in…' : 'Sign in to Nuvio'),
+                  label: Text(_ptCloudSigningIn ? 'Signing in…' : 'Sign in'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _ptCloudRegistering ? null : _ptCloudRegister,
+                  child: Text(_ptCloudRegistering ? 'Creating…' : 'Create account'),
                 ),
               ),
             ],
           ),
-          if (_nuvioSessionPresent) ...[
+          if (_ptCloudSessionPresent) ...[
             const SizedBox(height: 8),
             TextButton(
-              onPressed: _nuvioSignOut,
-              child: const Text('Sign out of Nuvio on this device'),
+              onPressed: _ptCloudSignOut,
+              child: const Text('Sign out on this device'),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: (!_nuvioSyncEnabled || _nuvioPulling) ? null : _nuvioSyncNow,
-              icon: _nuvioPulling
+              onPressed: (!_ptCloudProgressSync && !_ptCloudSettingsSync) ||
+                      _ptCloudSyncing
+                  ? null
+                  : _ptCloudSyncNow,
+              icon: _ptCloudSyncing
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.cloud_download_outlined, size: 20),
-              label: Text(
-                  _nuvioPulling ? 'Merging…' : 'Pull progress from Nuvio now'),
+              label: Text(_ptCloudSyncing
+                  ? 'Merging…'
+                  : 'Pull from cloud now (enabled options)'),
             ),
           ],
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: () {
-              final u = Uri.parse('https://nuvioapp.space/account?tab=overview');
-              launchUrl(u, mode: LaunchMode.externalApplication);
-            },
-            icon: const Icon(Icons.open_in_new, size: 16),
-            label: const Text('Open nuvioapp.space account'),
-          ),
+          if (_ptCloudSessionPresent && _ptCloudSettingsSync) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _ptCloudSyncing
+                  ? null
+                  : () async {
+                      setState(() => _ptCloudSyncing = true);
+                      try {
+                        await PlaytorrioCloudSyncService.instance
+                            .pushUserSettings();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Settings pushed to the cloud'),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('$e')),
+                          );
+                        }
+                      } finally {
+                        if (mounted) setState(() => _ptCloudSyncing = false);
+                      }
+                    },
+              icon: const Icon(Icons.cloud_upload_outlined, size: 20),
+              label: const Text('Push settings to cloud now'),
+            ),
+          ],
         ],
       ),
     );

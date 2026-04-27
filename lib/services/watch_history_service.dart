@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'nuvio_sync_service.dart';
+import 'playtorrio_cloud_sync_service.dart';
 
 class WatchHistoryService {
   static final WatchHistoryService _instance = WatchHistoryService._internal();
@@ -113,7 +113,7 @@ class WatchHistoryService {
       _current = list.cast<Map<String, dynamic>>();
       _controller.add(_current);
 
-      NuvioSyncService.instance.schedulePush(entry);
+      PlaytorrioCloudSyncService.instance.scheduleProgressPush(entry);
     } catch (e) {
       debugPrint('[WatchHistory] Error saving progress: $e');
     }

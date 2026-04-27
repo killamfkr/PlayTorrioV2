@@ -19,7 +19,7 @@ import 'play_torrio_app.dart';
 import 'utils/device_profile.dart';
 import 'utils/tv_settings_remote_service.dart';
 import 'platform_flags.dart';
-import 'services/nuvio_sync_service.dart';
+import 'services/playtorrio_cloud_sync_service.dart';
 
 void setupAppLogging() {
   Logger.root.level = Level.FINER;
@@ -105,7 +105,7 @@ Future<void> bootstrap() async {
 
   await _ensureBundledStremioAddons();
 
-  unawaited(NuvioSyncService.instance.pullOnStartup());
+  unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
 
   runApp(const PlayTorrioApp());
 }

@@ -77,9 +77,11 @@ class SettingsService {
   // Theme preset
   static const String _themePresetKey = 'theme_preset';
 
-  // Nuvio (nuvioapp.space) — sync continue-watching
-  static const String _nuvioSyncEnabledKey = 'nuvio_sync_enabled';
-  static const String _nuvioProfileIdKey = 'nuvio_profile_id';
+  static const String _navbarConfigKey = 'navbar_config';
+
+  // PlayTorrio cloud (Supabase) — continue-watching + whitelisted settings
+  static const String _ptCloudProgressSyncKey = 'pt_cloud_sync_progress';
+  static const String _ptCloudSettingsSyncKey = 'pt_cloud_sync_settings';
 
   /// Notifier that fires when light mode changes so all widgets can react.
   static final ValueNotifier<bool> lightModeNotifier = ValueNotifier<bool>(false);
@@ -564,35 +566,301 @@ class SettingsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Nuvio sync
+  // PlayTorrio cloud (Supabase email/password) — see playtorrio_cloud_sync_service
   // ═══════════════════════════════════════════════════════════════════════════
 
-  Future<bool> isNuvioSyncEnabled() async {
+  Future<bool> isPlaytorrioCloudProgressSyncEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_nuvioSyncEnabledKey) ?? false;
+    return prefs.getBool(_ptCloudProgressSyncKey) ?? false;
   }
 
-  Future<void> setNuvioSyncEnabled(bool v) async {
+  Future<void> setPlaytorrioCloudProgressSyncEnabled(bool v) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_nuvioSyncEnabledKey, v);
+    await prefs.setBool(_ptCloudProgressSyncKey, v);
   }
 
-  /// Profile 1…4, matching the Nuvio account overview.
-  Future<int> getNuvioProfileId() async {
+  Future<bool> isPlaytorrioCloudSettingsSyncEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getInt(_nuvioProfileIdKey) ?? 1).clamp(1, 4);
+    return prefs.getBool(_ptCloudSettingsSyncKey) ?? false;
   }
 
-  Future<void> setNuvioProfileId(int id) async {
+  Future<void> setPlaytorrioCloudSettingsSyncEnabled(bool v) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_nuvioProfileIdKey, id.clamp(1, 4));
+    await prefs.setBool(_ptCloudSettingsSyncKey, v);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Navbar Configuration
-  // ═══════════════════════════════════════════════════════════════════════════
+  static const Set<String> cloudSyncPreferenceKeySet = {
+    _continuePlaybackInBackgroundKey,
+    _showAndroidPipButtonKey,
+    _autoEnterPipAndroidKey,
+    _builtinPlayerSubtitlesEnabledKey,
+    _autoAdvanceNextEpisodeKey,
+    _androidTvMaxStreamBitrateKbpsKey,
+    _externalPlayerKey,
+    _lightModeKey,
+    _themePresetKey,
+    _xmltvEpgUrlKey,
+    _xmltvChannelMapKey,
+    _stremioAddonsKey,
+    _defaultStremioAddonBaseUrlKey,
+    _navbarConfigKey,
+    _sortPreferenceKey,
+    _streamingModeKey,
+    _useDebridKey,
+    _debridServiceKey,
+    _torrentCacheTypeKey,
+    _torrentRamCacheMbKey,
+    _jackettBaseUrlKey,
+    _jackettApiKeyKey,
+    _prowlarrBaseUrlKey,
+    _prowlarrApiKeyKey,
+    _prowlarrTagIdsKey,
+    _subSizeKey,
+    _subColorKey,
+    _subBgOpacityKey,
+    _subBoldKey,
+    _subBottomPaddingKey,
+    _subFontKey,
+  };
 
-  static const String _navbarConfigKey = 'navbar_config';
+  /// Prefs to mirror to Supabase (no tokens / secrets).
+  Future<Map<String, dynamic>> exportForCloudSync() async {
+    final prefs = await SharedPreferences.getInstance();
+    final m = <String, dynamic>{};
+    for (final k in cloudSyncPreferenceKeySet) {
+      if (k != _androidTvMaxStreamBitrateKbpsKey && !prefs.containsKey(k)) {
+        continue;
+      }
+      if (k == _prowlarrTagIdsKey) {
+        m[k] = await getProwlarrTagIds();
+        continue;
+      }
+      if (k == _xmltvChannelMapKey) {
+        final map = await getXmltvChannelMap();
+        m[k] = map;
+        continue;
+      }
+      if (k == _stremioAddonsKey) {
+        final l = prefs.getStringList(_stremioAddonsKey);
+        if (l != null) m[k] = l;
+        continue;
+      }
+      if (k == _navbarConfigKey) {
+        final l = prefs.getStringList(_navbarConfigKey);
+        if (l != null) m[k] = l;
+        continue;
+      }
+      if (k == _androidTvMaxStreamBitrateKbpsKey) {
+        m[k] = await getAndroidTvMaxStreamBitrateKbps();
+        continue;
+      }
+      final v = prefs.get(k);
+      if (v is bool || v is int || v is double || v is String) m[k] = v;
+    }
+    // Liked + playlists (same string keys as [MusicStorageService] read paths)
+    m['prefsLikedSongsKey'] = prefs.getStringList('prefsLikedSongsKey') ?? [];
+    m['prefsPlaylistsKey'] = prefs.getStringList('prefsPlaylistsKey') ?? [];
+    return m;
+  }
+
+  /// Merges remote [map] from Supabase; newer `updated` semantics per-key: we overwrite.
+  Future<void> applyCloudPreferenceMap(Map<String, dynamic> map) async {
+    final p = await SharedPreferences.getInstance();
+    for (final e in map.entries) {
+      final k = e.key;
+      if (!cloudSyncPreferenceKeySet.contains(k) &&
+          k != 'prefsLikedSongsKey' &&
+          k != 'prefsPlaylistsKey') {
+        continue;
+      }
+      final v = e.value;
+      if (k == _prowlarrTagIdsKey && v is List) {
+        await setProwlarrTagIds(v.map((e) => (e as num).toInt()).toList());
+        continue;
+      }
+      if (k == _xmltvChannelMapKey) {
+        if (v is Map) {
+          await setXmltvChannelMap(v.map(
+            (a, b) => MapEntry(a.toString(), b.toString()),
+          ));
+        }
+        continue;
+      }
+      if (k == _stremioAddonsKey && v is List) {
+        await p.setStringList(
+          _stremioAddonsKey,
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        addonChangeNotifier.value++;
+        continue;
+      }
+      if (k == _navbarConfigKey && v is List) {
+        await p.setStringList(
+          _navbarConfigKey,
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        navbarChangeNotifier.value++;
+        continue;
+      }
+      if (k == 'prefsLikedSongsKey' && v is List) {
+        await p.setStringList(
+          'prefsLikedSongsKey',
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == 'prefsPlaylistsKey' && v is List) {
+        await p.setStringList(
+          'prefsPlaylistsKey',
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == _lightModeKey && v is bool) {
+        await setLightMode(v);
+        continue;
+      }
+      if (k == _continuePlaybackInBackgroundKey && v is bool) {
+        await setContinuePlaybackInBackground(v);
+        continue;
+      }
+      if (k == _showAndroidPipButtonKey && v is bool) {
+        await setShowAndroidPipButton(v);
+        continue;
+      }
+      if (k == _autoEnterPipAndroidKey && v is bool) {
+        await setAutoEnterPipAndroid(v);
+        continue;
+      }
+      if (k == _builtinPlayerSubtitlesEnabledKey && v is bool) {
+        await setBuiltinPlayerSubtitlesEnabled(v);
+        continue;
+      }
+      if (k == _autoAdvanceNextEpisodeKey && v is bool) {
+        await setAutoAdvanceNextEpisode(v);
+        continue;
+      }
+      if (k == _androidTvMaxStreamBitrateKbpsKey) {
+        if (v == null) {
+          await clearAndroidTvMaxStreamBitrateKbps();
+        } else if (v is int) {
+          await setAndroidTvMaxStreamBitrateKbps(v);
+        } else {
+          final n = int.tryParse(v.toString());
+          if (n != null) await setAndroidTvMaxStreamBitrateKbps(n);
+        }
+        continue;
+      }
+      if (k == _streamingModeKey && v is bool) {
+        await setStreamingMode(v);
+        continue;
+      }
+      if (k == _useDebridKey && v is bool) {
+        await setUseDebridForStreams(v);
+        continue;
+      }
+      if (k == _sortPreferenceKey && v is String) {
+        await setSortPreference(v);
+        continue;
+      }
+      if (k == _debridServiceKey && v is String) {
+        await setDebridService(v);
+        continue;
+      }
+      if (k == _externalPlayerKey && v is String) {
+        await setExternalPlayer(v);
+        continue;
+      }
+      if (k == _themePresetKey && v is String) {
+        await setThemePreset(v);
+        continue;
+      }
+      if (k == _xmltvEpgUrlKey) {
+        if (v == null) {
+          await setXmltvEpgUrl(null);
+        } else {
+          final s = v.toString();
+          if (s.isEmpty) {
+            await setXmltvEpgUrl(null);
+          } else {
+            await setXmltvEpgUrl(s);
+          }
+        }
+        continue;
+      }
+      if (k == _defaultStremioAddonBaseUrlKey) {
+        final s = v?.toString();
+        if (s == null || s.isEmpty) {
+          await setDefaultStremioAddonBaseUrl(null);
+        } else {
+          await setDefaultStremioAddonBaseUrl(s);
+        }
+        continue;
+      }
+      if (k == _jackettBaseUrlKey) {
+        await setJackettBaseUrl('${v ?? ''}');
+        continue;
+      }
+      if (k == _jackettApiKeyKey) {
+        await setJackettApiKey('${v ?? ''}');
+        continue;
+      }
+      if (k == _prowlarrBaseUrlKey) {
+        await setProwlarrBaseUrl(v?.toString() ?? '');
+        continue;
+      }
+      if (k == _prowlarrApiKeyKey) {
+        await setProwlarrApiKey(v?.toString() ?? '');
+        continue;
+      }
+      if (k == _torrentCacheTypeKey && v is String) {
+        await setTorrentCacheType(v);
+        continue;
+      }
+      if (k == _torrentRamCacheMbKey) {
+        if (v is int) {
+          await setTorrentRamCacheMb(v);
+        } else {
+          final n = int.tryParse('${v ?? 0}');
+          if (n != null) await setTorrentRamCacheMb(n);
+        }
+        continue;
+      }
+      if (k == _subSizeKey && (v is double || v is int)) {
+        await setSubSize(
+          v is int ? v.toDouble() : v as double,
+        );
+        continue;
+      }
+      if (k == _subColorKey) {
+        final n = v is int ? v : int.tryParse('${v ?? 0}') ?? 0xFFFFFFFF;
+        await setSubColor(n);
+        continue;
+      }
+      if (k == _subBgOpacityKey && (v is double || v is int)) {
+        await setSubBgOpacity(
+          v is int ? v.toDouble() : v as double,
+        );
+        continue;
+      }
+      if (k == _subBoldKey && v is bool) {
+        await setSubBold(v);
+        continue;
+      }
+      if (k == _subBottomPaddingKey && (v is double || v is int)) {
+        await setSubBottomPadding(
+          v is int ? v.toDouble() : v as double,
+        );
+        continue;
+      }
+      if (k == _subFontKey && v is String) {
+        await setSubFont(v);
+        continue;
+      }
+    }
+    final music = MusicStorageService();
+    music.likedSongs.value = await music.getLikedSongs();
+  }
 
   /// Notifier that fires when navbar config changes so MainScreen rebuilds.
   static final ValueNotifier<int> navbarChangeNotifier = ValueNotifier<int>(0);
@@ -670,8 +938,8 @@ class SettingsService {
     'trakt_access_token',
     'trakt_refresh_token',
     'trakt_expires_at',
-    'nuvio_access_token',
-    'nuvio_refresh_token',
+    'pt_supabase_access_token',
+    'pt_supabase_refresh_token',
   ];
 
   /// Collects every setting (SharedPreferences + FlutterSecureStorage) into a
@@ -695,7 +963,8 @@ class SettingsService {
       _builtinPlayerSubtitlesEnabledKey,
       _autoAdvanceNextEpisodeKey,
       _subBoldKey,
-      _nuvioSyncEnabledKey,
+      _ptCloudProgressSyncKey,
+      _ptCloudSettingsSyncKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -726,7 +995,6 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
-      _nuvioProfileIdKey,
     ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
@@ -786,7 +1054,8 @@ class SettingsService {
       _builtinPlayerSubtitlesEnabledKey,
       _autoAdvanceNextEpisodeKey,
       _subBoldKey,
-      _nuvioSyncEnabledKey,
+      _ptCloudProgressSyncKey,
+      _ptCloudSettingsSyncKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -821,7 +1090,6 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
-      _nuvioProfileIdKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());
