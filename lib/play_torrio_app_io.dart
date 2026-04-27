@@ -9,6 +9,7 @@ import 'utils/tv_guide_refresh.dart';
 import 'platform_flags.dart';
 
 import 'play_torrio_splash.dart';
+import 'screens/playtorrio_profile_gate.dart';
 
 class PlayTorrioApp extends StatefulWidget {
   const PlayTorrioApp({super.key});
@@ -68,7 +69,9 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
       title: 'PlayTorrio Native',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.themeData,
-      home: const SplashScreen(),
+      home: const PlaytorrioProfileGate(
+        child: SplashScreen(),
+      ),
     );
   }
 }

@@ -83,6 +83,73 @@ class SettingsService {
   static const String _ptCloudProgressSyncKey = 'pt_cloud_sync_progress';
   static const String _ptCloudSettingsSyncKey = 'pt_cloud_sync_settings';
   static const String _ptCloudDebridSyncKey = 'pt_cloud_sync_debrid';
+  static const String _ptProfileIdKey = 'pt_active_profile_id';
+  static const String _ptProfileGateKey = 'pt_require_profile_gate';
+  static const String _ptProfileLocalMetaKey = 'pt_profile_local_meta_json';
+
+  /// 1..4. Namespaces [WatchHistoryService] and cloud row `profile_id`.
+  Future<int> getPlaytorrioProfileId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt(_ptProfileIdKey) ?? 1).clamp(1, 4);
+  }
+
+  Future<void> setPlaytorrioProfileId(int id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_ptProfileIdKey, id.clamp(1, 4));
+  }
+
+  /// When true, the app shows the profile / account gate on launch.
+  Future<bool> getPlaytorrioProfileGateEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_ptProfileGateKey) ?? true;
+  }
+
+  Future<void> setPlaytorrioProfileGateEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_ptProfileGateKey, v);
+  }
+
+  /// Local only: { "1": {"name": "....", "avatar": 0}, ... } for the picker UI.
+  Future<Map<String, Map<String, dynamic>>> getLocalProfileDisplayMeta() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_ptProfileLocalMetaKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final o = json.decode(raw);
+      if (o is! Map) return {};
+      return o.map((k, v) {
+        if (v is Map) {
+          return MapEntry(
+            k.toString(),
+            Map<String, dynamic>.from(
+              v.map((a, b) => MapEntry(a.toString(), b)),
+            ),
+          );
+        }
+        return MapEntry(k.toString(), <String, dynamic>{});
+      });
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> setLocalProfileDisplayMeta(
+    int profileId, {
+    String? name,
+    int? avatarKey,
+  }) async {
+    final id = profileId.clamp(1, 4);
+    final all = await getLocalProfileDisplayMeta();
+    all['$id'] = {
+      'name': name,
+      'avatar': avatarKey ?? 0,
+    };
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _ptProfileLocalMetaKey,
+      json.encode(all),
+    );
+  }
 
   /// Notifier that fires when light mode changes so all widgets can react.
   static final ValueNotifier<bool> lightModeNotifier = ValueNotifier<bool>(false);
@@ -977,6 +1044,7 @@ class SettingsService {
       _ptCloudProgressSyncKey,
       _ptCloudSettingsSyncKey,
       _ptCloudDebridSyncKey,
+      _ptProfileGateKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -998,6 +1066,7 @@ class SettingsService {
       TraktService.prefsClientSecretKey,
       _subFontKey,
       _themePresetKey,
+      _ptProfileLocalMetaKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -1007,6 +1076,7 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
+      _ptProfileIdKey,
     ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
@@ -1069,6 +1139,7 @@ class SettingsService {
       _ptCloudProgressSyncKey,
       _ptCloudSettingsSyncKey,
       _ptCloudDebridSyncKey,
+      _ptProfileGateKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -1093,6 +1164,7 @@ class SettingsService {
       TraktService.prefsClientSecretKey,
       _subFontKey,
       _themePresetKey,
+      _ptProfileLocalMetaKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setString(key, prefsMap[key] as String);
@@ -1103,6 +1175,7 @@ class SettingsService {
       _torrentRamCacheMbKey,
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
+      _ptProfileIdKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());

@@ -137,6 +137,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _ptCloudRegistering = false;
   bool _ptCloudSyncing = false;
   bool _ptCloudConfigured = false;
+  bool _ptProfileGateOnStart = true;
+  int _ptActiveProfileId = 1;
 
   @override
   void initState() {
@@ -233,6 +235,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ptDebrid = await _settings.isPlaytorrioCloudDebridSyncEnabled();
     final ptSession = await PlaytorrioCloudSyncService.instance.hasStoredSession();
     final ptCfg = PlaytorrioCloudSyncService.instance.isConfigured;
+    final ptGate = await _settings.getPlaytorrioProfileGateEnabled();
+    final ptProf = await _settings.getPlaytorrioProfileId();
 
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
@@ -314,6 +318,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudDebridSync = ptDebrid;
         _ptCloudSessionPresent = ptSession;
         _ptCloudConfigured = ptCfg;
+        _ptProfileGateOnStart = ptGate;
+        _ptActiveProfileId = ptProf;
       });
     }
   }
@@ -2220,6 +2226,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: Colors.white38,
                 fontSize: 13,
                 height: 1.35,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _buildFocusableToggle(
+            'Show profile screen on app launch',
+            "Nuvio-style: sign in, pick 1 of 4 profiles, then a full cloud backup for that profile. TV / web skip this screen.",
+            _ptProfileGateOnStart,
+            (val) async {
+              await _settings.setPlaytorrioProfileGateEnabled(val);
+              if (mounted) setState(() => _ptProfileGateOnStart = val);
+            },
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Text(
+              'Last selected profile: $_ptActiveProfileId  (change on next launch or clear app data)',
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 12,
+                height: 1.3,
               ),
             ),
           ),

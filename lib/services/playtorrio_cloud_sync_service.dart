@@ -35,6 +35,9 @@ class PlaytorrioCloudSyncService {
   static const _restWatch = '/rest/v1/user_watch_history';
   static const _restSettings = '/rest/v1/user_settings';
   static const _restDebrid = '/rest/v1/user_debrid_secrets';
+  static const _restProfileMeta = '/rest/v1/user_profile_meta';
+
+  Future<int> _activeProfileId() => _settings.getPlaytorrioProfileId();
 
   final _secure = const FlutterSecureStorage();
   final _settings = SettingsService();
@@ -112,6 +115,59 @@ class PlaytorrioCloudSyncService {
     final t = await _accessToken;
     if (t == null) return null;
     return userIdFromJwt(t);
+  }
+
+  /// Full backup for the active [profile_id]: history + settings + debrid + profile meta.
+  Future<void> pushFullProfileBackup() async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await hasStoredSession()) return;
+    try {
+      await _ensureAccess();
+      final wh = WatchHistoryService();
+      await _pushProgressList(await wh.getHistory());
+      if (await isSettingsSyncEnabled()) await pushUserSettings();
+      if (await isDebridSyncEnabled()) await pushDebridSecrets();
+      await pushProfileMetaRow();
+    } catch (e) {
+      debugPrint('[PT Cloud] full profile backup: $e');
+    }
+  }
+
+  Future<void> _pushProgressList(List<Map<String, dynamic>> list) async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await hasStoredSession()) return;
+    await _ensureAccess();
+    final token = await _accessToken;
+    if (token == null) return;
+    final uid = await _currentUserId();
+    if (uid == null) return;
+    final pid = await _activeProfileId();
+    var bounded = list;
+    if (bounded.length > 50) bounded = bounded.sublist(0, 50);
+
+    final res = await http.post(
+      Uri.parse('$_base$_restWatch'),
+      headers: {
+        ..._headers(token),
+        'Prefer': 'return=minimal,resolution=merge-duplicates',
+      },
+      body: json.encode({
+        'user_id': uid,
+        'profile_id': pid,
+        'entries': bounded,
+      }),
+    );
+    if (res.statusCode == 401) await signOut();
+    if (res.statusCode == 409 || res.statusCode == 400) {
+      final patch = await http.patch(
+        Uri.parse('$_base$_restWatch?user_id=eq.$uid&profile_id=eq.$pid'),
+        headers: {..._headers(token), 'Prefer': 'return=minimal'},
+        body: json.encode({'entries': bounded}),
+      );
+      if (patch.statusCode == 401) await signOut();
+    }
   }
 
   Future<void> _ensureAccess() async {
@@ -250,9 +306,14 @@ class PlaytorrioCloudSyncService {
     await _ensureAccess();
     final token = await _accessToken;
     if (token == null) return;
+    final userId = await _currentUserId();
+    if (userId == null) return;
 
+    final pid = await _activeProfileId();
     final res = await http.get(
-      Uri.parse('$_base$_restWatch?select=entries'),
+      Uri.parse(
+        '$_base$_restWatch?select=entries&user_id=eq.$userId&profile_id=eq.$pid',
+      ),
       headers: _headers(token),
     );
     if (res.statusCode == 401) {
@@ -279,19 +340,19 @@ class PlaytorrioCloudSyncService {
       final e = Map<String, dynamic>.from(
         raw.map((k, v) => MapEntry(k.toString(), v)),
       );
-      final uid = e['uniqueId']?.toString();
-      if (uid == null || uid.isEmpty) continue;
+      final entryUid = e['uniqueId']?.toString();
+      if (entryUid == null || entryUid.isEmpty) continue;
       final newPos = e['position'] is int
           ? e['position'] as int
           : int.tryParse('${e['position'] ?? 0}') ?? 0;
-      final old = byUnique[uid];
+      final old = byUnique[entryUid];
       if (old != null) {
         final oldPos = old['position'] is int
             ? old['position'] as int
             : (old['position'] as num?)?.toInt() ?? 0;
         if (newPos <= oldPos) continue;
       }
-      byUnique[uid] = e;
+      byUnique[entryUid] = e;
     }
 
     var merged = byUnique.values.toList();
@@ -325,6 +386,7 @@ class PlaytorrioCloudSyncService {
     list.removeWhere((e) => e['uniqueId'] == newEntry['uniqueId']);
     list.insert(0, newEntry);
     if (list.length > 50) list = list.sublist(0, 50);
+    final pid = await _activeProfileId();
 
     final res = await http.post(
       Uri.parse('$_base$_restWatch'),
@@ -334,13 +396,14 @@ class PlaytorrioCloudSyncService {
       },
       body: json.encode({
         'user_id': uid,
+        'profile_id': pid,
         'entries': list,
       }),
     );
     if (res.statusCode == 401) await signOut();
     if (res.statusCode == 409 || res.statusCode == 400) {
       final patch = await http.patch(
-        Uri.parse('$_base$_restWatch?user_id=eq.$uid'),
+        Uri.parse('$_base$_restWatch?user_id=eq.$uid&profile_id=eq.$pid'),
         headers: {..._headers(token), 'Prefer': 'return=minimal'},
         body: json.encode({'entries': list}),
       );
@@ -376,8 +439,13 @@ class PlaytorrioCloudSyncService {
     final token = await _accessToken;
     if (token == null) return;
 
+    final userId = await _currentUserId();
+    if (userId == null) return;
+    final pid = await _activeProfileId();
     final res = await http.get(
-      Uri.parse('$_base$_restSettings?select=prefs'),
+      Uri.parse(
+        '$_base$_restSettings?select=prefs&user_id=eq.$userId&profile_id=eq.$pid',
+      ),
       headers: _headers(token),
     );
     if (res.statusCode == 401) {
@@ -410,6 +478,7 @@ class PlaytorrioCloudSyncService {
     if (token == null) return;
     final uid = await _currentUserId();
     if (uid == null) return;
+    final pid = await _activeProfileId();
 
     final map = await _exportPrefsMap();
     if (map.isEmpty) return;
@@ -422,13 +491,14 @@ class PlaytorrioCloudSyncService {
       },
       body: json.encode({
         'user_id': uid,
+        'profile_id': pid,
         'prefs': map,
       }),
     );
     if (res.statusCode == 401) await signOut();
     if (res.statusCode == 409 || res.statusCode == 400) {
       final patch = await http.patch(
-        Uri.parse('$_base$_restSettings?user_id=eq.$uid'),
+        Uri.parse('$_base$_restSettings?user_id=eq.$uid&profile_id=eq.$pid'),
         headers: {..._headers(token), 'Prefer': 'return=minimal'},
         body: json.encode({'prefs': map}),
       );
@@ -464,6 +534,7 @@ class PlaytorrioCloudSyncService {
     if (token == null) return;
     final uid = await _currentUserId();
     if (uid == null) return;
+    final pid = await _activeProfileId();
 
     final secrets = await DebridApi().exportDebridKeysForCloud();
     final res = await http.post(
@@ -474,13 +545,14 @@ class PlaytorrioCloudSyncService {
       },
       body: json.encode({
         'user_id': uid,
+        'profile_id': pid,
         'secrets': secrets,
       }),
     );
     if (res.statusCode == 401) await signOut();
     if (res.statusCode == 409 || res.statusCode == 400) {
       final patch = await http.patch(
-        Uri.parse('$_base$_restDebrid?user_id=eq.$uid'),
+        Uri.parse('$_base$_restDebrid?user_id=eq.$uid&profile_id=eq.$pid'),
         headers: {..._headers(token), 'Prefer': 'return=minimal'},
         body: json.encode({'secrets': secrets}),
       );
@@ -504,8 +576,13 @@ class PlaytorrioCloudSyncService {
     final token = await _accessToken;
     if (token == null) return;
 
+    final userId = await _currentUserId();
+    if (userId == null) return;
+    final pid = await _activeProfileId();
     final res = await http.get(
-      Uri.parse('$_base$_restDebrid?select=secrets'),
+      Uri.parse(
+        '$_base$_restDebrid?select=secrets&user_id=eq.$userId&profile_id=eq.$pid',
+      ),
       headers: _headers(token),
     );
     if (res.statusCode == 401) {
@@ -540,6 +617,7 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
     try {
+      await pullProfileMeta();
       if (await isProgressSyncEnabled()) {
         await pullAndMergeProgress();
       }
@@ -551,6 +629,80 @@ class PlaytorrioCloudSyncService {
       }
     } catch (e) {
       debugPrint('[PT Cloud] startup: $e');
+    }
+  }
+
+  /// Display names + avatar (0–7) for the profile picker, synced per account.
+  Future<void> pushProfileMetaRow() async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await hasStoredSession()) return;
+    await _ensureAccess();
+    final token = await _accessToken;
+    if (token == null) return;
+    final userId = await _currentUserId();
+    if (userId == null) return;
+    final pid = await _activeProfileId();
+    final local = await _settings.getLocalProfileDisplayMeta();
+    final row = local['$pid'] ?? {};
+    final name = row['name'] as String?;
+    final avatar = (row['avatar'] is int) ? row['avatar'] as int : 0;
+    final body = {
+      'user_id': userId,
+      'profile_id': pid,
+      'name': name,
+      'avatar_key': avatar.clamp(0, 7),
+    };
+    final res = await http.post(
+      Uri.parse('$_base$_restProfileMeta'),
+      headers: {
+        ..._headers(token),
+        'Prefer': 'return=minimal,resolution=merge-duplicates',
+      },
+      body: json.encode(body),
+    );
+    if (res.statusCode == 401) await signOut();
+    if (res.statusCode == 409 || res.statusCode == 400) {
+      await http.patch(
+        Uri.parse('$_base$_restProfileMeta?user_id=eq.$userId&profile_id=eq.$pid'),
+        headers: {..._headers(token), 'Prefer': 'return=minimal'},
+        body: json.encode({
+          'name': name,
+          'avatar_key': avatar.clamp(0, 7),
+        }),
+      );
+    }
+  }
+
+  Future<void> pullProfileMeta() async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await hasStoredSession()) return;
+    await _ensureAccess();
+    final token = await _accessToken;
+    if (token == null) return;
+    final userId = await _currentUserId();
+    if (userId == null) return;
+    final res = await http.get(
+      Uri.parse('$_base$_restProfileMeta?user_id=eq.$userId'),
+      headers: _headers(token),
+    );
+    if (res.statusCode != 200) return;
+    final list = json.decode(res.body);
+    if (list is! List) return;
+    for (final raw in list) {
+      if (raw is! Map) continue;
+      final p = (raw['profile_id'] is int)
+          ? raw['profile_id'] as int
+          : int.tryParse('${raw['profile_id']}') ?? 0;
+      if (p < 1 || p > 4) continue;
+      await _settings.setLocalProfileDisplayMeta(
+        p,
+        name: raw['name']?.toString(),
+        avatarKey: (raw['avatar_key'] is int)
+            ? raw['avatar_key'] as int
+            : int.tryParse('${raw['avatar_key'] ?? 0}'),
+      );
     }
   }
 

@@ -13,6 +13,7 @@ import 'api/audio_handler.dart';
 import 'api/audiobook_player_service.dart';
 import 'api/debrid_api.dart';
 import 'api/settings_service.dart';
+import 'services/watch_history_service.dart';
 import 'api/music_player_service.dart';
 import 'api/stremio_service.dart';
 import 'utils/dlstreams_top_home.dart';
@@ -104,13 +105,13 @@ Future<void> bootstrap() async {
   await SettingsService().initLightMode();
   await SettingsService().getBuiltinPlayerSubtitlesEnabled();
 
+  await WatchHistoryService.ensureProfileFromSettings();
+
   await _ensureBundledStremioAddons();
 
   DebridApi.onDebridKeysChanged = () {
     unawaited(PlaytorrioCloudSyncService.instance.scheduleDebridPush());
   };
-
-  unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
 
   runApp(const PlayTorrioApp());
 }

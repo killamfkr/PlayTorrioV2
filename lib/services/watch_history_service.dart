@@ -3,27 +3,47 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../api/settings_service.dart';
 import 'playtorrio_cloud_sync_service.dart';
 
 class WatchHistoryService {
   static final WatchHistoryService _instance = WatchHistoryService._internal();
   factory WatchHistoryService() => _instance;
   
-  WatchHistoryService._internal() {
-    _init();
-  }
+  WatchHistoryService._internal();
 
-  static const String _key = 'watch_history';
-  static const String _dismissedKey = 'dismissed_history';
+  /// 1..4; local storage is namespaced (Nuvio-style profiles). Default 1 until
+  /// [rebindToProfile] or [ensureProfileFromSettings] runs.
+  static int _activeProfileId = 1;
+  static int get activeProfileId => _activeProfileId;
+
+  static const String _legacyKey = 'watch_history';
+  static const String _legacyDismissed = 'dismissed_history';
+
+  String get _key => 'pt_profile_${_activeProfileId}_watch_history';
+  String get _dismissedKey => 'pt_profile_${_activeProfileId}_dismissed_history';
   final _controller = StreamController<List<Map<String, dynamic>>>.broadcast();
   List<Map<String, dynamic>> _current = [];
 
   Stream<List<Map<String, dynamic>>> get historyStream => _controller.stream;
   List<Map<String, dynamic>> get current => _current;
 
-  Future<void> _init() async {
+  /// Call after [SettingsService] is available (e.g. [bootstrap] before runApp).
+  static Future<void> ensureProfileFromSettings() async {
+    final p = await SettingsService().getPlaytorrioProfileId();
+    await rebindToProfile(p);
+  }
+
+  /// Call when user switches profile (after writing new id to [SettingsService]).
+  static Future<void> rebindToProfile(int profileId) {
+    final id = profileId.clamp(1, 4);
+    _activeProfileId = id;
+    return _instance._reloadFromDisk();
+  }
+
+  Future<void> _reloadFromDisk() async {
     _current = await getHistory();
-    _controller.add(_current);
+    if (!_controller.isClosed) _controller.add(_current);
   }
 
   // Save progress
@@ -135,9 +155,22 @@ class WatchHistoryService {
   Future<List<Map<String, dynamic>>> getHistory() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      // One-time: migrate unscoped 'watch_history' into profile 1
+      if (_activeProfileId == 1) {
+        final leg = prefs.getString(_legacyKey);
+        if (leg != null &&
+            leg.isNotEmpty &&
+            (prefs.getString(_key) == null || prefs.getString(_key)!.isEmpty)) {
+          await prefs.setString(_key, leg);
+        }
+        final dLeg = prefs.getString(_legacyDismissed);
+        if (dLeg != null && prefs.getString(_dismissedKey) == null) {
+          await prefs.setString(_dismissedKey, dLeg);
+        }
+      }
       final String? jsonString = prefs.getString(_key);
       if (jsonString == null) return [];
-      
+
       final List<dynamic> list = json.decode(jsonString);
       return list.cast<Map<String, dynamic>>();
     } catch (e) {
