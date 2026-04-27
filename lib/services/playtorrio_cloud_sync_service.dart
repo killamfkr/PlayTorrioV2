@@ -9,19 +9,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/settings_service.dart';
 import 'watch_history_service.dart';
 
-/// **Configure your Supabase project** (Dashboard → [your org] → project → API):
-/// - `PLAYTORRIO_SUPABASE_URL` and `PLAYTORRIO_SUPABASE_ANON_KEY` as `--dart-define` at build time, **or**
-/// - set [kPlaytorrioSupabaseUrl] / [kPlaytorrioSupabaseAnonKey] below for local dev only.
+/// **Supabase** — defaults point at the PlayTorrio project; override with
+/// `PLAYTORRIO_SUPABASE_URL` / `PLAYTORRIO_SUPABASE_ANON_KEY` via `--dart-define` if needed.
 ///
 /// **Database:** run `supabase/migrations/20260401000000_playtorrio_user_sync.sql` in the SQL editor.
 
 const String kPlaytorrioSupabaseUrl = String.fromEnvironment(
   'PLAYTORRIO_SUPABASE_URL',
-  defaultValue: '',
+  defaultValue: 'https://lxapazzlduwwecatebti.supabase.co',
 );
 const String kPlaytorrioSupabaseAnonKey = String.fromEnvironment(
   'PLAYTORRIO_SUPABASE_ANON_KEY',
-  defaultValue: '',
+  defaultValue:
+      'sb_publishable_kg9O7hjt0PKdXDpvuC9scQ_KRsw4MLg',
 );
 
 class PlaytorrioCloudSyncService {
