@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/episode_matcher.dart';
+import 'debrid_storage_keys.dart';
 
 class DebridFile {
   final String filename;
@@ -18,6 +19,10 @@ class DebridApi {
   static final DebridApi _instance = DebridApi._internal();
   factory DebridApi() => _instance;
   DebridApi._internal();
+
+  /// Set from `bootstrap_io` to push debrid keys to Supabase when enabled.
+  static void Function()? onDebridKeysChanged;
+  static bool _suppressDebridCloudCallback = false;
 
   // We use plain SharedPreferences instead of flutter_secure_storage. The
   // secure-storage backends (Android Keystore, macOS Keychain) can hang or
@@ -56,7 +61,7 @@ class DebridApi {
   // OAuth device flow (and its 1h access-token expiry) entirely, so the login
   // never silently disappears across restarts.
 
-  static const String _rdTokenKey = 'rd_access_token';
+  static const String _rdTokenKey = DebridStorageKeys.rdToken;
 
   Future<void> saveRDApiKey(String key) async {
     final trimmed = key.trim();
@@ -65,6 +70,7 @@ class DebridApi {
       return;
     }
     await _safeWrite(_rdTokenKey, trimmed);
+    _afterDebridWrite();
   }
 
   Future<String?> getRDAccessToken() async {
@@ -100,6 +106,7 @@ class DebridApi {
     ]) {
       await _safeDelete(key);
     }
+    _afterDebridWrite();
   }
 
   // --- Real-Debrid Flow ---
@@ -259,11 +266,12 @@ class DebridApi {
   // --- TorBox Flow ---
 
   Future<void> saveTorBoxKey(String key) async {
-    await _safeWrite('torbox_api_key', key.trim());
+    await _safeWrite(DebridStorageKeys.torbox, key.trim());
+    _afterDebridWrite();
   }
 
   Future<String?> getTorBoxKey() async {
-    return await _safeRead('torbox_api_key');
+    return await _safeRead(DebridStorageKeys.torbox);
   }
 
   Future<List<DebridFile>> resolveTorBox(
@@ -353,11 +361,12 @@ class DebridApi {
   // so EpisodeMatcher can do its thing on full paths.
 
   Future<void> saveAllDebridKey(String key) async {
-    await _safeWrite('alldebrid_api_key', key.trim());
+    await _safeWrite(DebridStorageKeys.allDebrid, key.trim());
+    _afterDebridWrite();
   }
 
   Future<String?> getAllDebridKey() async {
-    return await _safeRead('alldebrid_api_key');
+    return await _safeRead(DebridStorageKeys.allDebrid);
   }
 
   /// Recursively walks AllDebrid's nested file tree and collects every file
@@ -544,11 +553,12 @@ class DebridApi {
   // Auth is `apikey` as a form field, NOT a Bearer header.
 
   Future<void> savePremiumizeKey(String key) async {
-    await _safeWrite('premiumize_api_key', key.trim());
+    await _safeWrite(DebridStorageKeys.premiumize, key.trim());
+    _afterDebridWrite();
   }
 
   Future<String?> getPremiumizeKey() async {
-    return await _safeRead('premiumize_api_key');
+    return await _safeRead(DebridStorageKeys.premiumize);
   }
 
   /// Recursively walks a Premiumize folder/list response, collecting every
@@ -733,11 +743,12 @@ class DebridApi {
   // Errors come back as {success: false, error: "code"} with HTTP 4xx/5xx.
 
   Future<void> saveDebridLinkKey(String key) async {
-    await _safeWrite('debridlink_api_key', key.trim());
+    await _safeWrite(DebridStorageKeys.debridLink, key.trim());
+    _afterDebridWrite();
   }
 
   Future<String?> getDebridLinkKey() async {
-    return await _safeRead('debridlink_api_key');
+    return await _safeRead(DebridStorageKeys.debridLink);
   }
 
   Map<String, dynamic> _dlDecode(http.Response res) {
@@ -882,6 +893,67 @@ class DebridApi {
         return resolveDebridLink(magnet, season: season, episode: episode);
       default:
         throw Exception('Unknown debrid service: $service');
+    }
+  }
+
+  void _afterDebridWrite() {
+    if (_suppressDebridCloudCallback) return;
+    try {
+      onDebridKeysChanged?.call();
+    } catch (_) {}
+  }
+
+  /// Keys with values for `user_debrid_secrets` in Supabase.
+  Future<Map<String, String>> exportDebridKeysForCloud() async {
+    final out = <String, String>{};
+    for (final k in [
+      _rdTokenKey,
+      DebridStorageKeys.torbox,
+      DebridStorageKeys.allDebrid,
+      DebridStorageKeys.premiumize,
+      DebridStorageKeys.debridLink,
+    ]) {
+      final v = await _safeRead(k);
+      if (v != null && v.isNotEmpty) out[k] = v;
+    }
+    return out;
+  }
+
+  /// Apply remote debrid map from cloud pull (no cloud push callback).
+  Future<void> applyDebridKeysFromCloudMap(Map<String, dynamic> map) async {
+    _suppressDebridCloudCallback = true;
+    try {
+      const keys = <String>[
+        _rdTokenKey,
+        DebridStorageKeys.torbox,
+        DebridStorageKeys.allDebrid,
+        DebridStorageKeys.premiumize,
+        DebridStorageKeys.debridLink,
+      ];
+      for (final k in keys) {
+        if (!map.containsKey(k)) continue;
+        final v = map[k];
+        if (v == null) {
+          if (k == _rdTokenKey) {
+            await logoutRD();
+          } else {
+            await _safeDelete(k);
+          }
+          continue;
+        }
+        final s = v.toString();
+        if (s.isEmpty) {
+          if (k == _rdTokenKey) {
+            await logoutRD();
+          } else {
+            await _safeDelete(k);
+          }
+        } else {
+          await _safeWrite(k, s);
+        }
+      }
+    } finally {
+      _suppressDebridCloudCallback = false;
     }
   }
 }

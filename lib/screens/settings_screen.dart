@@ -131,6 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _ptCloudPasswordController = TextEditingController();
   bool _ptCloudProgressSync = false;
   bool _ptCloudSettingsSync = false;
+  bool _ptCloudDebridSync = false;
   bool _ptCloudSessionPresent = false;
   bool _ptCloudSigningIn = false;
   bool _ptCloudRegistering = false;
@@ -229,6 +230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final ptProg = await _settings.isPlaytorrioCloudProgressSyncEnabled();
     final ptSet = await _settings.isPlaytorrioCloudSettingsSyncEnabled();
+    final ptDebrid = await _settings.isPlaytorrioCloudDebridSyncEnabled();
     final ptSession = await PlaytorrioCloudSyncService.instance.hasStoredSession();
     final ptCfg = PlaytorrioCloudSyncService.instance.isConfigured;
 
@@ -309,6 +311,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : null;
         _ptCloudProgressSync = ptProg;
         _ptCloudSettingsSync = ptSet;
+        _ptCloudDebridSync = ptDebrid;
         _ptCloudSessionPresent = ptSession;
         _ptCloudConfigured = ptCfg;
       });
@@ -2058,7 +2061,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudSigningIn = false;
         _ptCloudPasswordController.clear();
       });
-      if (_ptCloudProgressSync || _ptCloudSettingsSync) {
+      if (_ptCloudProgressSync ||
+          _ptCloudSettingsSync ||
+          _ptCloudDebridSync) {
         unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
       }
       if (mounted) {
@@ -2166,6 +2171,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (_ptCloudSettingsSync) {
         await PlaytorrioCloudSyncService.instance.pullUserSettings();
       }
+      if (_ptCloudDebridSync) {
+        await PlaytorrioCloudSyncService.instance.pullDebridSecrets();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -2229,11 +2237,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildFocusableToggle(
             'Sync app settings to the cloud',
             'Stremio addons, theme, player toggles, liked songs & playlists, etc. '
-            '(API keys and debrid tokens stay on this device only.)',
+            'Trakt / other integrations stay local unless you sync them in exports.',
             _ptCloudSettingsSync,
             (val) async {
               await _settings.setPlaytorrioCloudSettingsSyncEnabled(val);
               if (mounted) setState(() => _ptCloudSettingsSync = val);
+            },
+          ),
+          const SizedBox(height: 8),
+          _buildFocusableToggle(
+            'Sync debrid API keys to the cloud',
+            'Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link. Stored in your Supabase project '
+            'with row-level security. Anyone with your login can see these; rotate keys if a device is lost.',
+            _ptCloudDebridSync,
+            (val) async {
+              await _settings.setPlaytorrioCloudDebridSyncEnabled(val);
+              if (mounted) setState(() => _ptCloudDebridSync = val);
             },
           ),
           const SizedBox(height: 12),
@@ -2290,7 +2309,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: (!_ptCloudProgressSync && !_ptCloudSettingsSync) ||
+              onPressed: (!_ptCloudProgressSync &&
+                          !_ptCloudSettingsSync &&
+                          !_ptCloudDebridSync) ||
                       _ptCloudSyncing
                   ? null
                   : _ptCloudSyncNow,
@@ -2335,6 +2356,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
               icon: const Icon(Icons.cloud_upload_outlined, size: 20),
               label: const Text('Push settings to cloud now'),
+            ),
+          ],
+          if (_ptCloudSessionPresent && _ptCloudDebridSync) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _ptCloudSyncing
+                  ? null
+                  : () async {
+                      setState(() => _ptCloudSyncing = true);
+                      try {
+                        await PlaytorrioCloudSyncService.instance
+                            .pushDebridSecrets();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Debrid keys pushed to the cloud'),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('$e')),
+                          );
+                        }
+                      } finally {
+                        if (mounted) setState(() => _ptCloudSyncing = false);
+                      }
+                    },
+              icon: const Icon(Icons.key_outlined, size: 20),
+              label: const Text('Push debrid keys to cloud now'),
             ),
           ],
         ],

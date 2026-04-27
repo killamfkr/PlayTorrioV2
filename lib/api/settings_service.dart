@@ -79,9 +79,10 @@ class SettingsService {
 
   static const String _navbarConfigKey = 'navbar_config';
 
-  // PlayTorrio cloud (Supabase) — continue-watching + whitelisted settings
+  // PlayTorrio cloud (Supabase) — continue-watching, settings, debrid API keys
   static const String _ptCloudProgressSyncKey = 'pt_cloud_sync_progress';
   static const String _ptCloudSettingsSyncKey = 'pt_cloud_sync_settings';
+  static const String _ptCloudDebridSyncKey = 'pt_cloud_sync_debrid';
 
   /// Notifier that fires when light mode changes so all widgets can react.
   static final ValueNotifier<bool> lightModeNotifier = ValueNotifier<bool>(false);
@@ -589,6 +590,16 @@ class SettingsService {
     await prefs.setBool(_ptCloudSettingsSyncKey, v);
   }
 
+  Future<bool> isPlaytorrioCloudDebridSyncEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_ptCloudDebridSyncKey) ?? false;
+  }
+
+  Future<void> setPlaytorrioCloudDebridSyncEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_ptCloudDebridSyncKey, v);
+  }
+
   static const Set<String> cloudSyncPreferenceKeySet = {
     _continuePlaybackInBackgroundKey,
     _showAndroidPipButtonKey,
@@ -965,6 +976,7 @@ class SettingsService {
       _subBoldKey,
       _ptCloudProgressSyncKey,
       _ptCloudSettingsSyncKey,
+      _ptCloudDebridSyncKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -1056,6 +1068,7 @@ class SettingsService {
       _subBoldKey,
       _ptCloudProgressSyncKey,
       _ptCloudSettingsSyncKey,
+      _ptCloudDebridSyncKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);

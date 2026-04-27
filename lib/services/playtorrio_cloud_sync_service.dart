@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../api/debrid_api.dart';
 import '../api/settings_service.dart';
 import 'watch_history_service.dart';
 
@@ -33,6 +34,7 @@ class PlaytorrioCloudSyncService {
 
   static const _restWatch = '/rest/v1/user_watch_history';
   static const _restSettings = '/rest/v1/user_settings';
+  static const _restDebrid = '/rest/v1/user_debrid_secrets';
 
   final _secure = const FlutterSecureStorage();
   final _settings = SettingsService();
@@ -233,6 +235,11 @@ class PlaytorrioCloudSyncService {
 
   Future<void> setSettingsSyncEnabled(bool v) =>
       _settings.setPlaytorrioCloudSettingsSyncEnabled(v);
+
+  Future<bool> isDebridSyncEnabled() => _settings.isPlaytorrioCloudDebridSyncEnabled();
+
+  Future<void> setDebridSyncEnabled(bool v) =>
+      _settings.setPlaytorrioCloudDebridSyncEnabled(v);
 
   /// Merge remote `Continue watching` into local storage.
   Future<void> pullAndMergeProgress() async {
@@ -447,6 +454,87 @@ class PlaytorrioCloudSyncService {
     }());
   }
 
+  Future<void> pushDebridSecrets() async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await isDebridSyncEnabled()) return;
+    if (!await hasStoredSession()) return;
+    await _ensureAccess();
+    final token = await _accessToken;
+    if (token == null) return;
+    final uid = await _currentUserId();
+    if (uid == null) return;
+
+    final secrets = await DebridApi().exportDebridKeysForCloud();
+    final res = await http.post(
+      Uri.parse('$_base$_restDebrid'),
+      headers: {
+        ..._headers(token),
+        'Prefer': 'return=minimal,resolution=merge-duplicates',
+      },
+      body: json.encode({
+        'user_id': uid,
+        'secrets': secrets,
+      }),
+    );
+    if (res.statusCode == 401) await signOut();
+    if (res.statusCode == 409 || res.statusCode == 400) {
+      final patch = await http.patch(
+        Uri.parse('$_base$_restDebrid?user_id=eq.$uid'),
+        headers: {..._headers(token), 'Prefer': 'return=minimal'},
+        body: json.encode({'secrets': secrets}),
+      );
+      if (patch.statusCode == 401) await signOut();
+      if (patch.statusCode < 200 || patch.statusCode >= 300) {
+        debugPrint('[PT Cloud] debrid patch: ${patch.statusCode} ${patch.body}');
+      }
+      return;
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      debugPrint('[PT Cloud] debrid push: ${res.statusCode} ${res.body}');
+    }
+  }
+
+  Future<void> pullDebridSecrets() async {
+    if (kIsWeb) return;
+    if (!isConfigured) return;
+    if (!await isDebridSyncEnabled()) return;
+    if (!await hasStoredSession()) return;
+    await _ensureAccess();
+    final token = await _accessToken;
+    if (token == null) return;
+
+    final res = await http.get(
+      Uri.parse('$_base$_restDebrid?select=secrets'),
+      headers: _headers(token),
+    );
+    if (res.statusCode == 401) {
+      await signOut();
+      return;
+    }
+    if (res.statusCode != 200) {
+      debugPrint('[PT Cloud] debrid pull: ${res.statusCode}');
+      return;
+    }
+    final decoded = json.decode(res.body);
+    if (decoded is! List || decoded.isEmpty) return;
+    final first = decoded.first;
+    if (first is! Map) return;
+    final s = first['secrets'];
+    if (s is! Map) return;
+    await DebridApi()
+        .applyDebridKeysFromCloudMap(s.map((k, v) => MapEntry(k.toString(), v)));
+  }
+
+  Future<void> scheduleDebridPush() async {
+    if (kIsWeb) return;
+    try {
+      await pushDebridSecrets();
+    } catch (e) {
+      debugPrint('[PT Cloud] debrid push: $e');
+    }
+  }
+
   Future<void> pullOnStartup() async {
     if (kIsWeb) return;
     if (!isConfigured) return;
@@ -457,6 +545,9 @@ class PlaytorrioCloudSyncService {
       }
       if (await isSettingsSyncEnabled()) {
         await pullUserSettings();
+      }
+      if (await isDebridSyncEnabled()) {
+        await pullDebridSecrets();
       }
     } catch (e) {
       debugPrint('[PT Cloud] startup: $e');

@@ -11,6 +11,7 @@ import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 
 import 'api/audio_handler.dart';
 import 'api/audiobook_player_service.dart';
+import 'api/debrid_api.dart';
 import 'api/settings_service.dart';
 import 'api/music_player_service.dart';
 import 'api/stremio_service.dart';
@@ -104,6 +105,10 @@ Future<void> bootstrap() async {
   await SettingsService().getBuiltinPlayerSubtitlesEnabled();
 
   await _ensureBundledStremioAddons();
+
+  DebridApi.onDebridKeysChanged = () {
+    unawaited(PlaytorrioCloudSyncService.instance.scheduleDebridPush());
+  };
 
   unawaited(PlaytorrioCloudSyncService.instance.pullOnStartup());
 
