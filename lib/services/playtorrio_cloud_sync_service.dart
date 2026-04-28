@@ -104,6 +104,18 @@ class PlaytorrioCloudSyncService {
         'Content-Type': 'application/json',
       };
 
+  /// PostgREST upsert: requires `on_conflict` matching the primary/unique key or inserts can 409
+  /// with no row written. See `supabase/migrations/*_user_profiles.sql`.
+  static const _preferUpsert = 'return=minimal,resolution=merge-duplicates';
+
+  void _logHttpFailure(String op, int code, String body) {
+    final snippet = body.length > 500 ? '${body.substring(0, 500)}…' : body;
+    debugPrint(
+      '[PT Cloud] $op FAILED: HTTP $code body=$snippet '
+      'anonKeyJwt=$isAnonKeyJwtFormat',
+    );
+  }
+
   static String? userIdFromJwt(String jwt) {
     final parts = jwt.split('.');
     if (parts.length < 2) return null;
@@ -163,10 +175,10 @@ class PlaytorrioCloudSyncService {
     if (bounded.length > 50) bounded = bounded.sublist(0, 50);
 
     final res = await http.post(
-      Uri.parse('$_base$_restWatch'),
+      Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
       headers: {
         ..._headers(token),
-        'Prefer': 'return=minimal,resolution=merge-duplicates',
+        'Prefer': _preferUpsert,
       },
       body: json.encode({
         'user_id': uid,
@@ -175,13 +187,8 @@ class PlaytorrioCloudSyncService {
       }),
     );
     if (res.statusCode == 401) await signOut();
-    if (res.statusCode == 409 || res.statusCode == 400) {
-      final patch = await http.patch(
-        Uri.parse('$_base$_restWatch?user_id=eq.$uid&profile_id=eq.$pid'),
-        headers: {..._headers(token), 'Prefer': 'return=minimal'},
-        body: json.encode({'entries': bounded}),
-      );
-      if (patch.statusCode == 401) await signOut();
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      _logHttpFailure('push history (upsert)', res.statusCode, res.body);
     }
   }
 
@@ -388,7 +395,9 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isProgressSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    if (newEntry['tmdbId'] == null) return;
+    // Sync any saved local row (Stremio/anime may omit TMDB id but still have uniqueId).
+    final uniqueStr = newEntry['uniqueId']?.toString() ?? '';
+    if (uniqueStr.isEmpty && newEntry['tmdbId'] == null) return;
 
     await _ensureAccess();
     final token = await _accessToken;
@@ -408,10 +417,10 @@ class PlaytorrioCloudSyncService {
     final pid = await _activeProfileId();
 
     final res = await http.post(
-      Uri.parse('$_base$_restWatch'),
+      Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
       headers: {
         ..._headers(token),
-        'Prefer': 'return=minimal,resolution=merge-duplicates',
+        'Prefer': _preferUpsert,
       },
       body: json.encode({
         'user_id': uid,
@@ -420,23 +429,8 @@ class PlaytorrioCloudSyncService {
       }),
     );
     if (res.statusCode == 401) await signOut();
-    if (res.statusCode == 409 || res.statusCode == 400) {
-      final patch = await http.patch(
-        Uri.parse('$_base$_restWatch?user_id=eq.$uid&profile_id=eq.$pid'),
-        headers: {..._headers(token), 'Prefer': 'return=minimal'},
-        body: json.encode({'entries': list}),
-      );
-      if (patch.statusCode == 401) await signOut();
-      if (patch.statusCode < 200 || patch.statusCode >= 300) {
-        debugPrint('[PT Cloud] push history patch: ${patch.statusCode} ${patch.body}');
-      }
-      return;
-    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      debugPrint(
-        '[PT Cloud] push history FAILED: ${res.statusCode} ${res.body} '
-        'anonKeyJwt=${isAnonKeyJwtFormat}',
-      );
+      _logHttpFailure('push history (entry upsert)', res.statusCode, res.body);
     }
   }
 
@@ -502,14 +496,14 @@ class PlaytorrioCloudSyncService {
     if (uid == null) return;
     final pid = await _activeProfileId();
 
+    // Always write a row (even {}) so Table Editor shows sync and merge-duplicates works.
     final map = await _exportPrefsMap();
-    if (map.isEmpty) return;
 
     final res = await http.post(
-      Uri.parse('$_base$_restSettings'),
+      Uri.parse('$_base$_restSettings?on_conflict=user_id,profile_id'),
       headers: {
         ..._headers(token),
-        'Prefer': 'return=minimal,resolution=merge-duplicates',
+        'Prefer': _preferUpsert,
       },
       body: json.encode({
         'user_id': uid,
@@ -518,20 +512,8 @@ class PlaytorrioCloudSyncService {
       }),
     );
     if (res.statusCode == 401) await signOut();
-    if (res.statusCode == 409 || res.statusCode == 400) {
-      final patch = await http.patch(
-        Uri.parse('$_base$_restSettings?user_id=eq.$uid&profile_id=eq.$pid'),
-        headers: {..._headers(token), 'Prefer': 'return=minimal'},
-        body: json.encode({'prefs': map}),
-      );
-      if (patch.statusCode == 401) await signOut();
-      if (patch.statusCode < 200 || patch.statusCode >= 300) {
-        debugPrint('[PT Cloud] push settings patch: ${patch.statusCode} ${patch.body}');
-      }
-      return;
-    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      debugPrint('[PT Cloud] push settings: ${res.statusCode} ${res.body}');
+      _logHttpFailure('push settings (upsert)', res.statusCode, res.body);
     }
   }
 
@@ -560,10 +542,10 @@ class PlaytorrioCloudSyncService {
 
     final secrets = await DebridApi().exportDebridKeysForCloud();
     final res = await http.post(
-      Uri.parse('$_base$_restDebrid'),
+      Uri.parse('$_base$_restDebrid?on_conflict=user_id,profile_id'),
       headers: {
         ..._headers(token),
-        'Prefer': 'return=minimal,resolution=merge-duplicates',
+        'Prefer': _preferUpsert,
       },
       body: json.encode({
         'user_id': uid,
@@ -572,20 +554,8 @@ class PlaytorrioCloudSyncService {
       }),
     );
     if (res.statusCode == 401) await signOut();
-    if (res.statusCode == 409 || res.statusCode == 400) {
-      final patch = await http.patch(
-        Uri.parse('$_base$_restDebrid?user_id=eq.$uid&profile_id=eq.$pid'),
-        headers: {..._headers(token), 'Prefer': 'return=minimal'},
-        body: json.encode({'secrets': secrets}),
-      );
-      if (patch.statusCode == 401) await signOut();
-      if (patch.statusCode < 200 || patch.statusCode >= 300) {
-        debugPrint('[PT Cloud] debrid patch: ${patch.statusCode} ${patch.body}');
-      }
-      return;
-    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      debugPrint('[PT Cloud] debrid push: ${res.statusCode} ${res.body}');
+      _logHttpFailure('push debrid (upsert)', res.statusCode, res.body);
     }
   }
 
@@ -682,23 +652,16 @@ class PlaytorrioCloudSyncService {
       'avatar_key': avatar.clamp(0, 7),
     };
     final res = await http.post(
-      Uri.parse('$_base$_restProfileMeta'),
+      Uri.parse('$_base$_restProfileMeta?on_conflict=user_id,profile_id'),
       headers: {
         ..._headers(token),
-        'Prefer': 'return=minimal,resolution=merge-duplicates',
+        'Prefer': _preferUpsert,
       },
       body: json.encode(body),
     );
     if (res.statusCode == 401) await signOut();
-    if (res.statusCode == 409 || res.statusCode == 400) {
-      await http.patch(
-        Uri.parse('$_base$_restProfileMeta?user_id=eq.$userId&profile_id=eq.$pid'),
-        headers: {..._headers(token), 'Prefer': 'return=minimal'},
-        body: json.encode({
-          'name': name,
-          'avatar_key': avatar.clamp(0, 7),
-        }),
-      );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      _logHttpFailure('push profile meta (upsert)', res.statusCode, res.body);
     }
   }
 
