@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import '../../../services/playtorrio_cloud_sync_service.dart';
+import '../../../../services/playtorrio_cloud_sync_service.dart';
 import '../data/hardcoded_channels.dart';
 import '../data/iptv_cloud_bundle.dart';
 import '../data/iptv_network.dart';
