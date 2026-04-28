@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'audiobook_prefs_keys.dart';
 import 'music_storage_service.dart';
 import 'trakt_service.dart';
 
@@ -739,6 +740,11 @@ class SettingsService {
     // Liked + playlists (same string keys as [MusicStorageService] read paths)
     m['prefsLikedSongsKey'] = prefs.getStringList('prefsLikedSongsKey') ?? [];
     m['prefsPlaylistsKey'] = prefs.getStringList('prefsPlaylistsKey') ?? [];
+    // Audiobook continue + liked (chapterIndex, positionMs in history JSON blobs)
+    m[AudiobookPrefsKeys.history] =
+        prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
+    m[AudiobookPrefsKeys.liked] =
+        prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
     return m;
   }
 
@@ -749,7 +755,9 @@ class SettingsService {
       final k = e.key;
       if (!cloudSyncPreferenceKeySet.contains(k) &&
           k != 'prefsLikedSongsKey' &&
-          k != 'prefsPlaylistsKey') {
+          k != 'prefsPlaylistsKey' &&
+          k != AudiobookPrefsKeys.history &&
+          k != AudiobookPrefsKeys.liked) {
         continue;
       }
       final v = e.value;
@@ -791,6 +799,20 @@ class SettingsService {
       if (k == 'prefsPlaylistsKey' && v is List) {
         await p.setStringList(
           'prefsPlaylistsKey',
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == AudiobookPrefsKeys.history && v is List) {
+        await p.setStringList(
+          AudiobookPrefsKeys.history,
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == AudiobookPrefsKeys.liked && v is List) {
+        await p.setStringList(
+          AudiobookPrefsKeys.liked,
           (v as List<dynamic>).map((x) => x.toString()).toList(),
         );
         continue;
@@ -1083,6 +1105,8 @@ class SettingsService {
       _prowlarrTagIdsKey,
       MusicStorageService.prefsLikedSongsKey,
       MusicStorageService.prefsPlaylistsKey,
+      AudiobookPrefsKeys.history,
+      AudiobookPrefsKeys.liked,
     ]) {
       final v = prefs.getStringList(key);
       if (v != null) prefsMap[key] = v;
@@ -1184,6 +1208,8 @@ class SettingsService {
       _prowlarrTagIdsKey,
       MusicStorageService.prefsLikedSongsKey,
       MusicStorageService.prefsPlaylistsKey,
+      AudiobookPrefsKeys.history,
+      AudiobookPrefsKeys.liked,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setStringList(

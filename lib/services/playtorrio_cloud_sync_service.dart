@@ -608,6 +608,18 @@ class PlaytorrioCloudSyncService {
     }());
   }
 
+  Timer? _debouncedSettingsPushTimer;
+
+  /// Coalesces rapid updates (e.g. audiobook position every position tick) into one cloud write.
+  void scheduleDebouncedSettingsPush({Duration delay = const Duration(seconds: 4)}) {
+    if (kIsWeb) return;
+    _debouncedSettingsPushTimer?.cancel();
+    _debouncedSettingsPushTimer = Timer(delay, () {
+      _debouncedSettingsPushTimer = null;
+      scheduleSettingsPush();
+    });
+  }
+
   Future<void> pushDebridSecrets() async {
     if (kIsWeb) return;
     if (!isConfigured) return;

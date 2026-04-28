@@ -5,7 +5,9 @@ import 'package:media_kit/media_kit.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'audiobook_service.dart';
+import 'audiobook_prefs_keys.dart';
 import 'audio_handler.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 
 class AudiobookPlayerService {
   static final AudiobookPlayerService _instance = AudiobookPlayerService._internal();
@@ -192,8 +194,11 @@ class AudiobookPlayerService {
     if (currentBook.value == null || _isResuming) return;
     final prefs = await SharedPreferences.getInstance();
     
-    List<String> historyStrings = prefs.getStringList('audiobook_history') ?? [];
-    List<Map<String, dynamic>> history = historyStrings.map((s) => json.decode(s) as Map<String, dynamic>).toList();
+    List<String> historyStrings =
+        prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
+    List<Map<String, dynamic>> history = historyStrings
+        .map((s) => json.decode(s) as Map<String, dynamic>)
+        .toList();
 
     final bookData = {
       'book': currentBook.value!.toJson(),
@@ -207,7 +212,11 @@ class AudiobookPlayerService {
     
     if (history.length > 10) history = history.sublist(0, 10);
 
-    await prefs.setStringList('audiobook_history', history.map((e) => json.encode(e)).toList());
+    await prefs.setStringList(
+      AudiobookPrefsKeys.history,
+      history.map((e) => json.encode(e)).toList(),
+    );
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<void> saveManualProgress() async {
@@ -216,37 +225,38 @@ class AudiobookPlayerService {
 
   Future<List<Map<String, dynamic>>> getHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> history = prefs.getStringList('audiobook_history') ?? [];
+    final List<String> history = prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
     return history.map((s) => json.decode(s) as Map<String, dynamic>).toList();
   }
 
   Future<void> removeFromHistory(String audioBookId) async {
     final prefs = await SharedPreferences.getInstance();
-    List<String> historyStrings = prefs.getStringList('audiobook_history') ?? [];
+    List<String> historyStrings = prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
     historyStrings.removeWhere((s) {
       final data = json.decode(s);
       return data['book']['audioBookId'] == audioBookId;
     });
-    await prefs.setStringList('audiobook_history', historyStrings);
+    await prefs.setStringList(AudiobookPrefsKeys.history, historyStrings);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
   }
 
   // --- Liked Books ---
 
   Future<List<Audiobook>> getLikedBooks() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('audiobook_liked') ?? [];
+    final List<String> liked = prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
     return liked.map((s) => Audiobook.fromJson(json.decode(s))).toList();
   }
 
   Future<bool> isBookLiked(String audioBookId) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('audiobook_liked') ?? [];
+    final List<String> liked = prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
     return liked.any((s) => json.decode(s)['audioBookId'] == audioBookId);
   }
 
   Future<void> toggleLikeBook(Audiobook book) async {
     final prefs = await SharedPreferences.getInstance();
-    List<String> likedStrings = prefs.getStringList('audiobook_liked') ?? [];
+    List<String> likedStrings = prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
     
     final index = likedStrings.indexWhere((s) => json.decode(s)['audioBookId'] == book.audioBookId);
     
@@ -256,7 +266,8 @@ class AudiobookPlayerService {
       likedStrings.add(json.encode(book.toJson()));
     }
     
-    await prefs.setStringList('audiobook_liked', likedStrings);
+    await prefs.setStringList(AudiobookPrefsKeys.liked, likedStrings);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
   }
 
   void dispose() {
