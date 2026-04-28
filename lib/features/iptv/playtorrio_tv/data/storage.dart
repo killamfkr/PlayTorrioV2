@@ -204,6 +204,22 @@ class StoredHit {
   });
 }
 
+/// Live streams starred in **Portal → Live TV** (Xtream browser), per portal.
+/// Keys are [IptvPortal.key] / [VerifiedPortal.key]; values are `stream_id` strings.
+class IptvBrowserFavoritesStore {
+  static String _key(String portalKey) => 'pt_iptv_browser_fav_$portalKey';
+
+  static Future<Set<String>> load(String portalKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_key(portalKey)) ?? const <String>[]).toSet();
+  }
+
+  static Future<void> save(String portalKey, Set<String> streamIds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_key(portalKey), streamIds.toList());
+  }
+}
+
 /// Per-HardcodedChannel set of favorited stream URLs (pinned to top).
 class IptvChannelFavoritesStore {
   static String _key(String channelId) => 'pt_iptv_chfav_$channelId';

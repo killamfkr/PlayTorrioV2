@@ -925,7 +925,24 @@ class _BrowserViewState extends State<_BrowserView> {
     if (ctrl.activeSection == IptvSection.live && ctrl.liveOnly) {
       s = s.where((x) => ctrl.aliveStreamIds.contains(x.streamId)).toList();
     }
+    if (ctrl.activeSection == IptvSection.live) {
+      s = _sortLiveFavoritesFirst(ctrl, s);
+    }
     return s;
+  }
+
+  List<IptvStream> _sortLiveFavoritesFirst(
+      IptvController ctrl, List<IptvStream> list) {
+    final fav = <IptvStream>[];
+    final rest = <IptvStream>[];
+    for (final x in list) {
+      if (ctrl.isLiveStreamFavorite(x)) {
+        fav.add(x);
+      } else {
+        rest.add(x);
+      }
+    }
+    return [...fav, ...rest];
   }
 
   @override
@@ -1268,28 +1285,53 @@ class _StreamCard extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(8),
-                child: Tooltip(
-                  message: stream.name,
-                  waitDuration: const Duration(milliseconds: 600),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 220),
-                      child: Text(
-                        stream.name,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: true,
-                        style: GoogleFonts.poppins(
-                            color: Colors.white,
-                            fontSize: 12,
-                            height: 1.15,
-                            fontWeight: FontWeight.w500),
+                padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Tooltip(
+                        message: stream.name,
+                        waitDuration: const Duration(milliseconds: 600),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 220),
+                            child: Text(
+                              stream.name,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: true,
+                              style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  height: 1.15,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    if (stream.kind == 'live')
+                      IconButton(
+                        tooltip: ctrl.isLiveStreamFavorite(stream)
+                            ? 'Remove from favorites'
+                            : 'Favorite channel',
+                        onPressed: stream.streamId.isEmpty
+                            ? null
+                            : () => ctrl.toggleLiveFavorite(stream),
+                        icon: Icon(
+                          ctrl.isLiveStreamFavorite(stream)
+                              ? Icons.star_rounded
+                              : Icons.star_border_rounded,
+                          color: ctrl.isLiveStreamFavorite(stream)
+                              ? const Color(0xFFFACC15)
+                              : Colors.white38,
+                          size: 22,
+                        ),
+                      ),
+                  ],
                 ),
               ),
               if (stream.kind == 'live') _EpgNowFooter(stream: stream, ctrl: ctrl),

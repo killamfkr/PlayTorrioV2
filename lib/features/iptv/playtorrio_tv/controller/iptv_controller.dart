@@ -122,6 +122,25 @@ class IptvController extends ChangeNotifier {
   bool isFavoriteHit(String channelId, ChannelHit h) =>
       _favoriteHits[channelId]?.contains(h.streamUrl) ?? false;
 
+  /// Live TV streams starred in the portal browser (Xtream `stream_id`), current portal only.
+  Set<String> _liveFavoriteIds = {};
+  bool isLiveStreamFavorite(IptvStream s) =>
+      s.kind == 'live' &&
+      s.streamId.isNotEmpty &&
+      _liveFavoriteIds.contains(s.streamId);
+
+  Future<void> toggleLiveFavorite(IptvStream s) async {
+    final p = activePortal;
+    if (p == null || s.kind != 'live' || s.streamId.isEmpty) return;
+    if (_liveFavoriteIds.contains(s.streamId)) {
+      _liveFavoriteIds.remove(s.streamId);
+    } else {
+      _liveFavoriteIds.add(s.streamId);
+    }
+    await IptvBrowserFavoritesStore.save(p.key, _liveFavoriteIds);
+    notifyListeners();
+  }
+
   // Per-channel scan state (resumable)
   final Map<String, Set<String>> _channelAttempted = {}; // channelId → portalKey set
   final Map<String, String?> _channelCatalogAfter = {}; // channelId → catalog cursor
@@ -458,6 +477,7 @@ class IptvController extends ChangeNotifier {
     browserSearch = '';
     aliveStreamIds = const {};
     aliveCheckedAt = null;
+    _liveFavoriteIds = {};
     _epgCache.clear();
     notifyListeners();
     try {
@@ -469,6 +489,7 @@ class IptvController extends ChangeNotifier {
       browserSelectedCategoryId = cats.isNotEmpty ? cats.first.id : '';
 
       if (section == IptvSection.live) {
+        _liveFavoriteIds = await IptvBrowserFavoritesStore.load(p.key);
         final key = IptvAliveStore.portalKey(p.portal);
         liveOnly = await IptvAliveStore.loadLiveOnly(key);
         final snap = await IptvAliveStore.load(key);
