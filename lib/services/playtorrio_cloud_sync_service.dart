@@ -116,6 +116,67 @@ class PlaytorrioCloudSyncService {
     );
   }
 
+  /// JWT `exp` is seconds since epoch. Missing/invalid `exp` is treated as expired
+  /// so we refresh instead of sending a bad Bearer token to PostgREST.
+  static bool isJwtAccessExpired(String jwt, {int leewaySeconds = 60}) {
+    final exp = jwtExpUnixSeconds(jwt);
+    if (exp == null) return true;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return now >= exp - leewaySeconds;
+  }
+
+  static int? jwtExpUnixSeconds(String jwt) {
+    final parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    var seg = parts[1];
+    final m = seg.length % 4;
+    if (m > 0) seg += '=' * (4 - m);
+    try {
+      final map = json.decode(utf8.decode(base64Url.decode(seg)))
+          as Map<String, dynamic>;
+      final exp = map['exp'];
+      if (exp is int) return exp;
+      if (exp is num) return exp.toInt();
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// Clears only the access token so the next [ _ensureAccess ] can use the refresh token.
+  Future<void> _clearAccessTokenOnly() async {
+    _access = null;
+    await _secure.delete(key: _accessKey);
+  }
+
+  /// Run [send] with a valid access token; on 401, refresh once and retry.
+  Future<http.Response> _withAccessRetry(
+    Future<http.Response> Function(String accessToken) send,
+  ) async {
+    await _ensureAccess();
+    var token = await _accessToken;
+    if (token == null || token.isEmpty) {
+      throw const PlaytorrioCloudException('Not signed in');
+    }
+    var res = await send(token);
+    if (res.statusCode != 401) return res;
+    await _clearAccessTokenOnly();
+    try {
+      await _ensureAccess();
+    } catch (_) {
+      await signOut();
+      return res;
+    }
+    token = await _accessToken;
+    if (token == null || token.isEmpty) {
+      await signOut();
+      return res;
+    }
+    res = await send(token);
+    if (res.statusCode == 401) await signOut();
+    return res;
+  }
+
   static String? userIdFromJwt(String jwt) {
     final parts = jwt.split('.');
     if (parts.length < 2) return null;
@@ -165,35 +226,46 @@ class PlaytorrioCloudSyncService {
     if (kIsWeb) return;
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final uid = await _currentUserId();
-    if (uid == null) return;
     final pid = await _activeProfileId();
     var bounded = list;
     if (bounded.length > 50) bounded = bounded.sublist(0, 50);
 
-    final res = await http.post(
-      Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
-      headers: {
-        ..._headers(token),
-        'Prefer': _preferUpsert,
+    final res = await _withAccessRetry(
+      (t) {
+        final uid = userIdFromJwt(t);
+        if (uid == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.post(
+          Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
+          headers: {
+            ..._headers(t),
+            'Prefer': _preferUpsert,
+          },
+          body: json.encode({
+            'user_id': uid,
+            'profile_id': pid,
+            'entries': bounded,
+          }),
+        );
       },
-      body: json.encode({
-        'user_id': uid,
-        'profile_id': pid,
-        'entries': bounded,
-      }),
     );
-    if (res.statusCode == 401) await signOut();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       _logHttpFailure('push history (upsert)', res.statusCode, res.body);
     }
   }
 
   Future<void> _ensureAccess() async {
-    if ((await _accessToken)?.isNotEmpty == true) return;
+    final existing = await _accessToken;
+    if (existing != null &&
+        existing.isNotEmpty &&
+        !isJwtAccessExpired(existing)) {
+      return;
+    }
+    // Expired or missing: must refresh (keep working after ~1h access token TTL).
+    _access = null;
     final rt = await _refreshToken;
     if (rt == null || rt.isEmpty) {
       throw const PlaytorrioCloudException('Not signed in');
@@ -325,23 +397,24 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isProgressSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final userId = await _currentUserId();
-    if (userId == null) return;
 
     final pid = await _activeProfileId();
-    final res = await http.get(
-      Uri.parse(
-        '$_base$_restWatch?select=entries&user_id=eq.$userId&profile_id=eq.$pid',
-      ),
-      headers: _headers(token),
+    final res = await _withAccessRetry(
+      (t) {
+        final userId = userIdFromJwt(t);
+        if (userId == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.get(
+          Uri.parse(
+            '$_base$_restWatch?select=entries&user_id=eq.$userId&profile_id=eq.$pid',
+          ),
+          headers: _headers(t),
+        );
+      },
     );
-    if (res.statusCode == 401) {
-      await signOut();
-      return;
-    }
     if (res.statusCode != 200) {
       debugPrint(
         '[PT Cloud] pull history FAILED: ${res.statusCode} body=${res.body} '
@@ -399,15 +472,6 @@ class PlaytorrioCloudSyncService {
     final uniqueStr = newEntry['uniqueId']?.toString() ?? '';
     if (uniqueStr.isEmpty && newEntry['tmdbId'] == null) return;
 
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final uid = await _currentUserId();
-    if (uid == null) {
-      debugPrint('[PT Cloud] no user id in token');
-      return;
-    }
-
     final wh = WatchHistoryService();
     var list = await wh.getHistory();
     // Ensure latest entry is the one we just saved
@@ -416,19 +480,29 @@ class PlaytorrioCloudSyncService {
     if (list.length > 50) list = list.sublist(0, 50);
     final pid = await _activeProfileId();
 
-    final res = await http.post(
-      Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
-      headers: {
-        ..._headers(token),
-        'Prefer': _preferUpsert,
+    final res = await _withAccessRetry(
+      (t) {
+        final uid = userIdFromJwt(t);
+        if (uid == null) {
+          debugPrint('[PT Cloud] no user id in token');
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.post(
+          Uri.parse('$_base$_restWatch?on_conflict=user_id,profile_id'),
+          headers: {
+            ..._headers(t),
+            'Prefer': _preferUpsert,
+          },
+          body: json.encode({
+            'user_id': uid,
+            'profile_id': pid,
+            'entries': list,
+          }),
+        );
       },
-      body: json.encode({
-        'user_id': uid,
-        'profile_id': pid,
-        'entries': list,
-      }),
     );
-    if (res.statusCode == 401) await signOut();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       _logHttpFailure('push history (entry upsert)', res.statusCode, res.body);
     }
@@ -451,23 +525,24 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isSettingsSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
 
-    final userId = await _currentUserId();
-    if (userId == null) return;
     final pid = await _activeProfileId();
-    final res = await http.get(
-      Uri.parse(
-        '$_base$_restSettings?select=prefs&user_id=eq.$userId&profile_id=eq.$pid',
-      ),
-      headers: _headers(token),
+    final res = await _withAccessRetry(
+      (t) {
+        final userId = userIdFromJwt(t);
+        if (userId == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.get(
+          Uri.parse(
+            '$_base$_restSettings?select=prefs&user_id=eq.$userId&profile_id=eq.$pid',
+          ),
+          headers: _headers(t),
+        );
+      },
     );
-    if (res.statusCode == 401) {
-      await signOut();
-      return;
-    }
     if (res.statusCode != 200) {
       debugPrint('[PT Cloud] pull settings: ${res.statusCode}');
       return;
@@ -489,29 +564,34 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isSettingsSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final uid = await _currentUserId();
-    if (uid == null) return;
+
     final pid = await _activeProfileId();
 
     // Always write a row (even {}) so Table Editor shows sync and merge-duplicates works.
     final map = await _exportPrefsMap();
 
-    final res = await http.post(
-      Uri.parse('$_base$_restSettings?on_conflict=user_id,profile_id'),
-      headers: {
-        ..._headers(token),
-        'Prefer': _preferUpsert,
+    final res = await _withAccessRetry(
+      (t) {
+        final uid = userIdFromJwt(t);
+        if (uid == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.post(
+          Uri.parse('$_base$_restSettings?on_conflict=user_id,profile_id'),
+          headers: {
+            ..._headers(t),
+            'Prefer': _preferUpsert,
+          },
+          body: json.encode({
+            'user_id': uid,
+            'profile_id': pid,
+            'prefs': map,
+          }),
+        );
       },
-      body: json.encode({
-        'user_id': uid,
-        'profile_id': pid,
-        'prefs': map,
-      }),
     );
-    if (res.statusCode == 401) await signOut();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       _logHttpFailure('push settings (upsert)', res.statusCode, res.body);
     }
@@ -533,27 +613,32 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isDebridSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final uid = await _currentUserId();
-    if (uid == null) return;
+
     final pid = await _activeProfileId();
 
     final secrets = await DebridApi().exportDebridKeysForCloud();
-    final res = await http.post(
-      Uri.parse('$_base$_restDebrid?on_conflict=user_id,profile_id'),
-      headers: {
-        ..._headers(token),
-        'Prefer': _preferUpsert,
+    final res = await _withAccessRetry(
+      (t) {
+        final uid = userIdFromJwt(t);
+        if (uid == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.post(
+          Uri.parse('$_base$_restDebrid?on_conflict=user_id,profile_id'),
+          headers: {
+            ..._headers(t),
+            'Prefer': _preferUpsert,
+          },
+          body: json.encode({
+            'user_id': uid,
+            'profile_id': pid,
+            'secrets': secrets,
+          }),
+        );
       },
-      body: json.encode({
-        'user_id': uid,
-        'profile_id': pid,
-        'secrets': secrets,
-      }),
     );
-    if (res.statusCode == 401) await signOut();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       _logHttpFailure('push debrid (upsert)', res.statusCode, res.body);
     }
@@ -564,23 +649,24 @@ class PlaytorrioCloudSyncService {
     if (!isConfigured) return;
     if (!await isDebridSyncEnabled()) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
 
-    final userId = await _currentUserId();
-    if (userId == null) return;
     final pid = await _activeProfileId();
-    final res = await http.get(
-      Uri.parse(
-        '$_base$_restDebrid?select=secrets&user_id=eq.$userId&profile_id=eq.$pid',
-      ),
-      headers: _headers(token),
+    final res = await _withAccessRetry(
+      (t) {
+        final userId = userIdFromJwt(t);
+        if (userId == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.get(
+          Uri.parse(
+            '$_base$_restDebrid?select=secrets&user_id=eq.$userId&profile_id=eq.$pid',
+          ),
+          headers: _headers(t),
+        );
+      },
     );
-    if (res.statusCode == 401) {
-      await signOut();
-      return;
-    }
     if (res.statusCode != 200) {
       debugPrint('[PT Cloud] debrid pull: ${res.statusCode}');
       return;
@@ -635,31 +721,36 @@ class PlaytorrioCloudSyncService {
     if (kIsWeb) return;
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final userId = await _currentUserId();
-    if (userId == null) return;
+
     final pid = await _activeProfileId();
     final local = await _settings.getLocalProfileDisplayMeta();
     final row = local['$pid'] ?? {};
     final name = row['name'] as String?;
     final avatar = (row['avatar'] is int) ? row['avatar'] as int : 0;
-    final body = {
-      'user_id': userId,
-      'profile_id': pid,
-      'name': name,
-      'avatar_key': avatar.clamp(0, 7),
-    };
-    final res = await http.post(
-      Uri.parse('$_base$_restProfileMeta?on_conflict=user_id,profile_id'),
-      headers: {
-        ..._headers(token),
-        'Prefer': _preferUpsert,
+    final res = await _withAccessRetry(
+      (t) {
+        final userId = userIdFromJwt(t);
+        if (userId == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        final body = {
+          'user_id': userId,
+          'profile_id': pid,
+          'name': name,
+          'avatar_key': avatar.clamp(0, 7),
+        };
+        return http.post(
+          Uri.parse('$_base$_restProfileMeta?on_conflict=user_id,profile_id'),
+          headers: {
+            ..._headers(t),
+            'Prefer': _preferUpsert,
+          },
+          body: json.encode(body),
+        );
       },
-      body: json.encode(body),
     );
-    if (res.statusCode == 401) await signOut();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       _logHttpFailure('push profile meta (upsert)', res.statusCode, res.body);
     }
@@ -669,14 +760,20 @@ class PlaytorrioCloudSyncService {
     if (kIsWeb) return;
     if (!isConfigured) return;
     if (!await hasStoredSession()) return;
-    await _ensureAccess();
-    final token = await _accessToken;
-    if (token == null) return;
-    final userId = await _currentUserId();
-    if (userId == null) return;
-    final res = await http.get(
-      Uri.parse('$_base$_restProfileMeta?user_id=eq.$userId'),
-      headers: _headers(token),
+
+    final res = await _withAccessRetry(
+      (t) {
+        final userId = userIdFromJwt(t);
+        if (userId == null) {
+          return Future.value(
+            http.Response('{"message":"no sub in access token"}', 400),
+          );
+        }
+        return http.get(
+          Uri.parse('$_base$_restProfileMeta?user_id=eq.$userId'),
+          headers: _headers(t),
+        );
+      },
     );
     if (res.statusCode != 200) return;
     final list = json.decode(res.body);
