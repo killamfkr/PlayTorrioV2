@@ -967,24 +967,9 @@ class SettingsService {
     if (raw == null) return List.from(allNavIds);
 
     // Drop stale / removed ids; keep user order except tail ids always last.
+    // Do not re-inject 'sports' / 'iptv_pt' here — that prevented users from hiding
+    // those tabs (each read re-added them). New installs get full [allNavIds] via raw==null.
     var filtered = raw.where((id) => allNavIds.contains(id)).toList();
-    // Upgrade: insert new upstream tab ids for existing installs
-    if (!filtered.contains('sports')) {
-      final lm = filtered.indexOf('live_matches');
-      if (lm >= 0) {
-        filtered = [...filtered.sublist(0, lm + 1), 'sports', ...filtered.sublist(lm + 1)];
-      } else {
-        filtered = ['sports', ...filtered];
-      }
-    }
-    if (!filtered.contains('iptv_pt')) {
-      final ip = filtered.indexOf('iptv');
-      if (ip >= 0) {
-        filtered = [...filtered.sublist(0, ip + 1), 'iptv_pt', ...filtered.sublist(ip + 1)];
-      } else {
-        filtered = [...filtered, 'iptv_pt'];
-      }
-    }
     final middle = <String>[];
     for (final id in filtered) {
       if (!_navTailIds.contains(id)) middle.add(id);
