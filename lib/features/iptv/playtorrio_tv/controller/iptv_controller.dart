@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../../../services/playtorrio_cloud_sync_service.dart';
 import '../data/hardcoded_channels.dart';
+import '../data/iptv_cloud_bundle.dart';
 import '../data/iptv_network.dart';
 import '../data/models.dart';
 import '../data/storage.dart';
@@ -138,6 +140,7 @@ class IptvController extends ChangeNotifier {
       _liveFavoriteIds.add(s.streamId);
     }
     await IptvBrowserFavoritesStore.save(p.key, _liveFavoriteIds);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     notifyListeners();
   }
 
@@ -152,8 +155,20 @@ class IptvController extends ChangeNotifier {
   final Map<String, List<IptvPortal>> _channelPendingPortals = {};
   final Map<String, Set<String>> _channelPendingKeys = {};
 
+  @override
+  void dispose() {
+    IptvCloudBundle.epoch.removeListener(_onIptvCloudEpoch);
+    super.dispose();
+  }
+
+  void _onIptvCloudEpoch() {
+    unawaited(_reloadFromDiskAfterCloud());
+  }
+
   // ── Init ──
   Future<void> init() async {
+    IptvCloudBundle.epoch.addListener(_onIptvCloudEpoch);
+
     final stored = await IptvStore.load();
     _favoritePortals
       ..clear()
@@ -162,6 +177,65 @@ class IptvController extends ChangeNotifier {
     _verifiedKeys
       ..clear()
       ..addAll(stored.map((v) => v.credKey));
+    await _loadHubAndBrowserFavoritesFromDisk();
+    notifyListeners();
+  }
+
+  Future<void> _loadHubAndBrowserFavoritesFromDisk() async {
+    _favoriteHits.clear();
+    for (final ch in HardcodedChannels.all) {
+      final urls = await IptvChannelFavoritesStore.load(ch.id);
+      if (urls.isNotEmpty) _favoriteHits[ch.id] = urls;
+    }
+    final ap = activePortal;
+    if (ap != null) {
+      _liveFavoriteIds = await IptvBrowserFavoritesStore.load(ap.key);
+    }
+  }
+
+  Future<void> _reloadFromDiskAfterCloud() async {
+    final stored = await IptvStore.load();
+    _favoritePortals
+      ..clear()
+      ..addAll(await IptvStore.loadFavorites());
+    verified = _sortFavoritesFirst(stored);
+    _verifiedKeys
+      ..clear()
+      ..addAll(stored.map((v) => v.credKey));
+    await _loadHubAndBrowserFavoritesFromDisk();
+
+    final ch = activeHardcoded;
+    if (ch != null && view == IptvView.channelResults) {
+      final disk = await IptvChannelResultsStore.load(ch.id);
+      channelResults = _sortHitsFavoritesFirst(
+        ch.id,
+        disk
+            .map((h) => ChannelHit(
+                  portal: VerifiedPortal(
+                    portal: IptvPortal(
+                      url: h.portalUrl,
+                      username: h.portalUser,
+                      password: h.portalPass,
+                      source: 'Saved',
+                    ),
+                    name: h.portalName,
+                    expiry: '',
+                    maxConnections: '1',
+                    activeConnections: '0',
+                  ),
+                  stream: IptvStream(
+                    streamId: h.streamId,
+                    name: h.streamName,
+                    icon: h.streamIcon,
+                    categoryId: h.streamCategoryId,
+                    containerExt: h.streamContainerExt,
+                    kind: h.streamKind,
+                  ),
+                  streamUrl: h.streamUrl,
+                ))
+            .toList(),
+      );
+    }
     notifyListeners();
   }
 
@@ -202,6 +276,7 @@ class IptvController extends ChangeNotifier {
     }
     verified = _sortFavoritesFirst(verified);
     await IptvStore.saveFavorites(_favoritePortals);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     notifyListeners();
   }
 
@@ -216,6 +291,7 @@ class IptvController extends ChangeNotifier {
     }
     channelResults = _sortHitsFavoritesFirst(ch.id, channelResults);
     await IptvChannelFavoritesStore.save(ch.id, set);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     notifyListeners();
   }
 

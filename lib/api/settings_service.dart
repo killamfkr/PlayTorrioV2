@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'audiobook_prefs_keys.dart';
+import '../features/iptv/playtorrio_tv/data/iptv_cloud_bundle.dart';
 import 'music_storage_service.dart';
 import 'trakt_service.dart';
 
@@ -745,6 +746,7 @@ class SettingsService {
         prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
     m[AudiobookPrefsKeys.liked] =
         prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
+    m[IptvCloudBundle.prefsKey] = await IptvCloudBundle.exportAll();
     return m;
   }
 
@@ -757,7 +759,8 @@ class SettingsService {
           k != 'prefsLikedSongsKey' &&
           k != 'prefsPlaylistsKey' &&
           k != AudiobookPrefsKeys.history &&
-          k != AudiobookPrefsKeys.liked) {
+          k != AudiobookPrefsKeys.liked &&
+          k != IptvCloudBundle.prefsKey) {
         continue;
       }
       final v = e.value;
@@ -814,6 +817,12 @@ class SettingsService {
         await p.setStringList(
           AudiobookPrefsKeys.liked,
           (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == IptvCloudBundle.prefsKey && v is Map) {
+        await IptvCloudBundle.applyAll(
+          Map<String, dynamic>.from(v as Map),
         );
         continue;
       }
