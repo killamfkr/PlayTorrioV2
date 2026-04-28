@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PlayTorrio TV</string>
+    <string name="welcome_title">PlayTorrio TV</string>
+    <string name="welcome_subtitle">Kotlin shell — add browse, player, and Supabase sync here.</string>
+</resources>
