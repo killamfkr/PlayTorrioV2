@@ -1,0 +1,58 @@
+# Build release APK for the standalone PT IPTV mini-app (standalone_iptv_scraper/).
+# The folder is lib + pubspec only; CI runs `flutter create` to generate android/.
+
+name: Build IPTV Scraper APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'standalone_iptv_scraper/**'
+      - '.github/workflows/standalone_iptv_scraper_apk.yml'
+
+env:
+  FLUTTER_CHANNEL: stable
+  FLUTTER_VERSION: '3.41.0'
+  STANDALONE_DIR: standalone_iptv_scraper
+
+jobs:
+  android-apk:
+    name: Android APK (standalone IPTV)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.STANDALONE_DIR }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Generate platform folders (android/ios)
+        run: |
+          flutter create . \
+            --project-name iptv_scraper_app \
+            --org com.playtorrio.iptvscraper \
+            --platforms=android,ios
+
+      - run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IPTV-Scraper-Android-universal
+          path: ${{ env.STANDALONE_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
