@@ -143,6 +143,26 @@ class ChannelHit {
 class ScrapePage {
   final List<IptvPortal> portals;
   final String? nextAfter;
-  const ScrapePage({required this.portals, this.nextAfter});
+  /// Raw M3U / playlist text captured from paste fetches (truncated in each snippet).
+  final List<IptvScrapedM3uSnippet> m3uSnippets;
+  const ScrapePage({
+    required this.portals,
+    this.nextAfter,
+    this.m3uSnippets = const [],
+  });
   bool get hasMore => nextAfter != null && nextAfter!.isNotEmpty;
+}
+
+/// A chunk of text that looked like an M3U playlist from a paste/post during scrape.
+class IptvScrapedM3uSnippet {
+  final String source;
+  final String text;
+  /// Un-truncated length of the original body (if larger than [text]).
+  final int originalLength;
+
+  const IptvScrapedM3uSnippet({
+    required this.source,
+    required this.text,
+    required this.originalLength,
+  });
 }

@@ -28,6 +28,9 @@ class IptvController extends ChangeNotifier {
   List<VerifiedPortal> verified = const [];
   bool canGetMore = false;
   String? _scrapeAfter;
+  /// Last M3U-like text captured from catalog scrape (paste posts / big bodies). For inspection only.
+  List<IptvScrapedM3uSnippet> lastScrapeM3uSnippets = const [];
+  static const int _maxM3uSnippets = 25;
   /// Set of credKeys (user|pass) already verified — used to dedupe portals.
   /// Same credentials on a different URL still counts as a duplicate.
   final Set<String> _verifiedKeys = {};
@@ -333,6 +336,12 @@ class IptvController extends ChangeNotifier {
           after: _scrapeAfter,
         );
         _scrapeAfter = page.nextAfter;
+        if (page.m3uSnippets.isNotEmpty) {
+          final merged = [...lastScrapeM3uSnippets, ...page.m3uSnippets];
+          lastScrapeM3uSnippets = merged.length <= _maxM3uSnippets
+              ? merged
+              : merged.sublist(merged.length - _maxM3uSnippets);
+        }
         // Add only portals we haven't already verified or queued.
         // Dedup is by credentials (user|pass) — same login on a different
         // host still counts as a duplicate.

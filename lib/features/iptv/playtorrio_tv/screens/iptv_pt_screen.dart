@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../controller/iptv_controller.dart';
@@ -428,6 +429,15 @@ class _PortalListView extends StatelessWidget {
                 onPressed: ctrl.isScraping ? null : ctrl.getMore,
               ),
             if (ctrl.canGetMore) const SizedBox(width: 8),
+            if (ctrl.lastScrapeM3uSnippets.isNotEmpty) ...[
+              _PrimaryButton(
+                icon: Icons.list_alt_rounded,
+                label: 'M3U from scrape',
+                subtle: true,
+                onPressed: () => _showM3uScrapeBottomSheet(context),
+              ),
+              const SizedBox(width: 8),
+            ],
             _PrimaryButton(
               icon: Icons.tv_rounded,
               label: 'Channels',
@@ -444,6 +454,155 @@ class _PortalListView extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showM3uScrapeBottomSheet(BuildContext context) {
+    final snippets = ctrl.lastScrapeM3uSnippets;
+    if (snippets.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF11151C),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.88,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollCtrl) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 8, 8),
+                child: Row(
+                  children: [
+                    Text(
+                      'M3U / playlist from scraper',
+                      style: GoogleFonts.bebasNeue(
+                        color: Colors.white,
+                        fontSize: 22,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () {
+                        final buf = StringBuffer();
+                        for (var i = 0; i < snippets.length; i++) {
+                          final s = snippets[i];
+                          buf.writeln('### ${i + 1}. ${s.source} '
+                              '(~${s.originalLength} chars)');
+                          buf.writeln(s.text);
+                          buf.writeln();
+                        }
+                        Clipboard.setData(ClipboardData(text: buf.toString()));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Copied all snippets'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.copy, color: Color(0xFF00E5FF), size: 18),
+                      label: Text(
+                        'Copy all',
+                        style: GoogleFonts.poppins(
+                          color: const Color(0xFF00E5FF),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      icon: const Icon(Icons.close, color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, bottom: 6),
+                child: Text(
+                  'Blocks that look like #EXTM3U playlists from Reddit or paste fetches. '
+                  'Long lists may be truncated in memory.',
+                  style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollCtrl,
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                  itemCount: snippets.length,
+                  itemBuilder: (_, i) {
+                    final s = snippets[i];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: Material(
+                        color: Colors.white.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${i + 1}. ${s.source} · ${s.originalLength} chars',
+                                      style: GoogleFonts.poppins(
+                                        color: const Color(0xFF00E5FF),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Clipboard.setData(
+                                        ClipboardData(text: s.text),
+                                      );
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Copied section'),
+                                          behavior: SnackBarBehavior.floating,
+                                        ),
+                                      );
+                                    },
+                                    child: Text(
+                                      'Copy',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              SelectableText(
+                                s.text,
+                                style: GoogleFonts.jetBrainsMono(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

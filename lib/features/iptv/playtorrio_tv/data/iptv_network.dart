@@ -592,11 +592,13 @@ class IptvScraper {
 
   static Future<ScrapePage> scrapeCatalogPage(
       {int maxResults = 50, String? after}) async {
+    _m3uAccChars = 0;
+    final m3uSnippets = <IptvScrapedM3uSnippet>[];
     final out = <String, IptvPortal>{};
     final catalogJson = await _fetchCatalogJson(after: after);
     if (catalogJson == null) {
       debugPrint('[Catalog] fetch failed');
-      return const ScrapePage(portals: [], nextAfter: null);
+      return ScrapePage(portals: const [], m3uSnippets: m3uSnippets);
     }
 
     Map<String, dynamic>? data;
@@ -606,10 +608,14 @@ class IptvScraper {
     } catch (e) {
       debugPrint('[Catalog] JSON parse failed: $e');
     }
-    if (data == null) return const ScrapePage(portals: [], nextAfter: null);
+    if (data == null) {
+      return ScrapePage(portals: const [], m3uSnippets: m3uSnippets);
+    }
 
     final posts = data['children'] as List?;
-    if (posts == null) return const ScrapePage(portals: [], nextAfter: null);
+    if (posts == null) {
+      return ScrapePage(portals: const [], m3uSnippets: m3uSnippets);
+    }
     final nextAfterRaw = data['after']?.toString();
     final nextAfter =
         (nextAfterRaw == null || nextAfterRaw.isEmpty || nextAfterRaw == 'null')
@@ -628,6 +634,12 @@ class IptvScraper {
       debugPrint('[Catalog] post[$postIdx] '
           "'${title.length > 60 ? '${title.substring(0, 60)}…' : title}'"
           ' bodyLen=${body.length}');
+
+      _maybeCollectM3u(
+        m3uSnippets,
+        'Reddit post[$postIdx]',
+        body,
+      );
 
       // 1. Direct extraction from post body
       final direct = _extractPortals(body, 'Catalog');
@@ -648,6 +660,7 @@ class IptvScraper {
           if (decoded.startsWith('http') && _isPasteSite(decoded)) {
             deepLinks.add(decoded);
           } else if (!decoded.startsWith('http') && decoded.contains(':')) {
+            _maybeCollectM3u(m3uSnippets, 'Catalog (base64 decoded)', decoded);
             _extractPortals(decoded, 'Catalog (decoded)')
                 .forEach((p) => _addPortal(out, p, maxResults));
           }
@@ -670,6 +683,7 @@ class IptvScraper {
           continue;
         }
         final found = _extractPortals(text, 'Catalog (deep)');
+        _maybeCollectM3u(m3uSnippets, 'paste · ${_redact(dl)}', text);
         debugPrint('[Catalog]     → ${text.length} chars, ${found.length} portals');
         for (final p in found) {
           _addPortal(out, p, maxResults);
@@ -677,8 +691,45 @@ class IptvScraper {
       }
     }
 
-    debugPrint('[Catalog] DONE — ${out.length} unique portals');
-    return ScrapePage(portals: out.values.toList(), nextAfter: nextAfter);
+    debugPrint('[Catalog] DONE — ${out.length} unique portals (M3U snippets: ${m3uSnippets.length})');
+    return ScrapePage(
+        portals: out.values.toList(),
+        nextAfter: nextAfter,
+        m3uSnippets: m3uSnippets);
+  }
+
+  static const int _m3uMaxPerSnippet = 200000;
+  static const int _m3uMaxTotalChars = 600000;
+  static int _m3uAccChars = 0;
+
+  static bool _looksLikeM3u(String t) {
+    if (t.length < 20) return false;
+    final s = t.trimLeft();
+    if (s.startsWith('#EXTM3U')) return true;
+    if (t.contains('#EXTINF') && t.contains('http')) return true;
+    return false;
+  }
+
+  static void _maybeCollectM3u(
+    List<IptvScrapedM3uSnippet> acc,
+    String source,
+    String full,
+  ) {
+    if (!_looksLikeM3u(full)) return;
+    if (_m3uAccChars >= _m3uMaxTotalChars) return;
+    var body = full;
+    if (body.length > _m3uMaxPerSnippet) {
+      body = body.substring(0, _m3uMaxPerSnippet) +
+          '\n\n# … [truncated at $_m3uMaxPerSnippet chars, original ${full.length} chars]';
+    }
+    _m3uAccChars += body.length;
+    acc.add(
+      IptvScrapedM3uSnippet(
+        source: source,
+        text: body,
+        originalLength: full.length,
+      ),
+    );
   }
 
   static void _addPortal(
