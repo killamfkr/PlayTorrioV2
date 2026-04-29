@@ -524,7 +524,7 @@ class _PortalListView extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, bottom: 6),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
                 child: Text(
                   'Blocks that look like #EXTM3U playlists from Reddit or paste fetches. '
                   'Long lists may be truncated in memory.',
