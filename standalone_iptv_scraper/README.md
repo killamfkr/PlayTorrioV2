@@ -20,7 +20,7 @@ Then `git init`, commit, and push to a new GitHub repo.
 
 ## What is included
 
-- `lib/features/iptv/playtorrio_tv/` — copied from PlayTorrio (updated imports for this package)
+- `lib/features/iptv/playtorrio_tv/` — copied from PlayTorrio; **imports to `lib/` use `../../../../`** from `playtorrio_tv/screens/` and `playtorrio_tv/controller/` (one more `../` than the monolith because of the extra `features/iptv/` folder).
 - `lib/api/settings_service.dart` — minimal (background-play toggle for the player)
 - `lib/services/playtorrio_cloud_sync_service.dart` — no-op stub (favorites are local only here)
 - `lib/services/built_in_video_media_session.dart` — no-op (no AudioService in this app)

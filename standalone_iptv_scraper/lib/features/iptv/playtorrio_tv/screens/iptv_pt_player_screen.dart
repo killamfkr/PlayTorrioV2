@@ -10,10 +10,10 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../api/settings_service.dart';
-import '../../platform_flags.dart';
-import '../../services/built_in_video_media_session.dart';
-import '../../utils/device_profile.dart';
+import '../../../../api/settings_service.dart';
+import '../../../../platform_flags.dart';
+import '../../../../services/built_in_video_media_session.dart';
+import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 
 /// Single source for the IPTV player.
