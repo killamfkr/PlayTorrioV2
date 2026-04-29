@@ -1,0 +1,31 @@
+name: iptv_scraper_app
+description: Standalone PlayTorrio PT IPTV (portals, catalog scraper, channels hub, media_kit player).
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.6.0
+  shared_preferences: ^2.5.2
+  google_fonts: ^8.0.2
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+  window_manager: ^0.5.1
+  wakelock_plus: ^1.4.0
+  audio_session: ^0.1.25
+  crypto: ^3.0.5
+  pointycastle: ^3.9.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
