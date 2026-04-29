@@ -883,6 +883,8 @@ class IptvScraper {
     List<IptvScrapedM3uSnippet> m3uSnippets,
     int maxResults,
   ) async {
+    String? selftext;
+    String? link;
     try {
       final doc = xml.XmlDocument.parse(xmlStr);
       final items = doc.findAllElements('item');
