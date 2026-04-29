@@ -370,7 +370,7 @@ class _PortalListView extends StatelessWidget {
             crossAxisCount: cross,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            mainAxisExtent: 120,
+            mainAxisExtent: 168,
           ),
           itemCount: ctrl.verified.length,
           itemBuilder: (_, i) {
@@ -800,6 +800,31 @@ class _PortalCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.poppins(
                               color: Colors.white60, fontSize: 11)),
+                      if (v.portal.username.isNotEmpty ||
+                          v.portal.password.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'User: ${v.portal.username.isNotEmpty ? v.portal.username : '—'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            color: Colors.white54,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Pass: ${v.portal.password.isNotEmpty ? v.portal.password : '—'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            color: Colors.white54,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 6),
                       Row(
                         children: [
