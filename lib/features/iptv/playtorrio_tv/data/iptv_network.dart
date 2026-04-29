@@ -558,6 +558,9 @@ class IptvScraper {
     'https://api.codetabs.com/v1/proxy?quest={URL}',
     'https://api.allorigins.win/raw?url={URL}',
   ];
+  /// Third-party wrapper for Reddit RSS when all direct/proxy fetches return non-200.
+  static const _rss2Json =
+      'https://api.rss2json.com/v1/api.json?rss_url={URL}';
   static const _ua = 'Mozilla/5.0 (Linux; Android 11; PlayTorrio) '
       'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
 
@@ -801,8 +804,53 @@ class IptvScraper {
       t = _asRssIfValid(t);
       if (t != null) return t;
     }
-    return null;
+    // Last resort: third-party fetches the RSS on their server (works when
+    // Reddit or all CORS proxies are blocked on the device).
+    return _tryFetchRss2Json();
   }
+
+  static Future<String?> _tryFetchRss2Json() async {
+    const redditRss = 'https://www.reddit.com/r/IPTV_ZONENEW/new/.rss?limit=50';
+    final u = _rss2Json.replaceFirst(
+        '{URL}', Uri.encodeComponent(redditRss));
+    debugPrint('[Catalog] rss2json try');
+    final t = await _httpGetText(
+      u,
+      timeout: const Duration(seconds: 30),
+      require2xx: true,
+    );
+    if (t == null) return null;
+    try {
+      final map = json.decode(t) as Map<String, dynamic>?;
+      if (map == null) return null;
+      if ('${map['status']}'.toLowerCase() != 'ok') return null;
+      final items = map['items'] as List<dynamic>?;
+      if (items == null || items.isEmpty) return null;
+      final b = StringBuffer();
+      b.write(
+          '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>');
+      for (final it in items) {
+        final m = it as Map<String, dynamic>?;
+        if (m == null) continue;
+        final title = _xmlEsc(m['title']?.toString() ?? '');
+        final link = _xmlEsc(m['link']?.toString() ?? '');
+        var desc = m['description']?.toString() ?? '';
+        b.write('<item><title>$title</title><link>$link</link>');
+        b.write('<description>${_xmlEsc(desc)}</description></item>');
+      }
+      b.write('</channel></rss>');
+      return b.toString();
+    } catch (e) {
+      debugPrint('[Catalog] rss2json parse: $e');
+      return null;
+    }
+  }
+
+  static String _xmlEsc(String s) => s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
 
   static String? _asRssIfValid(String? t) {
     if (t == null) return null;
@@ -835,8 +883,6 @@ class IptvScraper {
     List<IptvScrapedM3uSnippet> m3uSnippets,
     int maxResults,
   ) async {
-    String? selftext;
-    String? link;
     try {
       final doc = xml.XmlDocument.parse(xmlStr);
       final items = doc.findAllElements('item');
@@ -847,39 +893,114 @@ class IptvScraper {
         link = item.getElement('link')?.innerText.trim();
         final title = item.getElement('title')?.innerText ?? '';
         if (link == null || link.isEmpty) continue;
-        selftext = null;
-        final pJson = _permalinkToPostJsonUrl(link);
-        if (pJson == null) continue;
-        for (final host in _redditListHosts) {
-          if (out.length >= maxResults) break;
-          final u = pJson.replaceFirst('https://www.reddit.com', host);
-          final t = await _httpGetText(
-            u,
-            timeout: const Duration(seconds: 20),
-            require2xx: true,
-          );
-          if (t == null) continue;
-          selftext = _selftextFromPostJson(t);
-          if (selftext != null) break;
+
+        // Reddit RSS often includes a useful HTML blurb in <description> even when
+        // per-post .json is blocked (carriers, DNS, strict TLS).
+        final before = out.length;
+        String? fromDesc;
+        final descNode = item.getElement('description');
+        if (descNode != null) {
+          var raw = descNode.innerText;
+          if (raw.isEmpty) {
+            raw = descNode.innerXml;
+          }
+          fromDesc = _stripHtmlToText(raw);
         }
-        if (selftext == null) {
-          var j = await _tryFetchJinaJson(pJson!);
-          if (j != null) selftext = _selftextFromPostJson(j);
+        if (fromDesc != null && fromDesc.length > 15) {
+          await _processOnePost(
+            out, m3uSnippets, maxResults, idx, title, fromDesc);
         }
-        if (selftext == null) {
-          final prox = await _fetchTextViaProxy(
-            pJson!,
-            timeout: const Duration(seconds: 25),
-          );
-          if (prox != null) selftext = _selftextFromPostJson(prox);
+        if (out.length >= maxResults) continue;
+
+        if (out.length > before) {
+          // Description already yielded portals; optional: still fetch for M3U pastes
+          continue;
         }
-        if (selftext == null) continue;
+
+        selftext = await _fetchPostBodyForScrape(link);
+        if (selftext == null || selftext.isEmpty) continue;
         await _processOnePost(
-          out, m3uSnippets, maxResults, idx, title, selftext);
+            out, m3uSnippets, maxResults, idx, title, selftext);
       }
     } catch (e) {
       debugPrint('[Catalog] RSS parse failed: $e');
     }
+  }
+
+  static Future<String?> _fetchPostBodyForScrape(String postPermalink) async {
+    final pJson = _permalinkToPostJsonUrl(postPermalink);
+    if (pJson == null) return null;
+    for (final host in _redditListHosts) {
+      if (pJson.isEmpty) break;
+      final u = pJson.replaceFirst('https://www.reddit.com', host);
+      final t = await _httpGetText(
+        u,
+        timeout: const Duration(seconds: 20),
+        require2xx: true,
+      );
+      if (t == null) continue;
+      final s = _selftextFromPostJson(t);
+      if (s != null && s.trim().isNotEmpty) return s;
+    }
+    var j = await _tryFetchJinaJson(pJson);
+    if (j != null) {
+      final s = _selftextFromPostJson(j);
+      if (s != null && s.trim().isNotEmpty) return s;
+    }
+    j = await _fetchTextViaProxy(
+      pJson,
+      timeout: const Duration(seconds: 25),
+    );
+    if (j != null) {
+      final s = _selftextFromPostJson(j);
+      if (s != null && s.trim().isNotEmpty) return s;
+    }
+    final pageUrl = pJson.endsWith('.json')
+        ? pJson.substring(0, pJson.length - 5)
+        : pJson;
+    var html = await _tryFetchJinaText(pageUrl);
+    var fromHtml = html != null ? _selftextFromReaderHtml(html) : null;
+    if (fromHtml != null && fromHtml.trim().length > 20) return fromHtml;
+    html = await _fetchTextViaProxy(pageUrl, timeout: const Duration(seconds: 25));
+    if (html == null) return null;
+    fromHtml = _selftextFromReaderHtml(html);
+    if (fromHtml != null && fromHtml.trim().length > 20) return fromHtml;
+    return null;
+  }
+
+  static String _stripHtmlToText(String raw) {
+    if (raw.isEmpty) return '';
+    var s = raw
+        .replaceAll(RegExp(r'(?i)<script[^>]*>[\s\S]*?</script>'), ' ')
+        .replaceAll(RegExp(r'(?i)<style[^>]*>[\s\S]*?</style>'), ' ')
+        .replaceAll(RegExp(r'(?i)<br\s*/?>'), '\n')
+        .replaceAll(RegExp(r'(?i)</p\s*>'), '\n');
+    s = s.replaceAll(RegExp(r'<[^>]+>'), ' ');
+    s = s
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return s;
+  }
+
+  static String? _selftextFromReaderHtml(String html) {
+    if (html.length < 100) return null;
+    final re = RegExp(
+      r'(?:usertext-body|md)[^>]*>([\s\S]{20,30000}?)</div',
+      caseSensitive: false,
+    );
+    final m = re.firstMatch(html);
+    if (m != null) {
+      final t = _stripHtmlToText(m.group(1)!);
+      if (t.length > 20) return t;
+    }
+    final t2 = _stripHtmlToText(html);
+    return t2.length > 80 ? t2 : null;
   }
 
   static String? _permalinkToPostJsonUrl(String permalink) {
