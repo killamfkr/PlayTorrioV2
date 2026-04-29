@@ -449,6 +449,8 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
 
   // ── Resume State ─────────────────────────────────────────────────────────
   bool _hasInitialSeek = false;
+  int _resumeScheduleToken = 0;
+  bool _resumeSnackbarShown = false;
 
   // ── Stream Subscriptions ─────────────────────────────────────────────────
   StreamSubscription<Duration>? _positionSub;
@@ -916,6 +918,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
     _isInitPlaybackRunning = true;
+    _hasInitialSeek = false;
+    _resumeScheduleToken++;
+    _resumeSnackbarShown = false;
     _liveStallReopenAttempts = 0;
     _cancelLiveStallWatchdog();
     _cancelLiveBufferingUiDebounce();
@@ -1103,6 +1108,60 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     return false;
   }
 
+  void _scheduleVodResumeSeeks() {
+    if (_isStremioLiveTv || widget.startPosition == null) return;
+    final token = _resumeScheduleToken;
+    for (final ms in <int>[400, 1800]) {
+      Future<void>.delayed(Duration(milliseconds: ms), () async {
+        if (_disposed || token != _resumeScheduleToken) return;
+        await _applyVodResumeOnce();
+      });
+    }
+  }
+
+  Future<void> _applyVodResumeOnce() async {
+    if (_disposed || _isStremioLiveTv) return;
+    if (widget.startPosition == null) return;
+    final fullDur = _durationNotifier.value;
+    if (fullDur.inSeconds <= 0) return;
+    var target = widget.startPosition!;
+    if (target >= fullDur - const Duration(seconds: 20)) {
+      var t2 = fullDur - const Duration(seconds: 10);
+      if (t2 < Duration.zero) t2 = Duration.zero;
+      if (t2 > fullDur) t2 = fullDur;
+      target = t2;
+    }
+    final pos = _positionNotifier.value;
+    if ((pos - target).abs() <= const Duration(seconds: 3)) {
+      if (!_hasInitialSeek) {
+        _hasInitialSeek = true;
+        if (mounted && !_resumeSnackbarShown) {
+          _resumeSnackbarShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Resumed from ${formatDuration(target)}'),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      }
+      return;
+    }
+    try {
+      await _player.seek(target);
+    } catch (e) {
+      debugPrint('[Player] resume seek failed: $e');
+    }
+    if (!_hasInitialSeek) {
+      _hasInitialSeek = true;
+      if (mounted && !_resumeSnackbarShown) {
+        _resumeSnackbarShown = true;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Resumed from ${formatDuration(target)}'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    }
+  }
+
   void _subscribeToStreams() {
     // Cancel any existing subscriptions to prevent duplicate listeners
     _positionSub?.cancel();
@@ -1141,22 +1200,12 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       _updateActiveSkipSegment(pos);
     });
 
-    // Duration – triggers auto-resume on first valid duration
+    // Duration – triggers follow-up seek for VOD resume (complements mpv 'start')
     _durationSub = _player.stream.duration.listen((dur) {
       if (_disposed) return;
       _durationNotifier.value = dur;
-      if (!_isStremioLiveTv &&
-          !_hasInitialSeek &&
-          dur.inSeconds > 0 &&
-          widget.startPosition != null) {
-        _hasInitialSeek = true;
-        _player.seek(widget.startPosition!);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Resumed from ${formatDuration(widget.startPosition!)}'),
-            duration: const Duration(seconds: 2),
-          ));
-        }
+      if (!_isStremioLiveTv && dur.inSeconds > 0 && widget.startPosition != null) {
+        _scheduleVodResumeSeeks();
       }
     });
 
@@ -1369,7 +1418,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
         widget.startPosition != null &&
         !_hasInitialSeek) {
       final secs = widget.startPosition!.inMilliseconds / 1000.0;
-      await mpv.setProperty('start', '+${secs.toStringAsFixed(3)}');
+      await mpv.setProperty('start', secs.toStringAsFixed(3));
     }
 
     if (_isStremioLiveTv) {

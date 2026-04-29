@@ -586,6 +586,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   // ── Resume ────────────────────────────────────────────────────────────────
   bool _hasInitialSeek = false;
+  int _resumeScheduleToken = 0;
+  bool _resumeSnackbarShown = false;
 
   // ── Stream Subscriptions ──────────────────────────────────────────────────
   StreamSubscription<Duration>? _positionSub;
@@ -1225,6 +1227,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     if (_disposed) return;
     if (_isInitPlaybackRunning) return; // Prevent re-entrant calls during async extraction
     _isInitPlaybackRunning = true;
+    // Re-opening the same player for a new attempt must allow resume to run again
+    // (e.g. first HLS source failed, next source is the real VOD file).
+    _hasInitialSeek = false;
+    _resumeScheduleToken++;
+    _resumeSnackbarShown = false;
     _liveStallReopenAttempts = 0;
     _cancelLiveStallWatchdog();
     _cancelLiveBufferingUiDebounce();
@@ -1423,6 +1430,60 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     return false;
   }
 
+  void _scheduleVodResumeSeeks() {
+    if (_isStremioLiveTv || widget.startPosition == null) return;
+    final token = _resumeScheduleToken;
+    for (final ms in <int>[400, 1800]) {
+      Future<void>.delayed(Duration(milliseconds: ms), () async {
+        if (_disposed || token != _resumeScheduleToken) return;
+        await _applyVodResumeOnce();
+      });
+    }
+  }
+
+  Future<void> _applyVodResumeOnce() async {
+    if (_disposed || _isStremioLiveTv) return;
+    if (widget.startPosition == null) return;
+    final fullDur = _durationNotifier.value;
+    if (fullDur.inSeconds <= 0) return;
+    var target = widget.startPosition!;
+    if (target >= fullDur - const Duration(seconds: 20)) {
+      var t2 = fullDur - const Duration(seconds: 10);
+      if (t2 < Duration.zero) t2 = Duration.zero;
+      if (t2 > fullDur) t2 = fullDur;
+      target = t2;
+    }
+    final pos = _positionNotifier.value;
+    if ((pos - target).abs() <= const Duration(seconds: 3)) {
+      if (!_hasInitialSeek) {
+        _hasInitialSeek = true;
+        if (mounted && !_resumeSnackbarShown) {
+          _resumeSnackbarShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Resumed from ${formatDuration(target)}'),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      }
+      return;
+    }
+    try {
+      await _player.seek(target);
+    } catch (e) {
+      debugPrint('[Player] resume seek failed: $e');
+    }
+    if (!_hasInitialSeek) {
+      _hasInitialSeek = true;
+      if (mounted && !_resumeSnackbarShown) {
+        _resumeSnackbarShown = true;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Resumed from ${formatDuration(target)}'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    }
+  }
+
   void _subscribeToStreams() {
     // Cancel any existing subscriptions to prevent duplicate listeners
     _positionSub?.cancel();
@@ -1462,32 +1523,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     _durationSub = _player.stream.duration.listen((dur) {
       if (_disposed) return;
       _durationNotifier.value = dur;
-      // Never resume-seek live TV — seek on a live edge breaks HLS and causes buffer oscillation.
-      if (!_isStremioLiveTv &&
-          !_hasInitialSeek &&
-          dur.inSeconds > 0 &&
-          widget.startPosition != null) {
-        _hasInitialSeek = true;
-        // mpv 'start' property handles the initial seek natively (set in
-        // _configureMpvProperties). Fire a deferred seek as a safety net in
-        // case the property was ignored (e.g. non-seekable VOD).
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (_disposed) return;
-          final currentPos = _positionNotifier.value;
-          // Only seek if the player didn't already land near the target
-          // (i.e. the 'start' property worked).
-          final target = widget.startPosition!;
-          if ((currentPos - target).abs() > const Duration(seconds: 5)) {
-            _player.seek(target);
-          }
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Resumed from ${formatDuration(widget.startPosition!)}'),
-            duration: const Duration(seconds: 2),
-          ));
-        }
+      if (!_isStremioLiveTv && dur.inSeconds > 0 && widget.startPosition != null) {
+        _scheduleVodResumeSeeks();
       }
     });
 
@@ -1700,15 +1737,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     }
 
     // ── Resume Position ──────────────────────────────────────────────────
-    // Set mpv's native 'start' property so it begins playback at the saved
-    // position. This is far more reliable on Android than seeking after open,
-    // because the post-open seek can be silently dropped before the demuxer
-    // is fully initialised.
+    // Set mpv's native 'start' to an *absolute* time. The '+' prefix is for
+    // *relative* seek and is wrong here — it can leave playback at 0 while
+    // the UI still shows a saved "continue" time.
     if (!_isStremioLiveTv &&
         widget.startPosition != null &&
         !_hasInitialSeek) {
       final secs = widget.startPosition!.inMilliseconds / 1000.0;
-      await mpv.setProperty('start', '+${secs.toStringAsFixed(3)}');
+      await mpv.setProperty('start', secs.toStringAsFixed(3));
     }
 
     if (_isStremioLiveTv) {
