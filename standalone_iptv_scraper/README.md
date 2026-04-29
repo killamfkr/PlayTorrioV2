@@ -32,7 +32,14 @@ The canonical source of truth for the feature is still `PlayTorrioV2/lib/feature
 
 ## GitHub Actions
 
-In the PlayTorrio repo, workflow **Build IPTV Scraper APK** (`.github/workflows/standalone_iptv_scraper_apk.yml`) runs `flutter create` in `standalone_iptv_scraper/` and builds a **release APK**. Trigger manually via **Actions → Build IPTV Scraper APK → Run workflow**, or push changes under `standalone_iptv_scraper/`. The artifact is named `IPTV-Scraper-Android-universal`.
+In the PlayTorrio repo, workflow **Build IPTV Scraper APK** (`.github/workflows/standalone_iptv_scraper_apk.yml`) runs `flutter create` in `standalone_iptv_scraper/` and builds a **release APK**.
+
+**If you do not see it under Actions:** GitHub only lists workflows that exist on your **default branch** (usually `main`). Merge this branch to `main` first, or add the workflow file directly on `main`.
+
+- **Actions** → **Build IPTV Scraper APK** → **Run workflow** (after it is on the default branch)
+- Or push a change under `standalone_iptv_scraper/` to run it automatically
+
+The artifact is named `IPTV-Scraper-Android-universal` (`app-release.apk`).
 
 ## License
 

@@ -5,8 +5,10 @@ name: Build IPTV Scraper APK
 
 on:
   workflow_dispatch:
+  # Runs when standalone_iptv_scraper/ or this workflow changes on any branch.
+  # Note: the workflow only appears in the left sidebar after this file is merged
+  # to your default branch; until then, merge the PR or cherry-pick this file to main.
   push:
-    branches: [main, master]
     paths:
       - 'standalone_iptv_scraper/**'
       - '.github/workflows/standalone_iptv_scraper_apk.yml'
@@ -14,7 +16,6 @@ on:
 env:
   FLUTTER_CHANNEL: stable
   FLUTTER_VERSION: '3.41.0'
-  STANDALONE_DIR: standalone_iptv_scraper
 
 jobs:
   android-apk:
@@ -22,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ${{ env.STANDALONE_DIR }}
+        working-directory: standalone_iptv_scraper
 
     steps:
       - uses: actions/checkout@v4
@@ -54,5 +55,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: IPTV-Scraper-Android-universal
-          path: ${{ env.STANDALONE_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          path: standalone_iptv_scraper/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
