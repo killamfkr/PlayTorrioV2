@@ -248,9 +248,11 @@ class _PortalListView extends StatelessWidget {
         children: [
           _PtAppBar(
             title: 'IPTV Portals',
-            subtitle: ctrl.statusText.isEmpty
-                ? '${ctrl.verified.length} verified'
-                : ctrl.statusText,
+            subtitle: ctrl.verified.isNotEmpty
+                ? (ctrl.statusText.isNotEmpty
+                    ? ctrl.statusText
+                    : '${ctrl.verified.length} verified')
+                : (ctrl.statusText.isNotEmpty ? null : '0 verified'),
             actions: [
               IconButton(
                 tooltip: 'Add portal',
@@ -325,38 +327,74 @@ class _PortalListView extends StatelessWidget {
   }
 
   Widget _buildEmpty(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.satellite_alt_rounded,
-                size: 80, color: Color(0xFF00E5FF)),
-            const SizedBox(height: 24),
-            Text('No portals yet',
-                style: GoogleFonts.bebasNeue(
-                    color: Colors.white,
-                    fontSize: 36,
-                    letterSpacing: 1.6)),
-            const SizedBox(height: 8),
-            Text(
-              ctrl.statusText.isEmpty
-                  ? 'Find live Xtream portals,\nor add one manually.'
-                  : ctrl.statusText,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(color: Colors.white60),
+    return LayoutBuilder(
+      builder: (context, c) {
+        return Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: 520, maxHeight: c.maxHeight * 0.72),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.satellite_alt_rounded,
+                        size: 64, color: Color(0xFF00E5FF)),
+                    const SizedBox(height: 16),
+                    Text('No portals yet',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.bebasNeue(
+                            color: Colors.white,
+                            fontSize: 32,
+                            letterSpacing: 1.2)),
+                    const SizedBox(height: 12),
+                    if (ctrl.statusText.isNotEmpty) ...[
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Scrape',
+                          style: TextStyle(
+                            color: Color(0xFF9E9E9E),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: Scrollbar(
+                        thumbVisibility: ctrl.statusText.length > 180,
+                        child: SingleChildScrollView(
+                          child: Text(
+                            ctrl.statusText.isEmpty
+                                ? 'Find live Xtream portals,\nor add one manually.'
+                                : ctrl.statusText,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.poppins(
+                              color: Colors.white60,
+                              fontSize: 13.5,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    _PrimaryButton(
+                      icon: Icons.travel_explore,
+                      label: 'Find Portals',
+                      busy: ctrl.isScraping,
+                      onPressed: ctrl.scrape,
+                    ),
+                  ],
+                ),
+              ),
             ),
-            const SizedBox(height: 28),
-            _PrimaryButton(
-              icon: Icons.travel_explore,
-              label: 'Find Portals',
-              busy: ctrl.isScraping,
-              onPressed: ctrl.scrape,
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 

@@ -561,14 +561,16 @@ class IptvScraper {
   /// Third-party wrapper for Reddit RSS when all direct/proxy fetches return non-200.
   static const _rss2Json =
       'https://api.rss2json.com/v1/api.json?rss_url={URL}';
-  static const _ua = 'Mozilla/5.0 (Linux; Android 11; PlayTorrio) '
-      'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
+  // Mobile Chrome UA (custom app tokens are often blocked by Reddit/WAFs).
+  static const _ua = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
 
   /// Extra mirrors when reddit.com blocks the client; try before public CORS proxies.
   static const _redditListHosts = <String>[
     'https://www.reddit.com',
     'https://old.reddit.com',
     'https://new.reddit.com',
+    'https://i.reddit.com',
   ];
 
   static const _pasteDomains = [
