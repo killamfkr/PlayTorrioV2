@@ -565,6 +565,7 @@ class IptvScraper {
   static const _redditListHosts = <String>[
     'https://www.reddit.com',
     'https://old.reddit.com',
+    'https://new.reddit.com',
   ];
 
   static const _pasteDomains = [
@@ -602,82 +603,139 @@ class IptvScraper {
     final out = <String, IptvPortal>{};
 
     // 1) Standard subreddit .json listing (old + new reddit, proxies, jina mirror).
-    var catalogError = <String>[];
-    final catResult = await _tryFetchSubredditJson(after: after);
-    String? catalogJson = catResult.json;
+    var listingJsonFailed = false;
+    var feedReached = false;
+    String? catalogJson = await _tryFetchSubredditJson(after: after);
+    if (catalogJson == null) listingJsonFailed = true;
     if (catalogJson != null) {
       final r = await _parseAndProcessListing(
         catalogJson, out, m3uSnippets, maxResults);
       if (r.parsed) {
-        debugPrint('[Catalog] DONE — ${out.length} (listing API)');
-        return ScrapePage(
-          portals: out.values.toList(),
-          nextAfter: r.nextAfter,
-          m3uSnippets: m3uSnippets,
-        );
+        if (out.isNotEmpty) {
+          debugPrint('[Catalog] DONE — ${out.length} (listing API)');
+          return ScrapePage(
+            portals: out.values.toList(),
+            nextAfter: r.nextAfter,
+            m3uSnippets: m3uSnippets,
+          );
+        }
+        debugPrint(
+            '[Catalog] JSON listing parsed but 0 portal lines; will try RSS');
       }
-    } else {
-      if (catResult.hint != null) catalogError.add(catResult.hint!);
     }
 
     // 2) RSS: listing API often 403/429; RSS and per-post .json may still work.
     debugPrint('[Catalog] falling back to RSS + per-post JSON');
     final rss = await _fetchRss();
     if (rss != null) {
+      feedReached = true;
       await _scrapeFromRss(rss, out, m3uSnippets, maxResults);
-    } else {
-      catalogError.add('Reddit listing unreachable (subreddit r/$_catalogSub).');
     }
 
     debugPrint(
-        '[Catalog] DONE — ${out.length} (fallback ok=${rss != null}, M3U: ${m3uSnippets.length})');
+        '[Catalog] DONE — ${out.length} (feed=$feedReached, M3U: ${m3uSnippets.length})');
     return ScrapePage(
       portals: out.values.toList(),
       nextAfter: null,
-      catalogError: (out.isEmpty)
-          ? (catalogError.isNotEmpty
-              ? catalogError.join(' ')
-              : (rss == null
-                  ? 'Scraper found no portals. Reddit may be blocked or the sub has no cred posts.'
-                  : 'Found no new portal credentials in feed (or all failed verification).'))
-          : (catalogError.isNotEmpty ? catalogError.join(' ') : null),
+      catalogError: out.isNotEmpty
+          ? null
+          : _catalogErrorWhenEmpty(
+              listingJsonFailed: listingJsonFailed, feedOk: feedReached),
       m3uSnippets: m3uSnippets,
     );
   }
 
-  static Future<({String? json, String? hint})> _tryFetchSubredditJson(
+  static String _catalogErrorWhenEmpty({
+    required bool listingJsonFailed,
+    required bool feedOk,
+  }) {
+    if (listingJsonFailed && !feedOk) {
+      return 'Reddit is blocking this network (JSON and RSS). '
+          'Try another Wi-Fi, mobile data, or a VPN, or add a portal with +.';
+    }
+    if (feedOk) {
+      return 'Feed loaded from Reddit, but no portal lines were found in recent posts. '
+          'Try again later or add a portal with +.';
+    }
+    if (listingJsonFailed) {
+      return 'Could not read the subreddit. Try a different network or add a portal with +.';
+    }
+    return 'No portal lines found. Try again later or add a portal with +.';
+  }
+
+  static Future<String?> _tryFetchSubredditJson(
       {String? after}) async {
     for (final host in _redditListHosts) {
       final j = await _fetchCatalogJson(host: host, after: after);
-      if (j != null) return (json: j, hint: null);
+      if (j != null) return j;
     }
     final t =
         'https://www.reddit.com/r/$_catalogSub/new/.json?limit=100&sort=new'
         '${(after == null || after.isEmpty) ? '' : '&after=$after'}';
-    final jina = await _tryFetchJina(t);
-    if (jina != null) return (json: jina, hint: null);
-    return (
-      json: null,
-      hint: 'Could not load Reddit r/$_catalogSub (blocked or rate-limited). '
-          'Using RSS if available…'
+    return _tryFetchJinaJson(t) ?? _tryFetchJsonViaProxy(t);
+  }
+
+  static bool _looksJson(String body) {
+    final s = body.trimLeft();
+    return s.startsWith('{') || s.startsWith('[');
+  }
+
+  static Future<String?> _tryFetchJsonViaProxy(String targetUrl) async {
+    final raw = await _fetchTextViaProxy(
+      targetUrl,
+      timeout: const Duration(seconds: 30),
     );
+    if (raw == null) return null;
+    return _looksJson(raw) ? raw : null;
   }
 
   /// Jina fetches a URL and returns the body; expects JSON.
-  static Future<String?> _tryFetchJina(String redditUrl) async {
+  static Future<String?> _tryFetchJinaJson(String redditUrl) async {
     var u = redditUrl.trim();
     if (!u.startsWith('http')) u = 'https://$u';
-    final w = u.startsWith('https://r.jina.ai/') || u.startsWith('http://r.jina.ai/')
-        ? u
-        : 'https://r.jina.ai/$u';
-    debugPrint('[Catalog] jina try ${_redact(w)}');
-    final body = await _httpGetText(
-      w,
-      timeout: const Duration(seconds: 30),
-    );
-    if (body == null) return null;
-    final t2 = body.trimLeft();
-    if (t2.startsWith('{') || t2.startsWith('[')) return body;
+    final withoutScheme = u.replaceFirst(RegExp(r'^https?://'), '');
+    final candidates = u.startsWith('https://r.jina.ai/') || u.startsWith('http://r.jina.ai/')
+        ? <String>[u]
+        : <String>[
+            'https://r.jina.ai/$u',
+            'https://r.jina.ai/http://$withoutScheme',
+            'https://r.jina.ai/https://$withoutScheme',
+          ];
+    for (final w in candidates) {
+      debugPrint('[Catalog] jina try ${_redact(w)}');
+      final body = await _httpGetText(
+        w,
+        timeout: const Duration(seconds: 30),
+        require2xx: true,
+      );
+      if (body == null) continue;
+      final t2 = body.trimLeft();
+      if (t2.startsWith('{') || t2.startsWith('[')) return body;
+    }
+    return null;
+  }
+
+  /// Serves a URL through Jina reader; returns the raw body on HTTP 2xx.
+  static Future<String?> _tryFetchJinaText(String pageUrl) async {
+    var u = pageUrl.trim();
+    if (!u.startsWith('http')) u = 'https://$u';
+    final withoutScheme = u.replaceFirst(RegExp(r'^https?://'), '');
+    final candidates = u.startsWith('https://r.jina.ai/') || u.startsWith('http://r.jina.ai/')
+        ? <String>[u]
+        : <String>[
+            'https://r.jina.ai/$u',
+            'https://r.jina.ai/http://$withoutScheme',
+            'https://r.jina.ai/https://$withoutScheme',
+          ];
+    for (final w in candidates) {
+      debugPrint('[Catalog] jina (text) ${_redact(w)}');
+      final body = await _httpGetText(
+        w,
+        timeout: const Duration(seconds: 30),
+        require2xx: true,
+      );
+      if (body != null && body.isNotEmpty) return body;
+    }
     return null;
   }
 
@@ -723,15 +781,50 @@ class IptvScraper {
   static Future<String?> _fetchRss() async {
     for (final host in _redditListHosts) {
       final u = '$host$_rssPath';
-      final t = await _httpGetText(u, timeout: const Duration(seconds: 20));
-      if (t == null) continue;
-      if (t.contains('<item') && t.contains('http')) return t;
+      var t = await _httpGetText(
+        u,
+        timeout: const Duration(seconds: 20),
+        require2xx: true,
+      );
+      t = _asRssIfValid(t);
+      if (t != null) return t;
     }
-    // Jina can serve RSS as text
     for (final host in _redditListHosts) {
-      final w = 'https://r.jina.ai/${host}$_rssPath';
-      final t = await _httpGetText(w, timeout: const Duration(seconds: 30));
-      if (t != null && t.contains('<item') && t.contains('http')) return t;
+      final u = '$host$_rssPath';
+      var t = await _tryFetchJinaText(u);
+      t = _asRssIfValid(t);
+      if (t != null) return t;
+    }
+    for (final host in _redditListHosts) {
+      final u = '$host$_rssPath';
+      var t = await _fetchTextViaProxy(u, timeout: const Duration(seconds: 25));
+      t = _asRssIfValid(t);
+      if (t != null) return t;
+    }
+    return null;
+  }
+
+  static String? _asRssIfValid(String? t) {
+    if (t == null) return null;
+    if (t.contains('<item') && t.contains('http')) return t;
+    return null;
+  }
+
+  static Future<String?> _fetchTextViaProxy(
+    String targetUrl, {
+    Duration? timeout,
+  }) async {
+    final encoded = Uri.encodeComponent(targetUrl);
+    for (final tmpl in _fetchProxies) {
+      final proxyUrl = tmpl.replaceFirst('{URL}', encoded);
+      debugPrint('[Catalog] text proxy ${_redact(proxyUrl)}');
+      final t = await _httpGetText(
+        proxyUrl,
+        timeout: timeout ?? const Duration(seconds: 25),
+        require2xx: true,
+        userAgent: _ua,
+      );
+      if (t != null && t.isNotEmpty) return t;
     }
     return null;
   }
@@ -760,14 +853,25 @@ class IptvScraper {
         for (final host in _redditListHosts) {
           if (out.length >= maxResults) break;
           final u = pJson.replaceFirst('https://www.reddit.com', host);
-          final t = await _httpGetText(u, timeout: const Duration(seconds: 20));
+          final t = await _httpGetText(
+            u,
+            timeout: const Duration(seconds: 20),
+            require2xx: true,
+          );
           if (t == null) continue;
           selftext = _selftextFromPostJson(t);
           if (selftext != null) break;
         }
         if (selftext == null) {
-          final j = await _tryFetchJina(pJson!);
+          var j = await _tryFetchJinaJson(pJson!);
           if (j != null) selftext = _selftextFromPostJson(j);
+        }
+        if (selftext == null) {
+          final prox = await _fetchTextViaProxy(
+            pJson!,
+            timeout: const Duration(seconds: 25),
+          );
+          if (prox != null) selftext = _selftextFromPostJson(prox);
         }
         if (selftext == null) continue;
         await _processOnePost(
@@ -784,7 +888,25 @@ class IptvScraper {
       if (u.isEmpty) return null;
       if (u.contains('?')) u = u.split('?').first;
       if (u.endsWith('/')) u = u.substring(0, u.length - 1);
+      if (u.startsWith('http://') || u.startsWith('https://')) {
+        final uri = Uri.parse(u);
+        if (uri.host.toLowerCase().endsWith('reddit.com')) {
+          u = Uri(
+            scheme: 'https',
+            host: 'www.reddit.com',
+            path: uri.path,
+          ).toString();
+        } else {
+          u = uri.toString();
+        }
+      } else {
+        var path = u;
+        if (path.startsWith('r/')) path = '/$path';
+        if (!path.startsWith('/')) path = '/$path';
+        u = Uri(scheme: 'https', host: 'www.reddit.com', path: path).toString();
+      }
       if (!u.endsWith('.json')) u = '$u.json';
+      if (u.endsWith('.json.json')) u = u.substring(0, u.length - 5);
       return u;
     } catch (_) {
       return null;
@@ -1047,12 +1169,23 @@ class IptvScraper {
   static Future<String?> _httpGetText(
     String url, {
     Duration? timeout,
+    bool require2xx = false,
+    String? userAgent,
   }) async {
     try {
       final resp = await http.get(Uri.parse(url), headers: {
-        'User-Agent': _ua,
+        'User-Agent': userAgent ?? _ua,
         'Accept': 'text/html,application/json,*/*',
       }).timeout(timeout ?? const Duration(seconds: 15));
+      if (require2xx) {
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          debugPrint(
+              '[Catalog] http ${resp.statusCode} len=${resp.body.length} '
+              '(require2xx) ${_redact(url)}');
+          return null;
+        }
+        return resp.body;
+      }
       return resp.body;
     } catch (e) {
       debugPrint('[Catalog] httpGet failed: $e');
@@ -1061,16 +1194,11 @@ class IptvScraper {
   }
 
   /// Fetches the subreddit listing as JSON. Tries [host] (e.g. www or old),
-  /// then public proxies. Accepts JSON-looking bodies.
+  /// then public proxies. Accepts JSON-looking bodies; ignores non-2xx.
   static Future<String?> _fetchCatalogJson({required String host, String? after}) async {
     String buildTarget(String h) {
       final base = '$h/r/$_catalogSub/new/.json?limit=100&sort=new';
       return (after == null || after.isEmpty) ? base : '$base&after=$after';
-    }
-
-    bool looksJson(String body) {
-      final t = body.trimLeft();
-      return t.startsWith('{') || t.startsWith('[');
     }
 
     final target = buildTarget(host);
@@ -1081,8 +1209,13 @@ class IptvScraper {
         'User-Agent': _catalogDirectUa,
         'Accept': 'application/json',
       }).timeout(const Duration(seconds: 12));
-      if (resp.statusCode == 200 && looksJson(resp.body)) return resp.body;
-      debugPrint('[Catalog]   direct ${resp.statusCode} len=${resp.body.length}');
+      if (resp.statusCode == 200) {
+        final t = resp.body.trimLeft();
+        if (t.startsWith('{') || t.startsWith('[')) return resp.body;
+        debugPrint('[Catalog]   direct 200 but non-JSON (len=${resp.body.length})');
+      } else {
+        debugPrint('[Catalog]   direct ${resp.statusCode} len=${resp.body.length}');
+      }
     } catch (e) {
       debugPrint('[Catalog]   direct failed: $e');
     }
@@ -1096,12 +1229,14 @@ class IptvScraper {
           'User-Agent': _ua,
           'Accept': 'application/json, text/plain, */*',
         }).timeout(const Duration(seconds: 20));
-        if (resp.statusCode != 200) {
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
           debugPrint('[Catalog]   proxy ${resp.statusCode}');
           continue;
         }
-        if (looksJson(resp.body)) return resp.body;
-        debugPrint('[Catalog]   proxy non-JSON (len=${resp.body.length})');
+        final b = resp.body;
+        final t2 = b.trimLeft();
+        if (t2.startsWith('{') || t2.startsWith('[')) return b;
+        debugPrint('[Catalog]   proxy non-JSON (len=${b.length})');
       } catch (e) {
         debugPrint('[Catalog]   proxy failed: $e');
       }
