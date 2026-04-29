@@ -21,6 +21,7 @@ dependencies:
   audio_session: ^0.1.25
   crypto: ^3.0.5
   pointycastle: ^3.9.1
+  xml: ^6.5.0
 
 dev_dependencies:
   flutter_test:

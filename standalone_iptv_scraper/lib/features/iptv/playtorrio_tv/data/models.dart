@@ -143,11 +143,14 @@ class ChannelHit {
 class ScrapePage {
   final List<IptvPortal> portals;
   final String? nextAfter;
+  /// If set, the Reddit catalog could not be loaded; [portals] may be empty.
+  final String? catalogError;
   /// Raw M3U / playlist text captured from paste fetches (truncated in each snippet).
   final List<IptvScrapedM3uSnippet> m3uSnippets;
   const ScrapePage({
     required this.portals,
     this.nextAfter,
+    this.catalogError,
     this.m3uSnippets = const [],
   });
   bool get hasMore => nextAfter != null && nextAfter!.isNotEmpty;

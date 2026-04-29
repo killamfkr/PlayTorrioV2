@@ -355,7 +355,9 @@ class IptvController extends ChangeNotifier {
 
       if (_pendingPortals.isEmpty) {
         statusText = (page != null && page.portals.isEmpty)
-            ? 'No portals found. Try Get More.'
+            ? (page.catalogError != null && page.catalogError!.isNotEmpty
+                ? 'No portals found. ${page.catalogError}'
+                : 'No portals found. Try Get More.')
             : 'All on this page already verified.';
         canGetMore = page?.hasMore ?? canGetMore;
         isScraping = false;
