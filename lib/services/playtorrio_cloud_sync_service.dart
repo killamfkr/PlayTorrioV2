@@ -446,6 +446,16 @@ class PlaytorrioCloudSyncService {
           : int.tryParse('${e['position'] ?? 0}') ?? 0;
       final old = byUnique[entryUid];
       if (old != null) {
+        final cloudUrl = e['streamUrl']?.toString();
+        if (cloudUrl == null || cloudUrl.isEmpty) {
+          final localUrl = old['streamUrl']?.toString();
+          if (localUrl != null && localUrl.isNotEmpty) {
+            e['streamUrl'] = localUrl;
+            if (old['streamHeaders'] != null) {
+              e['streamHeaders'] = old['streamHeaders'];
+            }
+          }
+        }
         final oldPos = old['position'] is int
             ? old['position'] as int
             : (old['position'] as num?)?.toInt() ?? 0;

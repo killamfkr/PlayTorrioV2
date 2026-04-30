@@ -64,6 +64,78 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   List<Map<String, dynamic>> _traktCalendar = [];
   List<Map<String, dynamic>> _traktCalendarMovies = [];
 
+  /// Converts nested maps from JSON decode into String maps for HTTP headers.
+  Map<String, String>? _parseHeaderMap(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is Map<String, String>) return raw;
+    if (raw is Map) {
+      final out = <String, String>{};
+      raw.forEach((k, v) {
+        out['$k'] = '$v';
+      });
+      return out.isEmpty ? null : out;
+    }
+    return null;
+  }
+
+  /// Prefer Continue Watching with the **exact URL + headers** we saved while playing.
+  Future<bool> _tryResumeSavedStreamDirect(Map<String, dynamic> item) async {
+    final savedUrl = item['streamUrl']?.toString();
+    if (savedUrl == null ||
+        savedUrl.isEmpty ||
+        !(savedUrl.startsWith('http://') || savedUrl.startsWith('https://'))) {
+      return false;
+    }
+
+    final tmdbId = item['tmdbId'] as int;
+    final season = item['season'] as int?;
+    final episode = item['episode'] as int?;
+    final title = item['title'] as String;
+    final posterPath = item['posterPath'] as String;
+    final startPos = Duration(milliseconds: item['position'] as int);
+    final headers = _parseHeaderMap(item['streamHeaders']);
+
+    final method = item['method'] as String? ?? 'stream';
+    String activeProvider = method == 'stremio_direct' ? 'stremio_direct' : method;
+    if (method == 'stream' && item['sourceId'] is String) {
+      activeProvider = item['sourceId'] as String;
+    }
+
+    if (!mounted) return true;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          streamUrl: savedUrl,
+          title: title,
+          headers: headers,
+          movie: Movie(
+            id: tmdbId,
+            title: title,
+            posterPath: posterPath,
+            backdropPath: '',
+            overview: '',
+            releaseDate: '',
+            voteAverage: 0,
+            mediaType: season != null ? 'tv' : 'movie',
+            genres: [],
+            imdbId: item['imdbId'],
+          ),
+          selectedSeason: season,
+          selectedEpisode: episode,
+          magnetLink: item['magnetLink'] as String?,
+          fileIndex: item['fileIndex'] as int?,
+          activeProvider: activeProvider,
+          startPosition: startPos,
+          stremioId: item['stremioId'] as String?,
+          stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
+          stremioStreamType: season != null ? 'tv' : 'movie',
+        ),
+      ),
+    );
+    return true;
+  }
+
   @override
   bool get wantKeepAlive => true;
 
@@ -1845,6 +1917,8 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
     setState(() => _loadingItemId = uniqueId);
 
     try {
+      if (await _tryResumeSavedStreamDirect(item)) return;
+
       final method = item['method'] as String;
       final tmdbId = item['tmdbId'] as int;
       final season = item['season'] as int?;

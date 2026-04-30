@@ -61,7 +61,8 @@ class WatchHistoryService {
     String? episodeTitle,
     String? magnetLink, // Full magnet link for torrents
     int? fileIndex, // File index for multi-file torrents
-    String? streamUrl, // Direct stream URL (for stremio_direct)
+    String? streamUrl, // Direct HTTP(S) playback URL when still valid
+    Map<String, String>? streamHeaders, // Headers for that URL (Referer, auth)
     String? stremioId, // Custom Stremio item ID
     String? stremioAddonBaseUrl, // Addon base URL for re-fetching
     String? stremioType, // 'movie' or 'series'
@@ -89,7 +90,9 @@ class WatchHistoryService {
       'episodeTitle': episodeTitle,
       'magnetLink': magnetLink, // Save full magnet link
       'fileIndex': fileIndex, // Save file index
-      'streamUrl': streamUrl, // Save direct stream URL
+      'streamUrl': streamUrl,
+      if (streamHeaders != null && streamHeaders.isNotEmpty)
+        'streamHeaders': streamHeaders,
       'stremioId': stremioId, // Save stremio item ID
       'stremioAddonBaseUrl': stremioAddonBaseUrl, // Save addon base URL
       'stremioType': stremioType, // Save stremio type

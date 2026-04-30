@@ -617,6 +617,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   bool _showControls = true;
   bool _isLocked = false;
   Timer? _hideTimer;
+  /// Periodically save stream URL + position (links expire; app kill skips dispose).
+  Timer? _resumeCheckpointTimer;
   BoxFit _videoFit = BoxFit.contain;
 
   // ── Resume ────────────────────────────────────────────────────────────────
@@ -835,6 +837,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       await _configureAudioSessionIfNeeded();
       _loadSubtitlePrefs();
       _initPlayback();
+      _resumeCheckpointTimer?.cancel();
+      _resumeCheckpointTimer = Timer.periodic(
+        const Duration(seconds: 35),
+        (_) => _checkpointResumeSnapshot(),
+      );
       _startHideTimer();
       if (_builtinSubtitlesEnabled) {
         _fetchSubtitles();
@@ -934,6 +941,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     // Restore free rotation when leaving the player.
     AutoOrientation.fullAutoMode(forceSensor: true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    _resumeCheckpointTimer?.cancel();
+    _resumeCheckpointTimer = null;
 
     _disposed = true;
     if (_builtinSubsListener != null) {
@@ -1123,6 +1133,74 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     }
   }
 
+  /// Saves URL + position without finalizing playback (Trakt stop).
+  void _checkpointResumeSnapshot() {
+    if (_disposed || widget.movie == null || _isStremioLiveTv) return;
+    final pos = _positionNotifier.value.inMilliseconds;
+    final dur = _durationNotifier.value.inMilliseconds;
+    if (pos < 15000 || dur <= 0) return;
+
+    final isTorrent = widget.magnetLink != null;
+    final isStremioDirect = widget.activeProvider == 'stremio_direct';
+    final String method;
+    final String sourceId;
+    if (isTorrent) {
+      method = 'torrent';
+      sourceId = widget.magnetLink!;
+    } else if (isStremioDirect) {
+      method = 'stremio_direct';
+      sourceId = widget.mediaPath;
+    } else if (widget.activeProvider == 'amri') {
+      method = 'amri';
+      sourceId = widget.mediaPath;
+    } else if (widget.activeProvider != null) {
+      method = 'stream';
+      sourceId = widget.activeProvider!;
+    } else {
+      method = 'amri';
+      sourceId = widget.mediaPath;
+    }
+
+    String? streamUrlForResume;
+    if (!isTorrent &&
+        (widget.mediaPath.startsWith('http://') ||
+            widget.mediaPath.startsWith('https://'))) {
+      streamUrlForResume = _currentUrl ?? widget.mediaPath;
+    }
+    Map<String, String>? streamHeadersForResume;
+    if (!isTorrent &&
+        widget.headers != null &&
+        widget.headers!.isNotEmpty) {
+      streamHeadersForResume = Map<String, String>.from(widget.headers!);
+    }
+
+    WatchHistoryService().saveProgress(
+      tmdbId: widget.movie!.id,
+      imdbId: widget.movie!.imdbId,
+      title: widget.title,
+      posterPath: widget.movie!.posterPath,
+      method: method,
+      sourceId: sourceId,
+      position: pos,
+      duration: dur,
+      season: widget.selectedSeason,
+      episode: widget.selectedEpisode,
+      episodeTitle: widget.selectedEpisode != null
+          ? 'Episode ${widget.selectedEpisode}'
+          : null,
+      magnetLink: widget.magnetLink,
+      fileIndex: widget.fileIndex,
+      streamUrl: isStremioDirect ? widget.mediaPath : streamUrlForResume,
+      streamHeaders: streamHeadersForResume,
+      stremioId: widget.stremioId,
+      stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
+      stremioType: widget.stremioStreamType == 'tv'
+          ? 'tv'
+          : (widget.movie!.mediaType == 'tv' ? 'series' : 'movie'),
+      mediaType: widget.movie!.mediaType,
+    );
+  }
+
   void _saveWatchHistory({bool isBgPause = false}) {
     if (_historySaved && !isBgPause) return; // prevent double stop
     _historySaved = true;
@@ -1158,6 +1236,20 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         method = 'amri';
         sourceId = widget.mediaPath;
       }
+
+      String? streamUrlForResume;
+      if (!isTorrent &&
+          (widget.mediaPath.startsWith('http://') ||
+              widget.mediaPath.startsWith('https://'))) {
+        streamUrlForResume = _currentUrl ?? widget.mediaPath;
+      }
+      Map<String, String>? streamHeadersForResume;
+      if (!isTorrent &&
+          widget.headers != null &&
+          widget.headers!.isNotEmpty) {
+        streamHeadersForResume = Map<String, String>.from(widget.headers!);
+      }
+
       WatchHistoryService().saveProgress(
         tmdbId: widget.movie!.id,
         imdbId: widget.movie!.imdbId,
@@ -1174,7 +1266,8 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             : null,
         magnetLink: widget.magnetLink,
         fileIndex: widget.fileIndex,
-        streamUrl: isStremioDirect ? widget.mediaPath : null,
+        streamUrl: isStremioDirect ? widget.mediaPath : streamUrlForResume,
+        streamHeaders: streamHeadersForResume,
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioType: widget.stremioStreamType == 'tv'
