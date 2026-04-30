@@ -1067,6 +1067,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'sports':       {'icon': Icons.sports_soccer_outlined,     'label': 'Sports'},
     'iptv':         {'icon': Icons.playlist_play,            'label': 'IPTV (M3U)'},
     'iptv_pt':      {'icon': Icons.view_module,               'label': 'PT IPTV'},
+    'iptv_pt_guide': {'icon': Icons.calendar_view_day_rounded, 'label': 'PT TV Guide'},
     'audiobooks':   {'icon': Icons.menu_book,                  'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,    'label': 'Books'},
     'music':        {'icon': Icons.music_note,                 'label': 'Music'},

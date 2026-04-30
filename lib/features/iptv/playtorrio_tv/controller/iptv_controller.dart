@@ -14,6 +14,7 @@ enum IptvView {
   episodeList,
   channelsHub,
   channelResults,
+  tvGuide,
 }
 
 /// Central controller for the entire PT IPTV experience.
@@ -121,6 +122,12 @@ class IptvController extends ChangeNotifier {
   bool channelIsRunning = false;
   List<ChannelHit> channelResults = const [];
   bool _channelCancel = false;
+
+  // ── Favorites TV guide (starred Live TV channels across portals) ──
+  bool tvGuideLoading = false;
+  String? tvGuideError;
+  List<TvGuideSlot> tvGuideSlots = const [];
+  final Map<String, List<IptvStream>> _tvGuideStreamCache = {};
 
   /// Favorite channel-hit URLs per channelId — pinned to the top.
   final Map<String, Set<String>> _favoriteHits = {};
@@ -725,6 +732,103 @@ class IptvController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lazy EPG for the favorites TV guide (any portal). Key =
+  /// `portalKey|streamId`.
+  final Map<String, Future<List<EpgEntry>>> _guideEpgCache = {};
+
+  Future<List<EpgEntry>> epgForSlot(TvGuideSlot slot) {
+    if (slot.stream.kind != 'live' || slot.stream.streamId.isEmpty) {
+      return Future.value(const []);
+    }
+    final key = '${slot.portal.key}|${slot.stream.streamId}';
+    return _guideEpgCache.putIfAbsent(
+      key,
+      () => IptvClient.shortEpg(
+        slot.portal.portal,
+        slot.stream.streamId,
+        limit: 12,
+      ),
+    );
+  }
+
+  Future<void> unfavoriteTvGuideSlot(TvGuideSlot slot) async {
+    final ids = await IptvBrowserFavoritesStore.load(slot.portal.key);
+    final set = {...ids}..remove(slot.stream.streamId);
+    await IptvBrowserFavoritesStore.save(slot.portal.key, set);
+    if (activePortal?.key == slot.portal.key) {
+      _liveFavoriteIds = set;
+    }
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    _guideEpgCache.remove('${slot.portal.key}|${slot.stream.streamId}');
+    await syncTvGuideSlots();
+    notifyListeners();
+  }
+
+  Future<void> openTvGuide() async {
+    view = IptvView.tvGuide;
+    tvGuideLoading = true;
+    tvGuideError = null;
+    tvGuideSlots = const [];
+    notifyListeners();
+    try {
+      await syncTvGuideSlots();
+    } catch (e) {
+      tvGuideError = '$e';
+    } finally {
+      tvGuideLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Load favorites TV guide rows without switching [view] (e.g. main-tab guide).
+  Future<void> syncTvGuideSlots() async {
+    final slots = <TvGuideSlot>[];
+    for (final v in verified) {
+      final favIds = await IptvBrowserFavoritesStore.load(v.key);
+      if (favIds.isEmpty) continue;
+
+      var streams = _tvGuideStreamCache[v.key];
+      if (streams == null || streams.isEmpty) {
+        try {
+          streams = await IptvClient.streams(v.portal, IptvSection.live, '');
+          _tvGuideStreamCache[v.key] = streams;
+        } catch (_) {
+          continue;
+        }
+      }
+
+      final byId = {for (final s in streams) s.streamId: s};
+      for (final id in favIds) {
+        final s = byId[id];
+        if (s != null && s.kind == 'live') {
+          slots.add(TvGuideSlot(portal: v, stream: s));
+        }
+      }
+    }
+    slots.sort((a, b) {
+      final pn = a.portal.name.compareTo(b.portal.name);
+      if (pn != 0) return pn;
+      return a.stream.name.compareTo(b.stream.name);
+    });
+    tvGuideSlots = slots;
+  }
+
+  Future<void> refreshTvGuide() async {
+    _tvGuideStreamCache.clear();
+    _guideEpgCache.clear();
+    tvGuideLoading = true;
+    tvGuideError = null;
+    notifyListeners();
+    try {
+      await syncTvGuideSlots();
+    } catch (e) {
+      tvGuideError = '$e';
+    } finally {
+      tvGuideLoading = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> openHardcodedChannel(HardcodedChannel ch) async {
     activeHardcoded = ch;
     view = IptvView.channelResults;
@@ -1087,6 +1191,9 @@ class IptvController extends ChangeNotifier {
         activeHardcoded = null;
         channelResults = const [];
         channelStatus = '';
+        break;
+      case IptvView.tvGuide:
+        view = IptvView.portalList;
         break;
     }
     notifyListeners();

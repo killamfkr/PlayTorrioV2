@@ -140,6 +140,17 @@ class ChannelHit {
   });
 }
 
+/// One row in the PT IPTV favorites TV guide (portal + starred live channel).
+class TvGuideSlot {
+  final VerifiedPortal portal;
+  final IptvStream stream;
+
+  const TvGuideSlot({
+    required this.portal,
+    required this.stream,
+  });
+}
+
 class ScrapePage {
   final List<IptvPortal> portals;
   final String? nextAfter;

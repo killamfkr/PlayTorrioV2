@@ -20,6 +20,7 @@ import 'magnet_player_screen.dart';
 import 'live_matches_screen.dart';
 import '../features/iptv/screens/iptv_login_screen.dart';
 import '../features/iptv/playtorrio_tv/screens/iptv_pt_screen.dart';
+import '../features/iptv/playtorrio_tv/screens/iptv_pt_tv_guide_tab_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
 import '../utils/performance_tuning.dart';
@@ -62,6 +63,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'sports':       {'icon': Icons.sports_soccer_outlined,     'active': Icons.sports_soccer_rounded,   'label': 'Sports'},
     'iptv':         {'icon': Icons.playlist_play_outlined,     'active': Icons.playlist_play,          'label': 'IPTV (M3U)'},
     'iptv_pt':      {'icon': Icons.view_module_outlined,     'active': Icons.view_module,            'label': 'PT IPTV'},
+    'iptv_pt_guide': {'icon': Icons.calendar_view_day_outlined, 'active': Icons.calendar_view_day_rounded, 'label': 'PT TV Guide'},
     'audiobooks':   {'icon': Icons.menu_book_outlined,          'active': Icons.menu_book,               'label': 'Audiobooks'},
     'books':        {'icon': Icons.import_contacts_rounded,     'active': Icons.import_contacts_rounded, 'label': 'Books'},
     'music':        {'icon': Icons.music_note_outlined,         'active': Icons.music_note,              'label': 'Music'},
@@ -97,6 +99,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'sports':       const LiveMatchesScreen(),
       'iptv':         const IptvLoginScreen(),
       'iptv_pt':      const IptvPtScreen(),
+      'iptv_pt_guide': const IptvPtTvGuideTabScreen(),
       'audiobooks':   const AudiobookScreen(),
       'books':        const BooksScreen(),
       'music':        const MusicScreen(),

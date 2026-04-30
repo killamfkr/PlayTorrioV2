@@ -982,9 +982,10 @@ class SettingsService {
   /// - [sports]: live sports (streamed.pk) — upstream [LiveMatchesScreen]
   /// - [iptv]: M3U / Xtream (legacy IPTV flow)
   /// - [iptv_pt]: PlayTorrio TV (hardcoded / Pastesh stack)
+  /// - [iptv_pt_guide]: PT IPTV favorites TV guide (starred Live channels)
   static const List<String> allNavIds = [
     'home', 'discover', 'live_matches', 'sports',
-    'iptv', 'iptv_pt', 'audiobooks', 'books', 'music', 'comics', 'manga',
+    'iptv', 'iptv_pt', 'iptv_pt_guide', 'audiobooks', 'books', 'music', 'comics', 'manga',
     'jellyfin', 'anime', 'search', 'mylist', 'magnet',
   ];
 

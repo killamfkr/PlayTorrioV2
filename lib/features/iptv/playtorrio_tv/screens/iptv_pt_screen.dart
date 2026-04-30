@@ -7,6 +7,7 @@ import '../data/hardcoded_channels.dart';
 import '../data/iptv_network.dart';
 import '../data/models.dart';
 import 'iptv_pt_player_screen.dart';
+import 'iptv_pt_tv_guide_view.dart';
 
 /// Mask a URL for safe display: keeps host, masks each path segment to first 2 chars + ***.
 /// Returns '—' for empty/invalid input. Strips query and fragment.
@@ -89,6 +90,12 @@ class _IptvPtScreenState extends State<IptvPtScreen> {
         return _ChannelsHubView(ctrl: _ctrl, compact: _isCompact(context));
       case IptvView.channelResults:
         return _ChannelResultsView(ctrl: _ctrl, compact: _isCompact(context));
+      case IptvView.tvGuide:
+        return IptvPtTvGuideView(
+          ctrl: _ctrl,
+          compact: _isCompact(context),
+          showBack: true,
+        );
     }
   }
 }
@@ -476,6 +483,13 @@ class _PortalListView extends StatelessWidget {
               ),
               const SizedBox(width: 8),
             ],
+            _PrimaryButton(
+              icon: Icons.calendar_view_day_rounded,
+              label: 'TV Guide',
+              subtle: true,
+              onPressed: ctrl.openTvGuide,
+            ),
+            const SizedBox(width: 8),
             _PrimaryButton(
               icon: Icons.tv_rounded,
               label: 'Channels',
