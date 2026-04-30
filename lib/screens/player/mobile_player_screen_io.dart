@@ -522,6 +522,41 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     });
   }
 
+  /// media_kit applies resume via [Media.start] when opening — mpv `start` alone is flaky.
+  Media _mediaForPlaybackUrl(
+    String url, {
+    Map<String, String>? httpHeaders,
+  }) {
+    if (_isStremioLiveTv) return Media(url, httpHeaders: httpHeaders);
+    final start = widget.startPosition;
+    if (start != null && start > Duration.zero) {
+      return Media(url, httpHeaders: httpHeaders, start: start);
+    }
+    return Media(url, httpHeaders: httpHeaders);
+  }
+
+  Duration? _resumeAfterManualSwitch(Duration playbackPos) {
+    final sp = widget.startPosition;
+    if (sp != null && sp > Duration.zero) return sp;
+    if (playbackPos > Duration.zero) return playbackPos;
+    return null;
+  }
+
+  Future<void> _mpvSeekExact(Duration target) async {
+    final secs = target.inMilliseconds / 1000.0;
+    try {
+      if (_player.platform is NativePlayer) {
+        await (_player.platform as NativePlayer)
+            .command(['seek', secs.toStringAsFixed(3), 'absolute', 'exact']);
+      } else {
+        await _player.seek(target);
+      }
+    } catch (e) {
+      debugPrint('[Player] exact seek failed, fallback: $e');
+      await _player.seek(target);
+    }
+  }
+
   Future<void> _reopenLiveStreamIfStuck() async {
     if (_disposed || !_isStremioLiveTv) return;
     if (_liveStallReopenAttempts >= _kLiveStallReopenMax) {
@@ -1280,7 +1315,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
           await _player.open(
-              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
+              _mediaForPlaybackUrl(playUrl, httpHeaders: stremioOpen.openHeaders));
           _applyBuiltinSubtitleState();
           // Update mpv referrer for this specific source
           if (source.headers != null && _player.platform is NativePlayer) {
@@ -1315,7 +1350,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
           await _player.open(
-              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
+              _mediaForPlaybackUrl(playUrl, httpHeaders: stremioOpen.openHeaders));
           _applyBuiltinSubtitleState();
           _player.setVolume(_volume);
           _syncBuiltInVideoMediaSession();
@@ -1409,9 +1444,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
         final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
-        await _player.open(Media(playUrl, httpHeaders: headers));
+        await _player.open(_mediaForPlaybackUrl(playUrl, httpHeaders: headers));
         _applyBuiltinSubtitleState();
-        if (currentPos.inSeconds > 0) await _player.seek(currentPos);
+        final resume = _resumeAfterManualSwitch(currentPos);
+        if (resume != null && resume > Duration.zero) {
+          await _mpvSeekExact(resume);
+        }
         _syncBuiltInVideoMediaSession();
         
         setState(() {
@@ -1433,7 +1471,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   void _scheduleVodResumeSeeks() {
     if (_isStremioLiveTv || widget.startPosition == null) return;
     final token = _resumeScheduleToken;
-    for (final ms in <int>[400, 1800]) {
+    for (final ms in <int>[0, 500, 2000, 4000]) {
       Future<void>.delayed(Duration(milliseconds: ms), () async {
         if (_disposed || token != _resumeScheduleToken) return;
         await _applyVodResumeOnce();
@@ -1468,7 +1506,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       return;
     }
     try {
-      await _player.seek(target);
+      await _mpvSeekExact(target);
     } catch (e) {
       debugPrint('[Player] resume seek failed: $e');
     }
@@ -2536,7 +2574,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         final playUrl = await _resolvePlaybackMediaUrl(result.url);
                         await _player.open(
-                          Media(playUrl, httpHeaders: result.headers),
+                          _mediaForPlaybackUrl(playUrl, httpHeaders: result.headers),
                         );
                         _applyBuiltinSubtitleState();
                         _syncBuiltInVideoMediaSession();
@@ -2561,7 +2599,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         }
                         final playUrl = await _resolvePlaybackMediaUrl(source.url);
                         await _player.open(
-                          Media(playUrl, httpHeaders: srcHeaders),
+                          _mediaForPlaybackUrl(playUrl, httpHeaders: srcHeaders),
                         );
                         _applyBuiltinSubtitleState();
                         _syncBuiltInVideoMediaSession();
@@ -2573,9 +2611,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                         });
                       }
                       
-                      // Seek to saved position
-                      if (currentPos.inSeconds > 0) {
-                        await _player.seek(currentPos);
+                      final resume = _resumeAfterManualSwitch(currentPos);
+                      if (resume != null && resume > Duration.zero) {
+                        await _mpvSeekExact(resume);
                       }
                       
                       if (mounted) {
@@ -2716,13 +2754,14 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
         await _player.open(
-          Media(playUrl, httpHeaders: headers),
+          _mediaForPlaybackUrl(playUrl, httpHeaders: headers),
         );
         _applyBuiltinSubtitleState();
         _syncBuiltInVideoMediaSession();
 
-        if (currentPos.inSeconds > 0) {
-          await _player.seek(currentPos);
+        final resume = _resumeAfterManualSwitch(currentPos);
+        if (resume != null && resume > Duration.zero) {
+          await _mpvSeekExact(resume);
         }
 
         setState(() {

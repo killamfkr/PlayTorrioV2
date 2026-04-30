@@ -885,6 +885,40 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
     });
   }
 
+  Media _mediaForPlaybackUrl(
+    String url, {
+    Map<String, String>? httpHeaders,
+  }) {
+    if (_isStremioLiveTv) return Media(url, httpHeaders: httpHeaders);
+    final start = widget.startPosition;
+    if (start != null && start > Duration.zero) {
+      return Media(url, httpHeaders: httpHeaders, start: start);
+    }
+    return Media(url, httpHeaders: httpHeaders);
+  }
+
+  Duration? _resumeAfterManualSwitch(Duration playbackPos) {
+    final sp = widget.startPosition;
+    if (sp != null && sp > Duration.zero) return sp;
+    if (playbackPos > Duration.zero) return playbackPos;
+    return null;
+  }
+
+  Future<void> _mpvSeekExact(Duration target) async {
+    final secs = target.inMilliseconds / 1000.0;
+    try {
+      if (_player.platform is NativePlayer) {
+        await (_player.platform as NativePlayer)
+            .command(['seek', secs.toStringAsFixed(3), 'absolute', 'exact']);
+      } else {
+        await _player.seek(target);
+      }
+    } catch (e) {
+      debugPrint('[Player] exact seek failed, fallback: $e');
+      await _player.seek(target);
+    }
+  }
+
   Future<void> _reopenLiveStreamIfStuck() async {
     if (_disposed || !_isStremioLiveTv) return;
     if (_liveStallReopenAttempts >= _kLiveStallReopenMax) {
@@ -969,7 +1003,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
           await _player.open(
-              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
+              _mediaForPlaybackUrl(playUrl, httpHeaders: stremioOpen.openHeaders));
           _player.setVolume(_volumeNotifier.value);
           setState(() {
             _currentUrl = playUrl;
@@ -997,7 +1031,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           playUrl = stremioOpen.playUrl;
           await _configureMpvProperties();
           await _player.open(
-              Media(playUrl, httpHeaders: stremioOpen.openHeaders));
+              _mediaForPlaybackUrl(playUrl, httpHeaders: stremioOpen.openHeaders));
           _player.setVolume(_volumeNotifier.value);
           return;
         } catch (e) {
@@ -1089,8 +1123,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final currentPos = _positionNotifier.value;
         final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
-        await _player.open(Media(playUrl, httpHeaders: headers));
-        if (currentPos.inSeconds > 0) await _player.seek(currentPos);
+        await _player.open(_mediaForPlaybackUrl(playUrl, httpHeaders: headers));
+        final resume = _resumeAfterManualSwitch(currentPos);
+        if (resume != null && resume > Duration.zero) {
+          await _mpvSeekExact(resume);
+        }
         
         setState(() {
           _currentProvider = newProvider;
@@ -1111,7 +1148,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   void _scheduleVodResumeSeeks() {
     if (_isStremioLiveTv || widget.startPosition == null) return;
     final token = _resumeScheduleToken;
-    for (final ms in <int>[400, 1800]) {
+    for (final ms in <int>[0, 500, 2000, 4000]) {
       Future<void>.delayed(Duration(milliseconds: ms), () async {
         if (_disposed || token != _resumeScheduleToken) return;
         await _applyVodResumeOnce();
@@ -1146,7 +1183,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       return;
     }
     try {
-      await _player.seek(target);
+      await _mpvSeekExact(target);
     } catch (e) {
       debugPrint('[Player] resume seek failed: $e');
     }
@@ -2040,7 +2077,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                         }
                         final playUrl = await _resolvePlaybackMediaUrl(result.url);
                         await _player.open(
-                          Media(playUrl, httpHeaders: result.headers),
+                          _mediaForPlaybackUrl(playUrl, httpHeaders: result.headers),
                         );
                         // Update the source entry with the extracted stream URL
                         _currentSources![index] = StreamSource(
@@ -2058,7 +2095,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                         // Normal direct switch
                         final playUrl = await _resolvePlaybackMediaUrl(source.url);
                         await _player.open(
-                          Media(playUrl, httpHeaders: source.headers ?? widget.headers),
+                          _mediaForPlaybackUrl(
+                              playUrl,
+                              httpHeaders: source.headers ?? widget.headers),
                         );
                         setState(() {
                           _currentUrl = playUrl;
@@ -2068,9 +2107,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                         });
                       }
                       
-                      // Seek to saved position
-                      if (currentPos.inSeconds > 0) {
-                        await _player.seek(currentPos);
+                      final resume = _resumeAfterManualSwitch(currentPos);
+                      if (resume != null && resume > Duration.zero) {
+                        await _mpvSeekExact(resume);
                       }
                       
                       if (mounted) {
@@ -2587,11 +2626,12 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
       if (streamUrl != null && streamUrl.isNotEmpty) {
         final playUrl = await _resolvePlaybackMediaUrl(streamUrl);
         await _player.open(
-          Media(playUrl, httpHeaders: headers),
+          _mediaForPlaybackUrl(playUrl, httpHeaders: headers),
         );
-        
-        if (currentPos.inSeconds > 0) {
-          await _player.seek(currentPos);
+
+        final resume = _resumeAfterManualSwitch(currentPos);
+        if (resume != null && resume > Duration.zero) {
+          await _mpvSeekExact(resume);
         }
         
         setState(() {
