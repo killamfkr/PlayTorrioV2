@@ -434,6 +434,27 @@ class PlaytorrioCloudSyncService {
     final local = await wh.getHistory();
     final byUnique = {for (final m in local) m['uniqueId'] as String: m};
 
+    int updatedAtMs(Map<String, dynamic> m) {
+      final v = m['updatedAt'];
+      if (v is int) return v;
+      return int.tryParse('$v') ?? 0;
+    }
+
+    void inheritStreamUrlFromLocal(
+      Map<String, dynamic> remoteRow,
+      Map<String, dynamic> localRow,
+    ) {
+      final ru = remoteRow['streamUrl']?.toString();
+      if (ru != null && ru.isNotEmpty) return;
+      final lu = localRow['streamUrl']?.toString();
+      if (lu != null && lu.isNotEmpty) {
+        remoteRow['streamUrl'] = lu;
+        if (localRow['streamHeaders'] != null) {
+          remoteRow['streamHeaders'] = localRow['streamHeaders'];
+        }
+      }
+    }
+
     for (final raw in entriesRaw) {
       if (raw is! Map) continue;
       final e = Map<String, dynamic>.from(
@@ -441,27 +462,22 @@ class PlaytorrioCloudSyncService {
       );
       final entryUid = e['uniqueId']?.toString();
       if (entryUid == null || entryUid.isEmpty) continue;
-      final newPos = e['position'] is int
-          ? e['position'] as int
-          : int.tryParse('${e['position'] ?? 0}') ?? 0;
+
       final old = byUnique[entryUid];
-      if (old != null) {
-        final cloudUrl = e['streamUrl']?.toString();
-        if (cloudUrl == null || cloudUrl.isEmpty) {
-          final localUrl = old['streamUrl']?.toString();
-          if (localUrl != null && localUrl.isNotEmpty) {
-            e['streamUrl'] = localUrl;
-            if (old['streamHeaders'] != null) {
-              e['streamHeaders'] = old['streamHeaders'];
-            }
-          }
-        }
-        final oldPos = old['position'] is int
-            ? old['position'] as int
-            : (old['position'] as num?)?.toInt() ?? 0;
-        if (newPos <= oldPos) continue;
+      if (old == null) {
+        byUnique[entryUid] = e;
+        continue;
       }
-      byUnique[entryUid] = e;
+
+      inheritStreamUrlFromLocal(e, old);
+
+      // Server row wins when it is newer or same timestamp (cross-device consistency).
+      if (updatedAtMs(e) >= updatedAtMs(old)) {
+        byUnique[entryUid] = e;
+      } else {
+        // Device has a fresher checkpoint — keep full local row.
+        byUnique[entryUid] = old;
+      }
     }
 
     var merged = byUnique.values.toList();
@@ -470,6 +486,15 @@ class PlaytorrioCloudSyncService {
     );
     if (merged.length > 50) merged = merged.sublist(0, 50);
     await wh.replaceAll(merged);
+  }
+
+  /// Pull latest Continue Watching from Supabase into local prefs (when sync is on).
+  Future<void> refreshWatchHistoryFromCloudIfPossible() async {
+    try {
+      await pullAndMergeProgress();
+    } catch (e, st) {
+      debugPrint('[PT Cloud] refreshWatchHistoryFromCloudIfPossible: $e $st');
+    }
   }
 
   /// Push a single local entry (full list upsert) after [WatchHistoryService.saveProgress].

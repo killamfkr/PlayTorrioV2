@@ -187,7 +187,12 @@ class WatchHistoryService {
     final String uniqueId = season != null && episode != null 
         ? '${tmdbId}_S${season}_E$episode' 
         : '$tmdbId';
-    
+    return getEntryByUniqueId(uniqueId);
+  }
+
+  /// Row for Continue Watching / cloud merge (by stable id).
+  Future<Map<String, dynamic>?> getEntryByUniqueId(String uniqueId) async {
+    if (uniqueId.isEmpty) return null;
     try {
       final history = await getHistory();
       final match = history.firstWhere(

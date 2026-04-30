@@ -17,6 +17,7 @@ import '../api/debrid_api.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../services/link_resolver.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/episode_watched_service.dart';
 import '../api/trakt_service.dart';
@@ -163,6 +164,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   // ─── data methods ─────────────────────────────────────────────────────────
 
   Future<void> _checkHistory() async {
+    await PlaytorrioCloudSyncService.instance.refreshWatchHistoryFromCloudIfPossible();
     final progress = await WatchHistoryService().getProgress(
       _movie.id,
       season: _movie.mediaType == 'tv' ? _selectedSeason : null,

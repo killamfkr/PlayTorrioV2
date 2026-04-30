@@ -15,6 +15,7 @@ import '../api/trakt_service.dart';
 import '../api/simkl_service.dart';
 import '../api/webstreamr_service.dart';
 import '../services/watch_history_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
@@ -26,6 +27,79 @@ import 'streaming_details_screen.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
 import '../widgets/hero_banner.dart';
+
+/// Converts nested maps from JSON decode into String maps for HTTP headers.
+Map<String, String>? _watchHistoryParseHeaders(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is Map<String, String>) return raw;
+  if (raw is Map) {
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      out['$k'] = '$v';
+    });
+    return out.isEmpty ? null : out;
+  }
+  return null;
+}
+
+/// Prefer Continue Watching with the **exact URL + headers** we saved while playing.
+Future<bool> _tryResumeSavedStreamDirect(
+    BuildContext context, Map<String, dynamic> item) async {
+  final savedUrl = item['streamUrl']?.toString();
+  if (savedUrl == null ||
+      savedUrl.isEmpty ||
+      !(savedUrl.startsWith('http://') || savedUrl.startsWith('https://'))) {
+    return false;
+  }
+
+  final tmdbId = item['tmdbId'] as int;
+  final season = item['season'] as int?;
+  final episode = item['episode'] as int?;
+  final title = item['title'] as String;
+  final posterPath = item['posterPath'] as String;
+  final startPos = Duration(milliseconds: item['position'] as int);
+  final headers = _watchHistoryParseHeaders(item['streamHeaders']);
+
+  final method = item['method'] as String? ?? 'stream';
+  String activeProvider = method == 'stremio_direct' ? 'stremio_direct' : method;
+  if (method == 'stream' && item['sourceId'] is String) {
+    activeProvider = item['sourceId'] as String;
+  }
+
+  if (!context.mounted) return true;
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => PlayerScreen(
+        streamUrl: savedUrl,
+        title: title,
+        headers: headers,
+        movie: Movie(
+          id: tmdbId,
+          title: title,
+          posterPath: posterPath,
+          backdropPath: '',
+          overview: '',
+          releaseDate: '',
+          voteAverage: 0,
+          mediaType: season != null ? 'tv' : 'movie',
+          genres: [],
+          imdbId: item['imdbId'],
+        ),
+        selectedSeason: season,
+        selectedEpisode: episode,
+        magnetLink: item['magnetLink'] as String?,
+        fileIndex: item['fileIndex'] as int?,
+        activeProvider: activeProvider,
+        startPosition: startPos,
+        stremioId: item['stremioId'] as String?,
+        stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
+        stremioStreamType: season != null ? 'tv' : 'movie',
+      ),
+    ),
+  );
+  return true;
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -63,78 +137,6 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   List<Movie> _traktRecommendations = [];
   List<Map<String, dynamic>> _traktCalendar = [];
   List<Map<String, dynamic>> _traktCalendarMovies = [];
-
-  /// Converts nested maps from JSON decode into String maps for HTTP headers.
-  Map<String, String>? _parseHeaderMap(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is Map<String, String>) return raw;
-    if (raw is Map) {
-      final out = <String, String>{};
-      raw.forEach((k, v) {
-        out['$k'] = '$v';
-      });
-      return out.isEmpty ? null : out;
-    }
-    return null;
-  }
-
-  /// Prefer Continue Watching with the **exact URL + headers** we saved while playing.
-  Future<bool> _tryResumeSavedStreamDirect(Map<String, dynamic> item) async {
-    final savedUrl = item['streamUrl']?.toString();
-    if (savedUrl == null ||
-        savedUrl.isEmpty ||
-        !(savedUrl.startsWith('http://') || savedUrl.startsWith('https://'))) {
-      return false;
-    }
-
-    final tmdbId = item['tmdbId'] as int;
-    final season = item['season'] as int?;
-    final episode = item['episode'] as int?;
-    final title = item['title'] as String;
-    final posterPath = item['posterPath'] as String;
-    final startPos = Duration(milliseconds: item['position'] as int);
-    final headers = _parseHeaderMap(item['streamHeaders']);
-
-    final method = item['method'] as String? ?? 'stream';
-    String activeProvider = method == 'stremio_direct' ? 'stremio_direct' : method;
-    if (method == 'stream' && item['sourceId'] is String) {
-      activeProvider = item['sourceId'] as String;
-    }
-
-    if (!mounted) return true;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PlayerScreen(
-          streamUrl: savedUrl,
-          title: title,
-          headers: headers,
-          movie: Movie(
-            id: tmdbId,
-            title: title,
-            posterPath: posterPath,
-            backdropPath: '',
-            overview: '',
-            releaseDate: '',
-            voteAverage: 0,
-            mediaType: season != null ? 'tv' : 'movie',
-            genres: [],
-            imdbId: item['imdbId'],
-          ),
-          selectedSeason: season,
-          selectedEpisode: episode,
-          magnetLink: item['magnetLink'] as String?,
-          fileIndex: item['fileIndex'] as int?,
-          activeProvider: activeProvider,
-          startPosition: startPos,
-          stremioId: item['stremioId'] as String?,
-          stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
-          stremioStreamType: season != null ? 'tv' : 'movie',
-        ),
-      ),
-    );
-    return true;
-  }
 
   @override
   bool get wantKeepAlive => true;
@@ -1917,28 +1919,30 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
     setState(() => _loadingItemId = uniqueId);
 
     try {
-      if (await _tryResumeSavedStreamDirect(item)) return;
+      await PlaytorrioCloudSyncService.instance.refreshWatchHistoryFromCloudIfPossible();
+      final fresh = await WatchHistoryService().getEntryByUniqueId(uniqueId);
+      final row = fresh ?? item;
 
-      final method = item['method'] as String;
-      final tmdbId = item['tmdbId'] as int;
-      final season = item['season'] as int?;
-      final episode = item['episode'] as int?;
-      final title = item['title'] as String;
-      final posterPath = item['posterPath'] as String; 
-      final startPos = Duration(milliseconds: item['position'] as int);
+      if (await _tryResumeSavedStreamDirect(context, row)) return;
 
-      // Streaming-mode entries (stream/amri/stremio_direct) don't keep a
-      // re-playable URL — extraction tokens expire. The cleanest UX is to
-      // re-open the StreamingDetailsScreen which auto-runs the extraction
-      // splash and then forwards startPosition to the player so it seeks
-      // once the duration loads.
+      final method = row['method'] as String;
+      final tmdbId = row['tmdbId'] as int;
+      final season = row['season'] as int?;
+      final episode = row['episode'] as int?;
+      final title = row['title'] as String;
+      final posterPath = row['posterPath'] as String;
+      final startPos = Duration(milliseconds: row['position'] as int);
+
+      // Streaming-mode entries often lose a re-playable URL after extraction
+      // tokens expire. When no saved http(s) URL was available above, re-open
+      // StreamingDetailsScreen so extraction runs again and forwards startPosition.
       final isStreamingEntry = method == 'stream' ||
           method == 'amri' ||
           method == 'stremio_direct';
       if (isStreamingEntry) {
         if (mounted) {
           final mediaType =
-              item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+              row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
           final movie = Movie(
             id: tmdbId,
             title: title,
@@ -1949,7 +1953,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             voteAverage: 0,
             mediaType: mediaType,
             genres: [],
-            imdbId: item['imdbId'],
+            imdbId: row['imdbId'],
           );
           await Navigator.push(
             context,
@@ -1967,8 +1971,8 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       }
 
       // Get saved magnet link and file index for torrents
-      final savedMagnetLink = item['magnetLink'] as String?;
-      final savedFileIndex = item['fileIndex'] as int?;
+      final savedMagnetLink = row['magnetLink'] as String?;
+      final savedFileIndex = row['fileIndex'] as int?;
 
       String? streamUrl;
       String? activeProvider;
@@ -1980,9 +1984,9 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
 
       if (method == 'stremio_direct') {
         // Direct stremio stream — try the saved URL first
-        final savedUrl = item['streamUrl'] as String?;
-        stremioItemId = item['stremioId'] as String?;
-        stremioAddonBase = item['stremioAddonBaseUrl'] as String?;
+        final savedUrl = row['streamUrl'] as String?;
+        stremioItemId = row['stremioId'] as String?;
+        stremioAddonBase = row['stremioAddonBaseUrl'] as String?;
         activeProvider = 'stremio_direct';
 
         if (savedUrl != null && savedUrl.isNotEmpty) {
@@ -1996,7 +2000,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         if (streamUrl == null && stremioItemId != null && stremioAddonBase != null) {
           // Re-fetch streams from the addon
           debugPrint('[Resume] Re-fetching stremio streams for $stremioItemId from $stremioAddonBase');
-          final stremioType = item['stremioType'] as String? ?? (season != null ? 'series' : 'movie');
+          final stremioType = row['stremioType'] as String? ?? (season != null ? 'series' : 'movie');
           final stremio = StremioService();
           try {
             final streams = await stremio.getStreams(
@@ -2020,7 +2024,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         // If we still have nothing, open the details page
         if (streamUrl == null) {
           if (mounted) {
-            final mediaType = item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+            final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
             final movie = Movie(
               id: tmdbId,
               title: title,
@@ -2031,14 +2035,14 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               voteAverage: 0,
               mediaType: mediaType,
               genres: [],
-              imdbId: item['imdbId'],
+              imdbId: row['imdbId'],
             );
             Map<String, dynamic>? stremioItem;
             if (stremioItemId != null) {
               stremioItem = {
                 'id': stremioItemId,
                 '_addonBaseUrl': stremioAddonBase ?? '',
-                'type': item['stremioType'] ?? (season != null ? 'series' : 'movie'),
+                'type': row['stremioType'] ?? (season != null ? 'series' : 'movie'),
                 'name': title,
               };
             }
@@ -2056,13 +2060,13 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         }
       } else if (method == 'stream') {
         // Re-extract stream using saved sourceId (tmdbId + season + episode)
-        final sourceId = item['sourceId'] as String;
+        final sourceId = row['sourceId'] as String;
         activeProvider = sourceId;
         
         if (sourceId == 'webstreamr') {
           debugPrint('[Resume] Using WebStreamrService for $title');
           final webStreamr = WebStreamrService();
-          final imdbId = item['imdbId']?.toString() ?? '';
+          final imdbId = row['imdbId']?.toString() ?? '';
           if (imdbId.isNotEmpty) {
             final webStreamrSources = await webStreamr.getStreams(
               imdbId: imdbId,
@@ -2126,7 +2130,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
           onLog: (message) => debugPrint('[AMRI Resume] $message'),
         );
         
-        final year = item['year']?.toString() ?? '';
+        final year = row['year']?.toString() ?? '';
         
         final sourcesData = await amriExtractor.extractSources(
           tmdbId.toString(),
@@ -2187,7 +2191,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       } else if (method == 'trakt_import') {
         // Trakt-imported items have no stream source — find one automatically
         if (context.mounted) {
-          final mediaType = item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
           final movie = Movie(
             id: tmdbId,
             title: title,
@@ -2198,7 +2202,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             voteAverage: 0,
             mediaType: mediaType,
             genres: [],
-            imdbId: item['imdbId'],
+            imdbId: row['imdbId'],
           );
           final navigator = Navigator.of(context);
           final isStreaming = await SettingsService().isStreamingModeEnabled();
@@ -2240,7 +2244,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                 voteAverage: 0, 
                 mediaType: season != null ? 'tv' : 'movie', 
                 genres: [], 
-                imdbId: item['imdbId'],
+                imdbId: row['imdbId'],
               ),
               selectedSeason: season,
               selectedEpisode: episode,
