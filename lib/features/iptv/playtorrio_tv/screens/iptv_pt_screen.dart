@@ -1329,6 +1329,7 @@ class _BrowserViewState extends State<_BrowserView> {
                   color: Colors.white70, fontSize: 12),
             ),
           ),
+        ],
       ),
     );
   }
