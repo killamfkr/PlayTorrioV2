@@ -418,6 +418,8 @@ class SettingsService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_torrentAutoPickTierKey, tier);
   }
+
+  Future<bool> useDebridForStreams() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_useDebridKey) ?? false;
   }
