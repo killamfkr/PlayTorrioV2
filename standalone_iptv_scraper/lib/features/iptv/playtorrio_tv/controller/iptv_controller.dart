@@ -423,17 +423,26 @@ class IptvController extends ChangeNotifier {
     if (verified.isEmpty) return;
     statusText = 'Re-checking saved portals…';
     notifyListeners();
-    final updated = <VerifiedPortal>[];
+    final keptAlive = <VerifiedPortal>[];
+    final keptStaleFavorite = <VerifiedPortal>[];
     for (final v in verified) {
       final fresh = await IptvClient.verifyOrNull(v.portal);
-      if (fresh != null) updated.add(fresh);
+      if (fresh != null) {
+        keptAlive.add(fresh);
+      } else if (_favoritePortals.contains(v.key)) {
+        // Starred portals stay in the list even when temporarily unreachable.
+        keptStaleFavorite.add(v);
+      }
     }
-    verified = _sortFavoritesFirst(updated);
+    verified = _sortFavoritesFirst([...keptAlive, ...keptStaleFavorite]);
     _verifiedKeys
       ..clear()
-      ..addAll(updated.map((v) => v.credKey));
+      ..addAll(verified.map((v) => v.credKey));
     await IptvStore.save(verified);
-    statusText = '${updated.length} portals still alive.';
+    final nStale = keptStaleFavorite.length;
+    statusText = nStale > 0
+        ? '${keptAlive.length} verified · $nStale starred kept (offline)'
+        : '${keptAlive.length} portals still alive.';
     notifyListeners();
   }
 
@@ -468,7 +477,11 @@ class IptvController extends ChangeNotifier {
 
   Future<void> deleteSelected() async {
     if (selected.isEmpty) return;
-    final keep = verified.where((v) => !selected.contains(v.key)).toList();
+    // Starred portals are kept unless the user removes the star first.
+    final keep = verified
+        .where((v) =>
+            _favoritePortals.contains(v.key) || !selected.contains(v.key))
+        .toList();
     verified = keep;
     _verifiedKeys
       ..clear()
