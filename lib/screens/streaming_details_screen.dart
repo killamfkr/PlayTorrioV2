@@ -15,6 +15,8 @@ import '../api/site111477_service.dart';
 import '../api/site111477_proxy.dart' as site111477_proxy;
 import '../widgets/loading_overlay.dart';
 import '../services/episode_watched_service.dart';
+import '../services/watch_history_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../widgets/movie_atmosphere.dart';
 import 'player_screen.dart';
 
@@ -73,6 +75,8 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
 
   final Map<String, dynamic> _providers = StreamProviders.providers;
 
+  Map<String, dynamic>? _lastWatchProgress;
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +92,17 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
 
   Future<void> _fetchDetails() async {
     try {
+      await PlaytorrioCloudSyncService.instance.refreshWatchHistoryFromCloudIfPossible();
+      _lastWatchProgress = await WatchHistoryService().getProgress(
+        widget.movie.id,
+        season: _movie.mediaType == 'tv'
+            ? (widget.initialSeason ?? _selectedSeason)
+            : null,
+        episode: _movie.mediaType == 'tv'
+            ? (widget.initialEpisode ?? _selectedEpisode)
+            : null,
+      );
+
       final Movie fullDetails;
       if (_movie.mediaType == 'tv') {
         fullDetails = await _api.getTvDetails(widget.movie.id);
@@ -115,7 +130,10 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
 
         // Auto-start extraction when opened with a start position (e.g. from Continue Watching / Trakt)
         if (widget.startPosition != null) {
-          _startExtraction();
+          final opened = await _tryOpenSavedPlaybackDirect();
+          if (!opened) {
+            _startExtraction();
+          }
         } else if (_selectedSourceId != 'playtorrio') {
           _startStremioExtraction();
         }
@@ -168,6 +186,72 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
 
   Future<String> _preferredStreamSourceId(List<Map<String, dynamic>> addons) async {
     return _settings.resolveDefaultStreamSourceId(addons);
+  }
+
+  /// Continue Watching / resume: open player with last checkpoint URL when available.
+  Future<bool> _tryOpenSavedPlaybackDirect() async {
+    if (!mounted) return false;
+    final row = _lastWatchProgress;
+    if (row == null) return false;
+    final saved = row['streamUrl']?.toString();
+    if (saved == null ||
+        saved.isEmpty ||
+        !(saved.startsWith('http://') || saved.startsWith('https://'))) {
+      return false;
+    }
+
+    final posMs = row['position'];
+    final pos = posMs is int ? posMs : int.tryParse('$posMs') ?? 0;
+    final start =
+        widget.startPosition ?? (pos > 0 ? Duration(milliseconds: pos) : null);
+
+    Map<String, String>? hdr;
+    final rawH = row['streamHeaders'];
+    if (rawH is Map<String, String>) {
+      hdr = rawH;
+    } else if (rawH is Map) {
+      final out = <String, String>{};
+      rawH.forEach((k, v) => out['$k'] = '$v');
+      hdr = out.isEmpty ? null : out;
+    }
+
+    final method = row['method']?.toString() ?? 'stream';
+    String activeProvider =
+        method == 'stremio_direct' ? 'stremio_direct' : method;
+    if (method == 'stream' && row['sourceId'] is String) {
+      activeProvider = row['sourceId'] as String;
+    }
+
+    final title = _movie.mediaType == 'tv'
+        ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+        : _movie.title;
+
+    final stType = row['stremioType']?.toString();
+    final stremioStreamType = stType != null && stType.isNotEmpty
+        ? stType
+        : (_movie.mediaType == 'tv' ? 'series' : 'movie');
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          streamUrl: saved,
+          title: title,
+          headers: hdr,
+          movie: _movie,
+          selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
+          selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+          magnetLink: row['magnetLink'] as String?,
+          fileIndex: row['fileIndex'] as int?,
+          activeProvider: activeProvider,
+          startPosition: start,
+          stremioId: row['stremioId'] as String?,
+          stremioAddonBaseUrl: row['stremioAddonBaseUrl'] as String?,
+          stremioStreamType: stremioStreamType,
+        ),
+      ),
+    );
+    return true;
   }
 
   Future<void> _startExtraction() async {

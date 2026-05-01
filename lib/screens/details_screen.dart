@@ -1361,7 +1361,33 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
 
   // ─── play methods ─────────────────────────────────────────────────────────
 
-  void _playStremioStream(Map<String, dynamic> stream, {Duration? startPosition}) async {
+  /// Prefer [WatchHistoryService] `streamUrl` when resuming so playback uses the last working link.
+  String _playbackUrlPreferSaved(String fallback, {required bool useSavedHttp}) {
+    if (!useSavedHttp || _lastProgress == null) return fallback;
+    final saved = _lastProgress!['streamUrl']?.toString();
+    if (saved == null ||
+        saved.isEmpty ||
+        !(saved.startsWith('http://') || saved.startsWith('https://'))) {
+      return fallback;
+    }
+    return saved;
+  }
+
+  Map<String, String>? _playbackHeadersPreferSaved({required bool useSavedHttp}) {
+    if (!useSavedHttp || _lastProgress == null) return null;
+    final raw = _lastProgress!['streamHeaders'];
+    if (raw == null) return null;
+    if (raw is Map<String, String>) return raw;
+    if (raw is Map) {
+      final out = <String, String>{};
+      raw.forEach((k, v) => out['$k'] = '$v');
+      return out.isEmpty ? null : out;
+    }
+    return null;
+  }
+
+  void _playStremioStream(Map<String, dynamic> stream,
+      {Duration? startPosition, bool useSavedHttpPlayback = false}) async {
     // Handle externalUrl streams (e.g. "More Like This" addon)
     final externalUrl = stream['externalUrl']?.toString();
     if (externalUrl != null && externalUrl.isNotEmpty) {
@@ -1379,9 +1405,20 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
 
     if (stream['url'] != null) {
       if (!mounted) return;
+      final rawUrl = stream['url'] as String;
+      final playUrl =
+          _playbackUrlPreferSaved(rawUrl, useSavedHttp: useSavedHttpPlayback);
+      final proxied = stremioProxyRequestHeadersFromStream(stream);
+      final savedH =
+          _playbackHeadersPreferSaved(useSavedHttp: useSavedHttpPlayback);
+      final hdr = (useSavedHttpPlayback &&
+              savedH != null &&
+              savedH.isNotEmpty)
+          ? savedH
+          : proxied;
       Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-        streamUrl: stream['url'], title: _movie.title,
-        headers: stremioProxyRequestHeadersFromStream(stream),
+        streamUrl: playUrl, title: _movie.title,
+        headers: (hdr == null || hdr.isEmpty) ? null : hdr,
         movie: _movie,
         selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
         selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
@@ -1455,8 +1492,13 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
       if (_streamCancelled) return;
       if (navigator.canPop()) navigator.pop();
       if (url != null && mounted) {
+        final playUrl =
+            _playbackUrlPreferSaved(url!, useSavedHttp: useSavedHttpPlayback);
+        final hdr =
+            _playbackHeadersPreferSaved(useSavedHttp: useSavedHttpPlayback);
         Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-          streamUrl: url!, title: _movie.title, magnetLink: magnet, movie: _movie,
+          streamUrl: playUrl, title: _movie.title, magnetLink: magnet, movie: _movie,
+          headers: hdr,
           selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
           selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
           fileIndex: resolvedFileIndex,
@@ -1530,7 +1572,8 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     }
   }
 
-  void _playTorrent(TorrentResult result, {Duration? startPosition}) async {
+  void _playTorrent(TorrentResult result,
+      {Duration? startPosition, bool preferSavedHttpUrl = false}) async {
     final useDebrid = await _settings.useDebridForStreams();
     final debridService = await _settings.getDebridService();
     if (!mounted) return;
@@ -1613,8 +1656,13 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     if (Navigator.canPop(context)) Navigator.pop(context);
 
     if (url != null) {
+      final playUrl =
+          _playbackUrlPreferSaved(url!, useSavedHttp: preferSavedHttpUrl);
+      final hdr =
+          _playbackHeadersPreferSaved(useSavedHttp: preferSavedHttpUrl);
       Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-        streamUrl: url!, title: result.name, magnetLink: magnetLink, movie: _movie,
+        streamUrl: playUrl, title: result.name, magnetLink: magnetLink, movie: _movie,
+        headers: hdr,
         selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
         selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
         fileIndex: resolvedFileIndex,
@@ -2790,7 +2838,8 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
 
     return FocusableControl(
       onTap: () => _playTorrent(result,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+        preferSavedHttpUrl: isResumable),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
@@ -2854,7 +2903,8 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                   }),
                   const SizedBox(height: 6),
                   _iconBtn(Icons.play_arrow_rounded, true, () => _playTorrent(result,
-                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition)),
+                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+                    preferSavedHttpUrl: isResumable)),
                 ]),
               ],
             ),
@@ -2924,7 +2974,8 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
 
     return FocusableControl(
       onTap: () => _playStremioStream(stream,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+        useSavedHttpPlayback: isResumable),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
@@ -2962,7 +3013,8 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
               ),
               const SizedBox(width: 8),
               _iconBtn(actionIcon, true, () => _playStremioStream(stream,
-                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition)),
+                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+                useSavedHttpPlayback: isResumable)),
             ]),
           ),
           if (isResumable && progress > 0 && !isExternal)
