@@ -18,6 +18,9 @@ class SettingsService {
 
   static const String _streamingModeKey = 'streaming_mode';
   static const String _sortPreferenceKey = 'sort_preference';
+  static const String _torrentAutoPickEnabledKey = 'torrent_auto_pick_enabled';
+  /// `best` | `4k` | `1080` | `720`
+  static const String _torrentAutoPickTierKey = 'torrent_auto_pick_tier';
   static const String _useDebridKey = 'use_debrid_for_streams';
   static const String _debridServiceKey = 'debrid_service';
   static const String _stremioAddonsKey = 'stremio_addons';
@@ -392,7 +395,29 @@ class SettingsService {
     await prefs.setString(_sortPreferenceKey, preference);
   }
 
-  Future<bool> useDebridForStreams() async {
+  Future<bool> getTorrentAutoPickEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_torrentAutoPickEnabledKey) ?? false;
+  }
+
+  Future<void> setTorrentAutoPickEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_torrentAutoPickEnabledKey, v);
+  }
+
+  /// One of: `best`, `4k`, `1080`, `720`
+  Future<String> getTorrentAutoPickTier() async {
+    final prefs = await SharedPreferences.getInstance();
+    final s = prefs.getString(_torrentAutoPickTierKey);
+    if (s == null || s.isEmpty) return '1080';
+    const allowed = {'best', '4k', '1080', '720'};
+    return allowed.contains(s) ? s : '1080';
+  }
+
+  Future<void> setTorrentAutoPickTier(String tier) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_torrentAutoPickTierKey, tier);
+  }
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_useDebridKey) ?? false;
   }
@@ -686,6 +711,8 @@ class SettingsService {
     _defaultStremioAddonBaseUrlKey,
     _navbarConfigKey,
     _sortPreferenceKey,
+    _torrentAutoPickEnabledKey,
+    _torrentAutoPickTierKey,
     _streamingModeKey,
     _useDebridKey,
     _debridServiceKey,
@@ -874,6 +901,14 @@ class SettingsService {
       }
       if (k == _sortPreferenceKey && v is String) {
         await setSortPreference(v);
+        continue;
+      }
+      if (k == _torrentAutoPickEnabledKey && v is bool) {
+        await setTorrentAutoPickEnabled(v);
+        continue;
+      }
+      if (k == _torrentAutoPickTierKey && v is String) {
+        await setTorrentAutoPickTier(v);
         continue;
       }
       if (k == _debridServiceKey && v is String) {
@@ -1066,6 +1101,7 @@ class SettingsService {
       _ptCloudSettingsSyncKey,
       _ptCloudDebridSyncKey,
       _ptProfileGateKey,
+      _torrentAutoPickEnabledKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -1073,6 +1109,7 @@ class SettingsService {
     // String keys
     for (final key in [
       _sortPreferenceKey,
+      _torrentAutoPickTierKey,
       _debridServiceKey,
       _externalPlayerKey,
       _jackettBaseUrlKey,
@@ -1163,6 +1200,7 @@ class SettingsService {
       _ptCloudSettingsSyncKey,
       _ptCloudDebridSyncKey,
       _ptProfileGateKey,
+      _torrentAutoPickEnabledKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -1173,6 +1211,7 @@ class SettingsService {
     // String keys
     for (final key in [
       _sortPreferenceKey,
+      _torrentAutoPickTierKey,
       _debridServiceKey,
       _externalPlayerKey,
       _jackettBaseUrlKey,

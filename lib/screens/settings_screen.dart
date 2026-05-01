@@ -46,6 +46,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isStreamingMode = false;
   String _externalPlayer = 'Built-in Player';
   String _sortPreference = 'Seeders (High to Low)';
+  bool _torrentAutoPickEnabled = false;
+  String _torrentAutoPickTier = '1080';
   List<Map<String, dynamic>> _installedAddons = [];
   bool _isInstalling = false;
   
@@ -162,6 +164,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final streaming = await _settings.isStreamingModeEnabled();
     final externalPlayer = await _settings.getExternalPlayer();
     final sort = await _settings.getSortPreference();
+    final torrentAutoPick = await _settings.getTorrentAutoPickEnabled();
+    final torrentAutoTier = await _settings.getTorrentAutoPickTier();
     final useDebrid = await _settings.useDebridForStreams();
     final service = await _settings.getDebridService();
     final addons = await _settings.getStremioAddons();
@@ -274,6 +278,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ? externalPlayer
             : 'Built-in Player';
         _sortPreference = sort;
+        _torrentAutoPickEnabled = torrentAutoPick;
+        _torrentAutoPickTier = torrentAutoTier;
         _installedAddons = addons;
         _useDebrid = useDebrid;
         _debridService = service;
@@ -700,6 +706,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                     ),
+                    SwitchListTile(
+                      title: const Text('Auto-pick torrent after search'),
+                      subtitle: const Text(
+                        'Details → Torrent Sources: opens the top-seeded release for the quality tier you choose (falls back if none match).',
+                      ),
+                      value: _torrentAutoPickEnabled,
+                      onChanged: (v) async {
+                        await _settings.setTorrentAutoPickEnabled(v);
+                        PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                        setState(() => _torrentAutoPickEnabled = v);
+                      },
+                    ),
+                    if (_torrentAutoPickEnabled)
+                      _buildFocusableDropdown(
+                        'Auto-pick quality tier',
+                        'Prefer this resolution; app picks highest seeders in that tier, then falls back (e.g. 1080 → 720 → 4K → any).',
+                        _torrentAutoPickTierLabel(_torrentAutoPickTier),
+                        [
+                          'Best seeders (any quality)',
+                          'Prefer 4K / 2160p',
+                          'Prefer 1080p',
+                          'Prefer 720p',
+                        ],
+                        (val) async {
+                          if (val == null) return;
+                          final key = _torrentAutoPickTierFromLabel(val);
+                          await _settings.setTorrentAutoPickTier(key);
+                          PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                          setState(() => _torrentAutoPickTier = key);
+                        },
+                      ),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Stremio Addons'),
                     _buildAddonInput(),
@@ -3430,6 +3467,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  String _torrentAutoPickTierLabel(String key) {
+    switch (key) {
+      case 'best':
+        return 'Best seeders (any quality)';
+      case '4k':
+        return 'Prefer 4K / 2160p';
+      case '720':
+        return 'Prefer 720p';
+      case '1080':
+      default:
+        return 'Prefer 1080p';
+    }
+  }
+
+  String _torrentAutoPickTierFromLabel(String label) {
+    if (label.startsWith('Best')) return 'best';
+    if (label.contains('4K')) return '4k';
+    if (label.contains('720')) return '720';
+    return '1080';
   }
 
   Widget _buildFocusableDropdown(String title, String subtitle, String value, List<String> options, ValueChanged<String?> onChanged) {

@@ -62,6 +62,10 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   final LinkResolver _linkResolver = LinkResolver();
 
   String _sortPreference = 'Seeders (High to Low)';
+  bool _torrentAutoPickEnabled = false;
+  String _torrentAutoPickTier = '1080';
+  /// Debounce rapid searches / episode switches so we don't stack opens.
+  String? _lastAutoPickTorrentSignature;
   Set<String> _activeAudioFilters = {};
   List<TorrentResult> _allTorrentResults = [];
   bool _isSearching = false;
@@ -139,6 +143,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     loadAtmosphere(url.startsWith('http') ? url : TmdbApi.getImageUrl(url));
     _checkHistory();
     _loadSortPreference();
+    _loadTorrentAutoPickPrefs();
     _checkIndexerConfiguration();
     _loadWatchedEpisodes();
     _fetchDetails();
@@ -181,6 +186,17 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   Future<void> _toggleEpisodeWatched(int season, int episode) async {
     await _episodeWatchedService.toggle(_movie.id, season, episode);
     await _loadWatchedEpisodes();
+  }
+
+  Future<void> _loadTorrentAutoPickPrefs() async {
+    final en = await _settings.getTorrentAutoPickEnabled();
+    final tier = await _settings.getTorrentAutoPickTier();
+    if (mounted) {
+      setState(() {
+        _torrentAutoPickEnabled = en;
+        _torrentAutoPickTier = tier;
+      });
+    }
   }
 
   Future<void> _loadSortPreference() async {
@@ -254,6 +270,39 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
       }
     }
     if (mounted) setState(() => _allTorrentResults = sorted);
+    await _maybeAutoPickTorrent();
+  }
+
+  Future<void> _maybeAutoPickTorrent() async {
+    if (!_torrentAutoPickEnabled || !_isTorrentSource || !mounted) return;
+    if (_isSearching) return;
+    final list = _filteredTorrentResults;
+    if (list.isEmpty) return;
+
+    final picked = TorrentFilter.pickAutoTorrent(list, _torrentAutoPickTier);
+    if (picked == null || !mounted) return;
+
+    final sig =
+        '${picked.magnet}|${_movie.id}|${_movie.mediaType}|$_selectedSeason|$_selectedEpisode|${_activeAudioFilters.join(',')}';
+    if (_lastAutoPickTorrentSignature == sig) return;
+    _lastAutoPickTorrentSignature = sig;
+
+    Duration? startPos;
+    if (_lastProgress != null &&
+        _lastProgress!['method'] == 'torrent' &&
+        _getHash(_lastProgress!['sourceId'] as String) ==
+            _getHash(picked.magnet)) {
+      final pos = _lastProgress!['position'];
+      final dur = _lastProgress!['duration'];
+      if (pos is int && dur is int && dur > 0 && pos > 10000) {
+        startPos = Duration(milliseconds: pos);
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _playTorrent(picked, startPosition: startPos);
+    });
   }
 
   Future<void> _fetchDetails() async {
@@ -2685,7 +2734,86 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
               },
             ),
           ),
+        if (showSort) ...[const SizedBox(width: 8), _buildTorrentAutoPickControls()],
         if (showSort) ...[const SizedBox(width: 8), _buildAudioFilterButton()],
+      ],
+    );
+  }
+
+  Widget _buildTorrentAutoPickControls() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'After torrent results load, automatically open the best release '
+              'for the chosen quality tier (top seeders). Configure default in Settings.',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.bolt_rounded, color: Colors.white54, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                'Auto',
+                style: TextStyle(
+                  color: _torrentAutoPickEnabled
+                      ? AppTheme.primaryColor
+                      : Colors.white54,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Transform.scale(
+                scale: 0.82,
+                child: Switch(
+                  value: _torrentAutoPickEnabled,
+                  activeThumbColor: AppTheme.primaryColor,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onChanged: (v) async {
+                    await _settings.setTorrentAutoPickEnabled(v);
+                    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                    setState(() => _torrentAutoPickEnabled = v);
+                    if (v) _maybeAutoPickTorrent();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_torrentAutoPickEnabled)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _torrentAutoPickTier,
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: const [
+                  DropdownMenuItem(value: 'best', child: Text('Any · top seeds')),
+                  DropdownMenuItem(value: '4k', child: Text('4K')),
+                  DropdownMenuItem(value: '1080', child: Text('1080p')),
+                  DropdownMenuItem(value: '720', child: Text('720p')),
+                ],
+                onChanged: (val) async {
+                  if (val == null) return;
+                  await _settings.setTorrentAutoPickTier(val);
+                  PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _torrentAutoPickTier = val;
+                    _lastAutoPickTorrentSignature = null;
+                  });
+                  _maybeAutoPickTorrent();
+                },
+              ),
+            ),
+          ),
       ],
     );
   }
