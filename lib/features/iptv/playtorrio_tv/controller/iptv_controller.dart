@@ -400,7 +400,10 @@ class IptvController extends ChangeNotifier {
         },
       );
 
-      if (newAlive.isNotEmpty) await IptvStore.save(verified);
+      if (newAlive.isNotEmpty) {
+        await IptvStore.save(verified);
+        PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+      }
       // Get-More is meaningful if either (a) we still have queued portals
       // we haven't verified yet, or (b) the catalog has more pages.
       canGetMore = _pendingPortals.isNotEmpty ||
@@ -439,6 +442,7 @@ class IptvController extends ChangeNotifier {
       ..clear()
       ..addAll(verified.map((v) => v.credKey));
     await IptvStore.save(verified);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     final nStale = keptStaleFavorite.length;
     statusText = nStale > 0
         ? '${keptAlive.length} verified · $nStale starred kept (offline)'
@@ -489,6 +493,7 @@ class IptvController extends ChangeNotifier {
     selected.clear();
     editMode = false;
     await IptvStore.save(keep);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     notifyListeners();
   }
 
@@ -544,6 +549,7 @@ class IptvController extends ChangeNotifier {
     verified = _sortFavoritesFirst([v, ...verified]);
     _verifiedKeys.add(v.credKey);
     await IptvStore.save(verified);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     showAddDialog = false;
     notifyListeners();
   }
@@ -1059,6 +1065,7 @@ class IptvController extends ChangeNotifier {
             if (_verifiedKeys.add(v.credKey)) {
               verified = _sortFavoritesFirst([...verified, v]);
               await IptvStore.save(verified);
+              PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
               if (!attempted.contains(v.key) &&
                   !pool.any((p) => p.key == v.key)) {
                 pool.add(v.portal);

@@ -821,9 +821,12 @@ class SettingsService {
         continue;
       }
       if (k == IptvCloudBundle.prefsKey && v is Map) {
-        await IptvCloudBundle.applyAll(
-          Map<String, dynamic>.from(v as Map),
+        final remoteBundle = Map<String, dynamic>.from(
+          v.map((k, v) => MapEntry(k.toString(), v)),
         );
+        final localBundle = await IptvCloudBundle.exportAll();
+        final merged = IptvCloudBundle.mergeForPull(localBundle, remoteBundle);
+        await IptvCloudBundle.applyAll(merged);
         continue;
       }
       if (k == _lightModeKey && v is bool) {
