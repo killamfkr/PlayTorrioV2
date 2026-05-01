@@ -1150,16 +1150,29 @@ class _BrowserViewState extends State<_BrowserView> {
         for (final c in ctrl.categories) c.id: c.name.toLowerCase(),
       };
       s = s.where((x) {
+        if (ctrl.activeSection == IptvSection.live &&
+            ctrl.isLiveStreamFavorite(x)) {
+          return true;
+        }
         if (x.name.toLowerCase().contains(q)) return true;
         final cn = catNameById[x.categoryId];
         return cn != null && cn.contains(q);
       }).toList();
     } else if (cat != null && cat.isNotEmpty) {
-      s = s.where((x) => x.categoryId == cat).toList();
+      s = s.where((x) {
+        if (ctrl.activeSection == IptvSection.live &&
+            ctrl.isLiveStreamFavorite(x)) {
+          return true;
+        }
+        return x.categoryId == cat;
+      }).toList();
     }
 
     if (ctrl.activeSection == IptvSection.live && ctrl.liveOnly) {
-      s = s.where((x) => ctrl.aliveStreamIds.contains(x.streamId)).toList();
+      s = s.where((x) {
+        return ctrl.aliveStreamIds.contains(x.streamId) ||
+            ctrl.isLiveStreamFavorite(x);
+      }).toList();
     }
     if (ctrl.activeSection == IptvSection.live) {
       s = _sortLiveFavoritesFirst(ctrl, s);
@@ -1309,10 +1322,13 @@ class _BrowserViewState extends State<_BrowserView> {
             onChanged: ctrl.setLiveOnly,
           ),
           const SizedBox(width: 8),
-          Text('Show only alive streams (${ctrl.aliveStreamIds.length})',
+          Expanded(
+            child: Text(
+              'Show only alive (${ctrl.aliveStreamIds.length}) · favorites always shown',
               style: GoogleFonts.poppins(
-                  color: Colors.white70, fontSize: 12)),
-        ],
+                  color: Colors.white70, fontSize: 12),
+            ),
+          ),
       ),
     );
   }

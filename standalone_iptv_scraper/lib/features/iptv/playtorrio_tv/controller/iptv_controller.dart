@@ -799,9 +799,33 @@ class IptvController extends ChangeNotifier {
 
       final byId = {for (final s in streams) s.streamId: s};
       for (final id in favIds) {
-        final s = byId[id];
-        if (s != null && s.kind == 'live') {
-          slots.add(TvGuideSlot(portal: v, stream: s));
+        var stream = byId[id];
+        if (stream == null && id.isNotEmpty) {
+          // Favorites must stay visible: list may be stale or IDs reshuffled — refetch once.
+          try {
+            final fresh =
+                await IptvClient.streams(v.portal, IptvSection.live, '');
+            _tvGuideStreamCache[v.key] = fresh;
+            stream = {for (final s in fresh) s.streamId: s}[id];
+          } catch (_) {}
+        }
+        if (stream != null && stream.kind == 'live') {
+          slots.add(TvGuideSlot(portal: v, stream: stream));
+        } else if (id.isNotEmpty) {
+          // Still show the row so the favorite doesn't "vanish"; URL uses a common ext fallback.
+          slots.add(
+            TvGuideSlot(
+              portal: v,
+              stream: IptvStream(
+                streamId: id,
+                name: 'Starred channel',
+                icon: '',
+                categoryId: '',
+                containerExt: 'ts',
+                kind: 'live',
+              ),
+            ),
+          );
         }
       }
     }
