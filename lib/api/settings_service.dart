@@ -21,6 +21,9 @@ class SettingsService {
   static const String _torrentAutoPickEnabledKey = 'torrent_auto_pick_enabled';
   /// `best` | `4k` | `1080` | `720`
   static const String _torrentAutoPickTierKey = 'torrent_auto_pick_tier';
+  static const String _stremioAutoPlayEnabledKey = 'stremio_auto_play_enabled';
+  /// `__all__` or addon manifest `baseUrl`
+  static const String _stremioAutoPlayAddonKey = 'stremio_auto_play_addon';
   static const String _useDebridKey = 'use_debrid_for_streams';
   static const String _debridServiceKey = 'debrid_service';
   static const String _stremioAddonsKey = 'stremio_addons';
@@ -419,6 +422,28 @@ class SettingsService {
     await prefs.setString(_torrentAutoPickTierKey, tier);
   }
 
+  Future<bool> getStremioAutoPlayEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_stremioAutoPlayEnabledKey) ?? false;
+  }
+
+  Future<void> setStremioAutoPlayEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_stremioAutoPlayEnabledKey, v);
+  }
+
+  Future<String> getStremioAutoPlayAddonKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final s = prefs.getString(_stremioAutoPlayAddonKey);
+    if (s == null || s.isEmpty) return '__all__';
+    return s;
+  }
+
+  Future<void> setStremioAutoPlayAddonKey(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_stremioAutoPlayAddonKey, key);
+  }
+
   Future<bool> useDebridForStreams() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_useDebridKey) ?? false;
@@ -715,6 +740,8 @@ class SettingsService {
     _sortPreferenceKey,
     _torrentAutoPickEnabledKey,
     _torrentAutoPickTierKey,
+    _stremioAutoPlayEnabledKey,
+    _stremioAutoPlayAddonKey,
     _streamingModeKey,
     _useDebridKey,
     _debridServiceKey,
@@ -913,6 +940,14 @@ class SettingsService {
         await setTorrentAutoPickTier(v);
         continue;
       }
+      if (k == _stremioAutoPlayEnabledKey && v is bool) {
+        await setStremioAutoPlayEnabled(v);
+        continue;
+      }
+      if (k == _stremioAutoPlayAddonKey && v is String) {
+        await setStremioAutoPlayAddonKey(v);
+        continue;
+      }
       if (k == _debridServiceKey && v is String) {
         await setDebridService(v);
         continue;
@@ -1104,6 +1139,7 @@ class SettingsService {
       _ptCloudDebridSyncKey,
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
+      _stremioAutoPlayEnabledKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -1112,6 +1148,7 @@ class SettingsService {
     for (final key in [
       _sortPreferenceKey,
       _torrentAutoPickTierKey,
+      _stremioAutoPlayAddonKey,
       _debridServiceKey,
       _externalPlayerKey,
       _jackettBaseUrlKey,
@@ -1203,6 +1240,7 @@ class SettingsService {
       _ptCloudDebridSyncKey,
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
+      _stremioAutoPlayEnabledKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -1214,6 +1252,7 @@ class SettingsService {
     for (final key in [
       _sortPreferenceKey,
       _torrentAutoPickTierKey,
+      _stremioAutoPlayAddonKey,
       _debridServiceKey,
       _externalPlayerKey,
       _jackettBaseUrlKey,

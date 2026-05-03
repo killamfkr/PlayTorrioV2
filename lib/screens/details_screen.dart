@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import '../api/torrent_api.dart';
 import '../api/torrent_stream_service.dart';
 import '../api/stremio_service.dart';
 import '../utils/stremio_stream_headers.dart';
+import '../utils/stremio_stream_autopick.dart';
 import '../api/torrent_filter.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
@@ -66,6 +68,9 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   String _torrentAutoPickTier = '1080';
   /// Debounce rapid searches / episode switches so we don't stack opens.
   String? _lastAutoPickTorrentSignature;
+  bool _stremioAutoPlayEnabled = false;
+  String _stremioAutoPlayAddonKeyPref = '__all__';
+  String? _lastStremioAutoPlaySignature;
   Set<String> _activeAudioFilters = {};
   List<TorrentResult> _allTorrentResults = [];
   bool _isSearching = false;
@@ -191,12 +196,85 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   Future<void> _loadTorrentAutoPickPrefs() async {
     final en = await _settings.getTorrentAutoPickEnabled();
     final tier = await _settings.getTorrentAutoPickTier();
+    final stEn = await _settings.getStremioAutoPlayEnabled();
+    final stAddon = await _settings.getStremioAutoPlayAddonKey();
     if (mounted) {
       setState(() {
         _torrentAutoPickEnabled = en;
         _torrentAutoPickTier = tier;
+        _stremioAutoPlayEnabled = stEn;
+        _stremioAutoPlayAddonKeyPref = stAddon;
       });
     }
+  }
+
+  String _effectiveStremioAutoAddon() {
+    if (_stremioAutoPlayAddonKeyPref == '__all__') return '__all__';
+    for (final a in _streamAddons) {
+      if (a['baseUrl'] == _stremioAutoPlayAddonKeyPref) return _stremioAutoPlayAddonKeyPref;
+    }
+    return '__all__';
+  }
+
+  void _scheduleStremioAutoPlay() {
+    if (!_stremioAutoPlayEnabled || _isTorrentSource) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_maybeAutoPlayStremio());
+    });
+  }
+
+  Future<void> _maybeAutoPlayStremio() async {
+    if (!mounted || !_stremioAutoPlayEnabled || _isTorrentSource) return;
+    if (_isStremioFetching) return;
+    if (_movie.imdbId == null || _movie.imdbId!.isEmpty) return;
+
+    final addonKey = _effectiveStremioAutoAddon();
+    final list = List<dynamic>.from(_allCombinedStremioStreams);
+    if (list.isEmpty) return;
+
+    final picked = pickAutoStremioStream(
+      list,
+      addonBaseUrl: addonKey,
+      resolutionTier: _torrentAutoPickTier,
+    );
+    if (picked == null || !mounted) return;
+
+    final urlPart = picked['url']?.toString() ?? '';
+    final ih = picked['infoHash']?.toString() ?? '';
+    final sig =
+        '$urlPart|$ih|$addonKey|${_movie.id}|$_selectedSeason|$_selectedEpisode|${_torrentAutoPickTier}';
+    if (_lastStremioAutoPlaySignature == sig) return;
+    _lastStremioAutoPlaySignature = sig;
+
+    Duration? startPos;
+    bool useSaved = false;
+    if (_lastProgress != null) {
+      final m = _lastProgress!['method']?.toString() ?? '';
+      if (m == 'stremio_direct' || m == 'stream') {
+        final sid = _lastProgress!['sourceId']?.toString() ?? '';
+        if (urlPart.isNotEmpty && sid == urlPart) {
+          final pos = _lastProgress!['position'];
+          final dur = _lastProgress!['duration'];
+          if (pos is int && dur is int && dur > 0 && pos > 10000) {
+            startPos = Duration(milliseconds: pos);
+            useSaved = true;
+          }
+        } else if (ih.isNotEmpty &&
+            sid.contains(ih.toLowerCase())) {
+          final pos = _lastProgress!['position'];
+          final dur = _lastProgress!['duration'];
+          if (pos is int && dur is int && dur > 0 && pos > 10000) {
+            startPos = Duration(milliseconds: pos);
+          }
+        }
+      }
+    }
+
+    _playStremioStream(
+      Map<String, dynamic>.from(picked),
+      startPosition: startPos,
+      useSavedHttpPlayback: useSaved,
+    );
   }
 
   Future<void> _loadSortPreference() async {
@@ -971,6 +1049,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                 _errorMessage = 'No streams found from any addon';
               }
             });
+            _scheduleStremioAutoPlay();
           }
         });
       }
@@ -1050,6 +1129,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                 _isStremioFetching = false;
                 if (streams.isEmpty) _errorMessage = 'No streams found';
               });
+              _scheduleStremioAutoPlay();
             }
             return;
           }
@@ -1074,6 +1154,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
           _isStremioFetching = false;
           if (streams.isEmpty) _errorMessage = 'No streams found';
         });
+        _scheduleStremioAutoPlay();
       }
     } catch (e) {
       if (mounted) setState(() { _errorMessage = 'Error: $e'; _isStremioFetching = false; _loadedAddonBaseUrls.add(addonBaseUrl); });
@@ -1190,6 +1271,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
           _stremioStreams = streams;
           if (streams.isEmpty) _errorMessage = 'No streams found in ${addon['name']}';
         });
+        _scheduleStremioAutoPlay();
       }
     } catch (e) {
       if (mounted) setState(() => _errorMessage = 'Error: $e');
@@ -2689,53 +2771,226 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
       final e = _selectedEpisode.toString().padLeft(2, '0');
       epLabel = 'S${s}E$e';
     }
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.download_rounded, color: Colors.white54, size: 16),
-        const SizedBox(width: 6),
-        const Text('Available Sources',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-        if (epLabel != null) ...[
-          const SizedBox(width: 6),
-          Text('— $epLabel', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+        Row(
+          children: [
+            Icon(
+              showSort ? Icons.download_rounded : Icons.extension_outlined,
+              color: Colors.white54,
+              size: 16,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              showSort ? 'Available Sources' : 'Stremio streams',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14),
+            ),
+            if (epLabel != null) ...[
+              const SizedBox(width: 6),
+              Text('— $epLabel',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            ],
+            if (_isSearching || _isStremioFetching) ...[
+              const SizedBox(width: 8),
+              const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppTheme.primaryColor)),
+            ],
+            const Spacer(),
+            if (showSort)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: DropdownButton<String>(
+                  value: _sortPreference,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  dropdownColor: const Color(0xFF0F0F2D),
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                      color: Colors.white54, size: 16),
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  items: [
+                    'Seeders (High to Low)',
+                    'Seeders (Low to High)',
+                    'Quality (High to Low)',
+                    'Quality (Low to High)',
+                    'Size (High to Low)',
+                    'Size (Low to High)',
+                  ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _sortPreference = val);
+                      _settings.setSortPreference(val);
+                      _sortResults();
+                    }
+                  },
+                ),
+              ),
+            if (showSort) ...[
+              const SizedBox(width: 8),
+              _buildTorrentAutoPickControls()
+            ],
+            if (showSort) ...[
+              const SizedBox(width: 8),
+              _buildAudioFilterButton()
+            ],
+          ],
+        ),
+        if (!showSort) ...[
+          const SizedBox(height: 8),
+          _buildStremioAddonAutoRow(),
         ],
-        if (_isSearching || _isStremioFetching) ...[
-          const SizedBox(width: 8),
-          const SizedBox(width: 12, height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor)),
-        ],
-        const Spacer(),
-        if (showSort)
+      ],
+    );
+  }
+
+  Widget _buildStremioAddonAutoRow() {
+    final hasImdb = _movie.imdbId != null && _movie.imdbId!.isNotEmpty;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_circle_outline_rounded,
+                color: Colors.white54, size: 16),
+            const SizedBox(width: 4),
+            Text(
+              'Auto-play',
+              style: TextStyle(
+                color: _stremioAutoPlayEnabled
+                    ? AppTheme.primaryColor
+                    : Colors.white54,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Transform.scale(
+              scale: 0.82,
+              child: Switch(
+                value: _stremioAutoPlayEnabled,
+                activeThumbColor: AppTheme.primaryColor,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: hasImdb
+                    ? (v) async {
+                        await _settings.setStremioAutoPlayEnabled(v);
+                        PlaytorrioCloudSyncService.instance
+                            .scheduleDebouncedSettingsPush();
+                        setState(() {
+                          _stremioAutoPlayEnabled = v;
+                          _lastStremioAutoPlaySignature = null;
+                        });
+                        if (v) _scheduleStremioAutoPlay();
+                      }
+                    : null,
+              ),
+            ),
+          ],
+        ),
+        if (!hasImdb)
+          Text(
+            'IMDB id required for addon streams',
+            style: TextStyle(color: Colors.amber.withValues(alpha: 0.85), fontSize: 10),
+          ),
+        if (hasImdb) ...[
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white12),
             ),
-            child: DropdownButton<String>(
-              value: _sortPreference,
-              isDense: true,
-              underline: const SizedBox.shrink(),
-              dropdownColor: const Color(0xFF0F0F2D),
-              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white54, size: 16),
-              style: const TextStyle(color: Colors.white70, fontSize: 11),
-              items: [
-                'Seeders (High to Low)', 'Seeders (Low to High)',
-                'Quality (High to Low)', 'Quality (Low to High)',
-                'Size (High to Low)', 'Size (Low to High)',
-              ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _sortPreference = val);
-                  _settings.setSortPreference(val);
-                  _sortResults();
-                }
-              },
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _effectiveStremioAutoAddon(),
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: [
+                  const DropdownMenuItem(
+                      value: '__all__', child: Text('All addons')),
+                  ..._streamAddons
+                      .where((a) => a['type'] != 'torrent')
+                      .map(
+                    (a) => DropdownMenuItem(
+                      value: a['baseUrl'] as String,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 160),
+                        child: Text(
+                          a['name']?.toString() ?? 'Addon',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await _settings.setStremioAutoPlayAddonKey(v);
+                  PlaytorrioCloudSyncService.instance
+                      .scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _stremioAutoPlayAddonKeyPref = v;
+                    _lastStremioAutoPlaySignature = null;
+                  });
+                  _scheduleStremioAutoPlay();
+                },
+              ),
             ),
           ),
-        if (showSort) ...[const SizedBox(width: 8), _buildTorrentAutoPickControls()],
-        if (showSort) ...[const SizedBox(width: 8), _buildAudioFilterButton()],
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _torrentAutoPickTier,
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: const [
+                  DropdownMenuItem(value: 'best', child: Text('Any quality')),
+                  DropdownMenuItem(value: '4k', child: Text('4K')),
+                  DropdownMenuItem(value: '1080', child: Text('1080p')),
+                  DropdownMenuItem(value: '720', child: Text('720p')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await _settings.setTorrentAutoPickTier(v);
+                  PlaytorrioCloudSyncService.instance
+                      .scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _torrentAutoPickTier = v;
+                    _lastStremioAutoPlaySignature = null;
+                    _lastAutoPickTorrentSignature = null;
+                  });
+                  _sortResults();
+                  _scheduleStremioAutoPlay();
+                },
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }

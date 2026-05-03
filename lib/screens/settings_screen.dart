@@ -48,6 +48,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _sortPreference = 'Seeders (High to Low)';
   bool _torrentAutoPickEnabled = false;
   String _torrentAutoPickTier = '1080';
+  bool _stremioAutoPlayEnabled = false;
+  String _stremioAutoPlayAddonKeyPref = '__all__';
   List<Map<String, dynamic>> _installedAddons = [];
   bool _isInstalling = false;
   
@@ -166,6 +168,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final sort = await _settings.getSortPreference();
     final torrentAutoPick = await _settings.getTorrentAutoPickEnabled();
     final torrentAutoTier = await _settings.getTorrentAutoPickTier();
+    final stAuto = await _settings.getStremioAutoPlayEnabled();
+    final stAddon = await _settings.getStremioAutoPlayAddonKey();
     final useDebrid = await _settings.useDebridForStreams();
     final service = await _settings.getDebridService();
     final addons = await _settings.getStremioAddons();
@@ -280,6 +284,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _sortPreference = sort;
         _torrentAutoPickEnabled = torrentAutoPick;
         _torrentAutoPickTier = torrentAutoTier;
+        _stremioAutoPlayEnabled = stAuto;
+        _stremioAutoPlayAddonKeyPref = stAddon;
         _installedAddons = addons;
         _useDebrid = useDebrid;
         _debridService = service;
@@ -735,6 +741,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           await _settings.setTorrentAutoPickTier(key);
                           PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
                           setState(() => _torrentAutoPickTier = key);
+                        },
+                      ),
+                    SwitchListTile(
+                      title: const Text('Auto-play Stremio addon stream'),
+                      subtitle: const Text(
+                        'Details → Stremio: after streams load, pick the best link from the chosen addon (or all addons) for the resolution tier above.',
+                      ),
+                      value: _stremioAutoPlayEnabled,
+                      onChanged: (v) async {
+                        await _settings.setStremioAutoPlayEnabled(v);
+                        PlaytorrioCloudSyncService.instance
+                            .scheduleDebouncedSettingsPush();
+                        setState(() => _stremioAutoPlayEnabled = v);
+                      },
+                    ),
+                    if (_stremioAutoPlayEnabled)
+                      _buildFocusableDropdown(
+                        'Stremio auto-play addon',
+                        'All addons merges every stream addon; or pick one manifest.',
+                        _stremioAutoPlayAddonLabel(),
+                        [
+                          'All stream addons',
+                          ..._installedAddons
+                              .where((a) => a['type'] != 'torrent')
+                              .map((a) => a['name']?.toString() ?? 'Addon')
+                              .toList(),
+                        ],
+                        (val) async {
+                          if (val == null) return;
+                          final key = _stremioAutoPlayAddonFromLabel(val);
+                          await _settings.setStremioAutoPlayAddonKey(key);
+                          PlaytorrioCloudSyncService.instance
+                              .scheduleDebouncedSettingsPush();
+                          setState(() => _stremioAutoPlayAddonKeyPref = key);
                         },
                       ),
                     const SizedBox(height: 32),
@@ -3488,6 +3528,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (label.contains('4K')) return '4k';
     if (label.contains('720')) return '720';
     return '1080';
+  }
+
+  String _stremioAutoPlayAddonLabel() {
+    if (_stremioAutoPlayAddonKeyPref == '__all__') return 'All stream addons';
+    for (final a in _installedAddons) {
+      if (a['baseUrl'] == _stremioAutoPlayAddonKeyPref) {
+        return a['name']?.toString() ?? 'Addon';
+      }
+    }
+    return 'All stream addons';
+  }
+
+  String _stremioAutoPlayAddonFromLabel(String label) {
+    if (label.startsWith('All stream')) return '__all__';
+    for (final a in _installedAddons) {
+      if (a['type'] == 'torrent') continue;
+      if ((a['name']?.toString() ?? '') == label) {
+        return a['baseUrl']?.toString() ?? '__all__';
+      }
+    }
+    return '__all__';
   }
 
   Widget _buildFocusableDropdown(String title, String subtitle, String value, List<String> options, ValueChanged<String?> onChanged) {
