@@ -35,7 +35,9 @@ import '../../api/settings_service.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
+import '../../api/tmdb_api.dart';
 import '../../api/tmdb_service.dart';
+import '../../services/playtorrio_cast_service.dart';
 import '../../api/introdb_service.dart';
 import '../../models/movie.dart';
 import '../../models/stream_source.dart';
@@ -487,6 +489,25 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     final m = widget.movie;
     if (m == null) return 'PlayTorrio';
     return m.mediaType == 'tv' ? 'TV show' : 'Movie';
+  }
+
+  Future<void> _openChromecast() async {
+    final poster = widget.movie != null && widget.movie!.posterPath.isNotEmpty
+        ? TmdbApi.getImageUrl(widget.movie!.posterPath)
+        : null;
+    await PlaytorrioCastService.instance.openCastSheet(
+      context: context,
+      streamUrl: widget.mediaPath,
+      title: widget.title,
+      subtitle: _mediaSessionSubtitle,
+      posterUrl: poster,
+      liveStream: widget.stremioStreamType == 'tv',
+      startPosition: _player.state.position,
+      headers: widget.headers,
+      onCastStarted: () {
+        if (mounted) _player.pause();
+      },
+    );
   }
 
   void _cancelLiveBufferingUiDebounce() {
@@ -3753,6 +3774,19 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 size: btnSize, iconSize: iconSz,
               ),
               SizedBox(width: gap),
+              if (PlaytorrioCastService.instance.eligibleForCastUi(
+                    isAndroidTv: DeviceProfile.isAndroidTv,
+                    mediaPath: widget.mediaPath,
+                    magnetLink: widget.magnetLink,
+                  )) ...[
+                _GlassIconButton(
+                  icon: Icons.cast_rounded,
+                  onPressed: _openChromecast,
+                  size: btnSize,
+                  iconSize: iconSz,
+                ),
+                SizedBox(width: gap),
+              ],
               if (Platform.isAndroid &&
                   !DeviceProfile.isAndroidTv &&
                   _showAndroidPipButton) ...[

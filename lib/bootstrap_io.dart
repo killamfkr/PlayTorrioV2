@@ -22,6 +22,7 @@ import 'play_torrio_app.dart';
 import 'utils/device_profile.dart';
 import 'utils/tv_settings_remote_service.dart';
 import 'platform_flags.dart';
+import 'services/playtorrio_cast_service.dart';
 import 'services/playtorrio_cloud_sync_service.dart';
 
 void setupAppLogging() {
@@ -40,6 +41,9 @@ Future<void> bootstrap() async {
   debugPrint('[Boot] Flutter binding initialized');
   await DeviceProfile.initAndroidProfile();
   await TvSettingsRemoteService().ensureStarted();
+  if (platformIsAndroid || platformIsIOS) {
+    await PlaytorrioCastService.instance.initialize();
+  }
 
   if (platformIsAndroid) {
     try {
