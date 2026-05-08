@@ -49,6 +49,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   Timer? _metricsDebounce;
   Timer? _metricsSafety;
+  final FocusNode _tvNavRailFocus = FocusNode(debugLabel: 'tvNavRail');
 
   /// All screens keyed by nav ID — created once, never recreated.
   late final Map<String, Widget> _allScreens;
@@ -116,6 +117,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _loadNavbarConfig();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       TvGuideRefresh.bump();
+      if (mounted && DeviceProfile.isAndroidTv) {
+        _tvNavRailFocus.requestFocus();
+      }
     });
   }
 
@@ -212,6 +216,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void dispose() {
     _metricsDebounce?.cancel();
     _metricsSafety?.cancel();
+    _tvNavRailFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     MainScreen.stremioSearchNotifier.removeListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.removeListener(_onNavbarConfigChanged);
@@ -297,11 +302,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 // Android TV: avoid wrapping the rail in a scroll view — it can steal
                 // focus and make the selected destination / content highlight feel "lost".
                 DeviceProfile.isAndroidTv
-                    ? ConstrainedBox(
-                        constraints:
-                            BoxConstraints(minHeight: MediaQuery.of(context).size.height),
-                        child: IntrinsicHeight(
-                          child: NavigationRail(
+                    ? Focus(
+                        focusNode: _tvNavRailFocus,
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
                             backgroundColor: Colors.transparent,
                             selectedIndex: _selectedIndex,
                             onDestinationSelected: _onItemTapped,
@@ -333,7 +340,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             }).toList(),
                           ),
                         ),
-                      )
+                      ),
+                    )
                     : SingleChildScrollView(
                         child: ConstrainedBox(
                           constraints:

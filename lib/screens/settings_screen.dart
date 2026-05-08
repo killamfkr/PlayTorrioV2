@@ -130,6 +130,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// LAN URL with token for phone → TV settings import (Android TV).
   String? _tvRemoteSettingsUrl;
 
+  bool _tvRemoteBusy = false;
+
   // PlayTorrio cloud (your Supabase project — email/password)
   final TextEditingController _ptCloudEmailController = TextEditingController();
   final TextEditingController _ptCloudPasswordController = TextEditingController();
@@ -147,7 +149,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    SettingsService.remoteLanSettingsRevision
+        .addListener(_onRemoteLanSettingsRevision);
     _loadSettings();
+  }
+
+  void _onRemoteLanSettingsRevision() {
+    if (mounted) _loadSettings();
+  }
+
+  Future<void> _retryTvRemoteLanServer() async {
+    setState(() => _tvRemoteBusy = true);
+    try {
+      await TvSettingsRemoteService().ensureStarted();
+      await TvSettingsRemoteService().refreshLanIp();
+      await _loadSettings();
+    } finally {
+      if (mounted) setState(() => _tvRemoteBusy = false);
+    }
+  }
+
+  Future<void> _restartTvRemoteLanServer() async {
+    setState(() => _tvRemoteBusy = true);
+    try {
+      await TvSettingsRemoteService().restart();
+      await TvSettingsRemoteService().refreshLanIp();
+      await _loadSettings();
+    } finally {
+      if (mounted) setState(() => _tvRemoteBusy = false);
+    }
   }
 
   String _androidTvStreamBitrateLabel() {
@@ -336,9 +366,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildTvRemoteSettingsCard() {
+  Widget _buildAndroidTvPhoneRemoteSection() {
     final url = _tvRemoteSettingsUrl;
-    if (url == null) return const SizedBox.shrink();
     return FocusableControl(
       onTap: () {},
       scaleOnFocus: 1.0,
@@ -348,37 +377,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Edit settings from your phone',
+              'QR link for your phone',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Scan with your phone on the same Wi‑Fi. The QR encodes this TV’s real LAN address (not a placeholder). Paste exported settings JSON to import; the URL includes a secret token.',
-              style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+            Text(
+              _tvRemoteBusy
+                  ? 'Working…'
+                  : 'Your remote highlights focused controls on TV; use a phone browser for long text, imports, and quick toggles. Stay on the same Wi‑Fi.',
+              style: const TextStyle(
+                  fontSize: 13, color: Colors.white54, height: 1.35),
             ),
             const SizedBox(height: 16),
-            Center(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: QrImageView(
-                    data: url,
-                    version: QrVersions.auto,
-                    size: 200,
-                    gapless: true,
+            if (url != null) ...[
+              Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: QrImageView(
+                      data: url,
+                      version: QrVersions.auto,
+                      size: 260,
+                      gapless: true,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            SelectableText(
-              url,
-              style: const TextStyle(fontSize: 11, color: Colors.white38),
-            ),
+              const SizedBox(height: 12),
+              SelectableText(
+                url,
+                style: const TextStyle(fontSize: 11, color: Colors.white38),
+              ),
+              const SizedBox(height: 12),
+              FocusableControl(
+                onTap: _tvRemoteBusy ? () {} : _restartTvRemoteLanServer,
+                scaleOnFocus: 1.0,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.refresh_rounded,
+                        color: AppTheme.primaryColor
+                            .withValues(alpha: _tvRemoteBusy ? 0.35 : 1),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _tvRemoteBusy
+                              ? 'Please wait…'
+                              : 'New QR & link (invalidates old phone bookmarks)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white
+                                .withValues(alpha: _tvRemoteBusy ? 0.4 : 1),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              const Text(
+                'LAN settings server did not start (no Wi‑Fi IPv4, or ports 8787–8792 busy).',
+                style: TextStyle(fontSize: 13, color: Colors.white54),
+              ),
+              const SizedBox(height: 12),
+              FocusableControl(
+                onTap: _tvRemoteBusy ? () {} : _retryTvRemoteLanServer,
+                scaleOnFocus: 1.0,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.wifi_find_rounded,
+                        color: AppTheme.primaryColor
+                            .withValues(alpha: _tvRemoteBusy ? 0.35 : 1),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _tvRemoteBusy
+                              ? 'Please wait…'
+                              : 'Retry — connect Wi‑Fi, then try again',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white
+                                .withValues(alpha: _tvRemoteBusy ? 0.4 : 1),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -416,6 +519,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    SettingsService.remoteLanSettingsRevision
+        .removeListener(_onRemoteLanSettingsRevision);
     _addonController.dispose();
     _xmltvEpgUrlController.dispose();
     _torboxController.dispose();
@@ -512,6 +617,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.all(24),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate([
+                    if (platformIsAndroid && DeviceProfile.isAndroidTv) ...[
+                      _buildSectionHeader('Phone remote control'),
+                      _buildAndroidTvPhoneRemoteSection(),
+                      const SizedBox(height: 32),
+                    ],
                     _buildSectionHeader('Backup & Restore'),
                     _buildBackupRestore(),
                     const SizedBox(height: 32),
@@ -680,10 +790,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           },
                         ),
-                        if (_tvRemoteSettingsUrl != null) ...[
-                          const SizedBox(height: 24),
-                          _buildTvRemoteSettingsCard(),
-                        ],
                       ],
                     ] else ...[
                       const Padding(
@@ -932,7 +1038,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: SafeArea(
           child: DeviceProfile.isAndroidTv
               ? FocusTraversalGroup(
-                  policy: OrderedTraversalPolicy(),
+                  policy: ReadingOrderTraversalPolicy(),
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(context).copyWith(
                       scrollbars: false,
@@ -3499,11 +3605,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            Switch(
-              value: value,
-              onChanged: onChanged,
-              activeTrackColor: AppTheme.primaryColor,
-            ),
+            DeviceProfile.isAndroidTv
+                ? Focus(
+                    canRequestFocus: false,
+                    skipTraversal: true,
+                    child: Switch(
+                      value: value,
+                      onChanged: onChanged,
+                      activeTrackColor: AppTheme.primaryColor,
+                    ),
+                  )
+                : Switch(
+                    value: value,
+                    onChanged: onChanged,
+                    activeTrackColor: AppTheme.primaryColor,
+                  ),
           ],
         ),
       ),

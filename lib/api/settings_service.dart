@@ -235,6 +235,15 @@ class SettingsService {
   static final ValueNotifier<bool> continuePlaybackInBackgroundNotifier =
       ValueNotifier<bool>(true);
 
+  /// Incremented when preferences change from the TV LAN “phone remote” page so
+  /// Settings (and similar listeners) can reload from disk.
+  static final ValueNotifier<int> remoteLanSettingsRevision =
+      ValueNotifier<int>(0);
+
+  static void bumpRemoteLanSettingsRevision() {
+    remoteLanSettingsRevision.value++;
+  }
+
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
