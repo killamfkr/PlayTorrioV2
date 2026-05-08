@@ -492,6 +492,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     return m.mediaType == 'tv' ? 'TV show' : 'Movie';
   }
 
+  bool get _eligibleForChromecast =>
+      PlaytorrioCastService.instance.eligibleForCastUi(
+        mediaPath: widget.mediaPath,
+        magnetLink: widget.magnetLink,
+      );
+
   Future<void> _openChromecast() async {
     final poster = widget.movie != null && widget.movie!.posterPath.isNotEmpty
         ? TmdbApi.getImageUrl(widget.movie!.posterPath)
@@ -3857,11 +3863,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 size: btnSize, iconSize: iconSz,
               ),
               SizedBox(width: gap),
-              if (PlaytorrioCastService.instance.eligibleForCastUi(
-                    isAndroidTv: DeviceProfile.isAndroidTv,
-                    mediaPath: widget.mediaPath,
-                    magnetLink: widget.magnetLink,
-                  )) ...[
+              if (_eligibleForChromecast) ...[
                 _GlassIconButton(
                   icon: Icons.cast_rounded,
                   onPressed: _openChromecast,
@@ -3982,8 +3984,16 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       ),
                       SizedBox(width: gap),
                     ],
+                    if (_eligibleForChromecast) ...[
+                      _GlassIconButton(
+                        icon: Icons.cast_rounded,
+                        onPressed: _openChromecast,
+                        size: btnSize,
+                        iconSize: iconSz,
+                      ),
+                      SizedBox(width: gap),
+                    ],
                     _GlassIconButton(
-                      icon: Icons.link_rounded,
                       onPressed: () async {
                         await Clipboard.setData(ClipboardData(text: widget.mediaPath));
                         if (mounted) {

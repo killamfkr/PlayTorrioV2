@@ -17,8 +17,9 @@ class PlaytorrioCastService {
 
   Future<void> stopCasting() async {}
 
+  Future<void> retryInitialize() async {}
+
   bool eligibleForCastUi({
-    required bool isAndroidTv,
     required String mediaPath,
     String? magnetLink,
   }) =>

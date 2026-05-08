@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chrome_cast/flutter_chrome_cast.dart';
 
-/// Google Cast (Chromecast) sender — Android + iOS phone/tablet only.
+/// Google Cast (Chromecast) sender — Android + iOS (including Android TV).
 class PlaytorrioCastService {
   PlaytorrioCastService._();
   static final PlaytorrioCastService instance = PlaytorrioCastService._();
@@ -14,7 +14,7 @@ class PlaytorrioCastService {
 
   Future<void> initialize() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
-    if (_initialized || _initFailed) return;
+    if (_initialized) return;
     try {
       const appId = GoogleCastDiscoveryCriteria.kDefaultApplicationId;
       final GoogleCastOptions options = Platform.isIOS
@@ -31,8 +31,17 @@ class PlaytorrioCastService {
       debugPrint('[Cast] Google Cast context ready');
     } catch (e, st) {
       _initFailed = true;
+      _initialized = false;
       debugPrint('[Cast] init failed: $e\n$st');
     }
+  }
+
+  /// Call before opening the Cast sheet if startup initialization failed once.
+  Future<void> retryInitialize() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (_initialized) return;
+    _initFailed = false;
+    await initialize();
   }
 
   bool get isInitialized => _initialized;
@@ -66,16 +75,15 @@ class PlaytorrioCastService {
     }
   }
 
+  /// Whether to show Cast controls for this playback. Does not require [_initialized]
+  /// so a failed/timed-out SDK init still shows the icon (tap explains / retries).
   bool eligibleForCastUi({
-    required bool isAndroidTv,
     required String mediaPath,
     String? magnetLink,
   }) {
-    if (isAndroidTv) return false;
     if (!Platform.isAndroid && !Platform.isIOS) return false;
-    if (!_initialized) return false;
     if (magnetLink != null && magnetLink.isNotEmpty) return false;
-    final u = mediaPath.trim();
+    final u = mediaPath.trim().toLowerCase();
     if (!u.startsWith('http://') && !u.startsWith('https://')) return false;
     return true;
   }
@@ -143,10 +151,15 @@ class PlaytorrioCastService {
     VoidCallback? onCastStarted,
   }) async {
     if (!_initialized) {
+      await retryInitialize();
+    }
+    if (!_initialized) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Chromecast is not ready. Restart the app and try again.'),
+            content: Text(
+              'Chromecast is not ready. Check Wi‑Fi and local network access, then try again.',
+            ),
           ),
         );
       }
