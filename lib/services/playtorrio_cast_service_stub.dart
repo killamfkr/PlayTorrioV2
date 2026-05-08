@@ -9,6 +9,14 @@ class PlaytorrioCastService {
 
   bool get isInitialized => false;
 
+  Stream<bool> get isCastingActiveStream => Stream<bool>.value(false);
+
+  bool get isCastingActiveNow => false;
+
+  String? get connectedCastDeviceName => null;
+
+  Future<void> stopCasting() async {}
+
   bool eligibleForCastUi({
     required bool isAndroidTv,
     required String mediaPath,

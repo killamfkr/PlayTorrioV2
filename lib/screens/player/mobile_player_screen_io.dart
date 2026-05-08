@@ -17,6 +17,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:android_pip/android_pip.dart';
 
 import '../../utils/device_profile.dart';
+import '../../utils/app_theme.dart';
 
 import '../../api/subtitle_api.dart';
 import '../../services/watch_history_service.dart';
@@ -3474,6 +3475,88 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                   ignoring: !(_showControls && !_isLocked),
                   child: _buildControlsOverlay(),
                 ),
+              ),
+
+              // ── Chromecast stop banner (always visible while casting) ────────
+              StreamBuilder<bool>(
+                stream: PlaytorrioCastService.instance.isCastingActiveStream,
+                initialData: PlaytorrioCastService.instance.isCastingActiveNow,
+                builder: (context, snap) {
+                  final casting = snap.data == true;
+                  if (!casting) return const SizedBox.shrink();
+                  final pad = MediaQuery.of(context).padding;
+                  final name = PlaytorrioCastService.instance
+                          .connectedCastDeviceName ??
+                      'TV';
+                  return Positioned(
+                    top: pad.top + 52,
+                    left: 12,
+                    right: 12,
+                    child: Material(
+                      color: const Color(0xE6151520),
+                      borderRadius: BorderRadius.circular(12),
+                      elevation: 6,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.cast_connected_rounded,
+                                color: AppTheme.primaryColor, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Casting',
+                                    style: TextStyle(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.65),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () async {
+                                await PlaytorrioCastService.instance
+                                    .stopCasting();
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Stopped casting'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                              child: Text(
+                                'Stop',
+                                style: TextStyle(
+                                  color: AppTheme.primaryColor,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
 
               // ── 5. Lock button (always visible when locked + controls shown)

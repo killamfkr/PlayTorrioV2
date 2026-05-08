@@ -37,6 +37,35 @@ class PlaytorrioCastService {
 
   bool get isInitialized => _initialized;
 
+  /// True while a Cast session is connected (receiver playing or ready).
+  Stream<bool> get isCastingActiveStream {
+    if (!_initialized) return Stream<bool>.value(false);
+    return GoogleCastSessionManager.instance.currentSessionStream.map(
+      (s) =>
+          s != null &&
+          s.connectionState == GoogleCastConnectState.connected,
+    );
+  }
+
+  bool get isCastingActiveNow {
+    if (!_initialized) return false;
+    return GoogleCastSessionManager.instance.hasConnectedSession;
+  }
+
+  String? get connectedCastDeviceName {
+    if (!_initialized) return null;
+    return GoogleCastSessionManager.instance.currentSession?.device?.friendlyName;
+  }
+
+  Future<void> stopCasting() async {
+    if (!_initialized) return;
+    try {
+      await GoogleCastSessionManager.instance.endSessionAndStopCasting();
+    } catch (e, st) {
+      debugPrint('[Cast] stopCasting: $e\n$st');
+    }
+  }
+
   bool eligibleForCastUi({
     required bool isAndroidTv,
     required String mediaPath,
