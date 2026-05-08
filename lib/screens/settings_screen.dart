@@ -1152,6 +1152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'manga':        {'icon': Icons.book,                       'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_rounded,                'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_filled,         'label': 'Anime'},
+    'asian_drama':  {'icon': Icons.video_library_rounded,      'label': 'Asian Drama'},
   };
 
   void _saveNavbarConfig() {

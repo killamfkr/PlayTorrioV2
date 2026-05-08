@@ -8,6 +8,8 @@ import '../api/stremio_service.dart';
 import '../utils/stremio_stream_headers.dart';
 import '../api/stream_providers.dart';
 import '../api/webstreamr_service.dart';
+import '../api/vidsrc_extractor.dart';
+import '../api/videasy_extractor.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
 import '../api/torrent_stream_service.dart';
@@ -543,6 +545,98 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
         }
       } catch (e) {
         debugPrint('Error extracting from WebStreamr: $e');
+      }
+    }
+
+    // Vidsrc (vsembed.ru → cloudnestra m3u8, no WebView).
+    if (!found && !_extractionCancelled && _providers.containsKey('vidsrc')) {
+      if (mounted) setState(() => _statusMessage = 'Searching Vidsrc…');
+      try {
+        final ext = VidsrcExtractor();
+        final isMovie = _movie.mediaType != 'tv';
+        final result = await ext.extract(
+          tmdbId: _movie.id.toString(),
+          isMovie: isMovie,
+          season: isMovie ? null : _selectedSeason,
+          episode: isMovie ? null : _selectedEpisode,
+        );
+        if (!_extractionCancelled && result != null) {
+          found = true;
+          if (mounted && !_extractionCancelled) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PlayerScreen(
+                  streamUrl: result.url,
+                  audioUrl: result.audioUrl,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                      : _movie.title,
+                  headers: result.headers,
+                  movie: _movie,
+                  providers: _providers,
+                  activeProvider: 'vidsrc',
+                  selectedSeason:
+                      _movie.mediaType == 'tv' ? _selectedSeason : null,
+                  selectedEpisode:
+                      _movie.mediaType == 'tv' ? _selectedEpisode : null,
+                  startPosition: widget.startPosition,
+                  sources: result.sources,
+                  externalSubtitles: result.externalSubtitles,
+                ),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error extracting from Vidsrc: $e');
+      }
+    }
+
+    // Videasy (API + bundled WASM decrypt).
+    if (!found && !_extractionCancelled && _providers.containsKey('videasy')) {
+      if (mounted) setState(() => _statusMessage = 'Searching Videasy…');
+      try {
+        final ext = VideasyExtractor(onLog: (m) => debugPrint(m));
+        final isMovie = _movie.mediaType != 'tv';
+        final result = await ext.extract(
+          tmdbId: _movie.id.toString(),
+          isMovie: isMovie,
+          season: isMovie ? null : _selectedSeason,
+          episode: isMovie ? null : _selectedEpisode,
+        );
+        if (!_extractionCancelled && result != null) {
+          found = true;
+          if (mounted && !_extractionCancelled) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PlayerScreen(
+                  streamUrl: result.url,
+                  audioUrl: result.audioUrl,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                      : _movie.title,
+                  headers: result.headers,
+                  movie: _movie,
+                  providers: _providers,
+                  activeProvider: 'videasy',
+                  selectedSeason:
+                      _movie.mediaType == 'tv' ? _selectedSeason : null,
+                  selectedEpisode:
+                      _movie.mediaType == 'tv' ? _selectedEpisode : null,
+                  startPosition: widget.startPosition,
+                  sources: result.sources,
+                  externalSubtitles: result.externalSubtitles,
+                ),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error extracting from Videasy: $e');
       }
     }
 
