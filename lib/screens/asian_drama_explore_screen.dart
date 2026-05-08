@@ -12,6 +12,7 @@ import '../api/kisskh_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/hover_scale.dart';
 import 'asian_drama_details_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AsianDramaExploreScreen extends StatefulWidget {
   const AsianDramaExploreScreen({super.key});
@@ -284,7 +285,7 @@ class _AsianDramaExploreScreenState extends State<AsianDramaExploreScreen> {
             ? AppTheme.primaryColor.withValues(alpha: 0.18)
             : Colors.white.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(20),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: onTap,
           child: Container(
@@ -561,7 +562,7 @@ class _AsianDramaExploreScreenState extends State<AsianDramaExploreScreen> {
           ? AppTheme.primaryColor.withValues(alpha: 0.18)
           : Colors.white.withValues(alpha: 0.04),
       borderRadius: BorderRadius.circular(20),
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: enabled ? onTap : null,
         child: Container(

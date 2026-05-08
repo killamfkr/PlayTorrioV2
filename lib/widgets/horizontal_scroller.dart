@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
+import 'tv_interactive.dart';
 
 /// Horizontal scrollable strip with overlaid left/right arrow buttons.
 /// Arrows appear on desktop/wide screens and on hover; they paginate the
@@ -73,7 +75,12 @@ class _HorizontalScrollerState extends State<HorizontalScroller> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width > 900;
+    final wide = MediaQuery.of(context).size.width > 900;
+    final showArrows = wide || DeviceProfile.isAndroidTv;
+    final hoverOrTv = _hovering || DeviceProfile.isAndroidTv;
+    final physics = DeviceProfile.isAndroidTv
+        ? const ClampingScrollPhysics()
+        : const BouncingScrollPhysics();
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
@@ -92,7 +99,7 @@ class _HorizontalScrollerState extends State<HorizontalScroller> {
                       controller: _ctrl,
                       clipBehavior: Clip.none,
                       scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
+                      physics: physics,
                       padding: widget.padding,
                       itemCount: widget.itemCount,
                       separatorBuilder: widget.separatorBuilder!,
@@ -102,21 +109,21 @@ class _HorizontalScrollerState extends State<HorizontalScroller> {
                       controller: _ctrl,
                       clipBehavior: Clip.none,
                       scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
+                      physics: physics,
                       padding: widget.padding,
                       itemCount: widget.itemCount,
                       itemBuilder: widget.itemBuilder,
                     ),
             ),
-            if (isDesktop) ...[
+            if (showArrows) ...[
               _ArrowButton(
-                visible: _hovering && _canLeft,
+                visible: hoverOrTv && _canLeft,
                 left: true,
                 offset: widget.arrowOffset,
                 onTap: () => _scrollBy(-_pageStep(context)),
               ),
               _ArrowButton(
-                visible: _hovering && _canRight,
+                visible: hoverOrTv && _canRight,
                 left: false,
                 offset: widget.arrowOffset,
                 onTap: () => _scrollBy(_pageStep(context)),
@@ -165,7 +172,7 @@ class _ArrowButton extends StatelessWidget {
               color: Colors.black.withValues(alpha: 0.55),
               shape: const CircleBorder(),
               elevation: 6,
-              child: InkWell(
+              child: TvInkWell(
                 customBorder: const CircleBorder(),
                 onTap: onTap,
                 child: Container(

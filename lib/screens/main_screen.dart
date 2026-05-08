@@ -29,6 +29,7 @@ import '../utils/tv_guide_refresh.dart';
 import '../utils/tv_settings_remote_service.dart';
 import '../api/settings_service.dart';
 import '../platform_flags.dart';
+import '../widgets/tv_interactive.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -419,7 +420,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 final meta = _navMeta[id]!;
                 final bool isSelected = _selectedIndex == idx;
 
-                return InkWell(
+                return TvInkWell(
                   onTap: () => _onItemTapped(idx),
                   child: Container(
                     width: 100,

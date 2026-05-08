@@ -9,6 +9,7 @@ import '../platform_flags.dart';
 import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
 import 'generate_audiobook_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AudiobookScreen extends StatefulWidget {
   const AudiobookScreen({super.key});
@@ -395,7 +396,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                     ),
                     Positioned(
                       top: 4, right: 4,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromHistory(book.audioBookId),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -504,7 +505,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             ),
             Positioned(
               top: 8, right: 8,
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () async {
                   await _playerService.toggleLikeBook(book);
                   _loadLikedBooks();

@@ -17,6 +17,7 @@ import 'asian_drama_details_screen.dart';
 import 'asian_drama_explore_screen.dart';
 import 'asian_drama_player_screen.dart';
 import 'asian_drama_search_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AsianDramaScreen extends StatefulWidget {
   const AsianDramaScreen({super.key});
@@ -632,7 +633,7 @@ class _AsianDramaScreenState extends State<AsianDramaScreen>
                   Material(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(28),
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(28),
                       onTap: () => _openDetails(a),
                       child: const Padding(
@@ -684,7 +685,7 @@ class _AsianDramaScreenState extends State<AsianDramaScreen>
         filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
         child: Material(
           color: Colors.white.withValues(alpha: 0.12),
-          child: InkWell(
+          child: TvInkWell(
             onTap: onTap,
             child: Padding(
               padding:
@@ -851,7 +852,7 @@ class _AsianDramaScreenState extends State<AsianDramaScreen>
                       top: 6,
                       child: Material(
                         color: Colors.transparent,
-                        child: InkWell(
+                        child: TvInkWell(
                           customBorder: const CircleBorder(),
                           onTap: () => _removeFromHistory(entry),
                           child: Container(

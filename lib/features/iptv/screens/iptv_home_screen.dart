@@ -5,6 +5,7 @@ import '../models/iptv_credential.dart';
 import 'live_screen.dart';
 import 'movies_screen.dart';
 import 'shows_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvHomeScreen extends StatefulWidget {
   const IptvHomeScreen({super.key});
@@ -320,7 +321,7 @@ class _HomeCard extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: onTap,
           child: Padding(

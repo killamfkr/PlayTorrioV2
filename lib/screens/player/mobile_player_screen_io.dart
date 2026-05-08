@@ -47,6 +47,7 @@ import '../../utils/stremio_stream_headers.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
+import '../../widgets/tv_interactive.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASS PRIMITIVES  (mobile — press feedback only, no hover)
@@ -3500,7 +3501,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                   right: 16,
                   child: Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       onTap: _performSkip,
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
@@ -3564,7 +3565,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                InkWell(
+                                TvInkWell(
                                   onTap: _cancelNextEpisodeCountdown,
                                   borderRadius: BorderRadius.circular(8),
                                   child: Container(
@@ -3590,7 +3591,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                               ],
                             ),
                           ),
-                        InkWell(
+                        TvInkWell(
                           onTap: _isLoadingNextEp ? null : _nextEpisode,
                           borderRadius: BorderRadius.circular(8),
                           child: Container(

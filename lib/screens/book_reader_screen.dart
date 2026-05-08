@@ -10,6 +10,7 @@ import 'package:xml/xml.dart';
 import '../api/books_service.dart';
 import '../services/book_progress_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class BookReaderScreen extends StatefulWidget {
   final File file;
@@ -1001,7 +1002,7 @@ class _BookReaderScreenState extends State<BookReaderScreen>
       color: (_isDarkMode ? Colors.white : Colors.black)
           .withValues(alpha: 0.1),
       borderRadius: BorderRadius.circular(24),
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(24),
         onTap: onTap,
         child: Padding(

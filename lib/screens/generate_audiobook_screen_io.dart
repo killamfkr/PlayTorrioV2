@@ -11,6 +11,7 @@ import '../api/epub_splitter.dart';
 import '../api/epub_cover.dart';
 import '../utils/app_theme.dart';
 import 'audiobook_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 /// Top-level worker for `compute` so the EPUB parsing/splitting runs off the UI thread.
 Future<List<EpubPart>> _splitWorker(String path) {
@@ -391,7 +392,7 @@ class _GenerateAudiobookScreenState extends State<GenerateAudiobookScreen> {
   Widget _buildVoicePill(Paper2AudioVoice selected) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         onTap: _uploading ? null : _openVoicePicker,
         borderRadius: BorderRadius.circular(14),
         child: Container(
@@ -451,7 +452,7 @@ class _GenerateAudiobookScreenState extends State<GenerateAudiobookScreen> {
   Widget _buildPickButton() {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         onTap: _uploading ? null : _pickAndUpload,
         borderRadius: BorderRadius.circular(999),
         child: AnimatedContainer(
@@ -746,7 +747,7 @@ class _VoiceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),

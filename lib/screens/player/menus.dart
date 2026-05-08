@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/tv_interactive.dart';
 
 void showSpeedMenu(BuildContext context, double currentSpeed, ValueChanged<double> onSpeedChanged) {
   showModalBottomSheet(
@@ -34,7 +35,7 @@ void showSpeedMenu(BuildContext context, double currentSpeed, ValueChanged<doubl
                 alignment: WrapAlignment.center,
                 children: speeds.map((speed) {
                   final isSelected = speed == currentSpeed;
-                  return InkWell(
+                  return TvInkWell(
                     onTap: () {
                       onSpeedChanged(speed);
                       Navigator.pop(context);

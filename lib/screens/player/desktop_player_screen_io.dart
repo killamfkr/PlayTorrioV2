@@ -41,6 +41,7 @@ import '../../utils/mpv_http_headers.dart';
 import '../../utils/stremio_hls_playback.dart';
 import '../../utils/stremio_stream_headers.dart';
 import '../player_screen.dart';
+import '../../widgets/tv_interactive.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASSY WIDGET PRIMITIVES  (MPVEx-style frosted black glass)
@@ -3152,7 +3153,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           child: Material(
             color: Colors.transparent,
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              InkWell(
+              TvInkWell(
                 onTap: _performSkip,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
@@ -3216,7 +3217,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                           ),
                         ),
                         const SizedBox(width: 10),
-                        InkWell(
+                        TvInkWell(
                           onTap: _cancelNextEpisodeCountdown,
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
@@ -3240,7 +3241,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                       ],
                     ),
                   ),
-                InkWell(
+                TvInkWell(
                   onTap: _isLoadingNextEp ? null : _nextEpisode,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(

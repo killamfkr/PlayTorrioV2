@@ -74,6 +74,16 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
       scrollBehavior: platformIsAndroid && DeviceProfile.isAndroidTv
           ? const TvMaterialScrollBehavior()
           : const MaterialScrollBehavior(),
+      builder: (context, child) {
+        Widget w = child ?? const SizedBox.shrink();
+        if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+          w = FocusTraversalGroup(
+            policy: ReadingOrderTraversalPolicy(),
+            child: w,
+          );
+        }
+        return w;
+      },
       home: const PlaytorrioProfileGate(
         child: SplashScreen(),
       ),

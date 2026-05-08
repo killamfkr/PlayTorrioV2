@@ -28,6 +28,7 @@ import 'epg_channel_mapping_screen.dart';
 import 'settings_export.dart';
 import 'webstreamr_settings_screen.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
+import '../widgets/tv_interactive.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -3520,7 +3521,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           itemBuilder: (context, index) {
             final preset = AppTheme.presets[index];
             final isSelected = preset.id == _selectedThemeId;
-            return GestureDetector(
+            return TvGestureTap(
               onTap: () async {
                 await AppTheme.setPreset(preset.id);
                 setState(() => _selectedThemeId = preset.id);

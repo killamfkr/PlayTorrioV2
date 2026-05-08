@@ -5,6 +5,7 @@ import '../api/books_service.dart';
 import '../services/book_progress_service.dart';
 import '../utils/app_theme.dart';
 import 'book_reader_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class BooksScreen extends StatefulWidget {
   const BooksScreen({super.key});
@@ -369,7 +370,7 @@ class _BooksScreenState extends State<BooksScreen> {
         margin: const EdgeInsets.symmetric(vertical: 5),
         color: Colors.white.withValues(alpha: 0.06),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () => _resumeBook(entry),
           child: Padding(
@@ -435,7 +436,7 @@ class _BooksScreenState extends State<BooksScreen> {
                     const Icon(Icons.play_circle_fill_rounded,
                         color: AppTheme.primaryColor, size: 28),
                     const SizedBox(height: 8),
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: () => _deleteBook(entry),
                       child: const Icon(Icons.delete_outline_rounded,
                           color: Colors.white24, size: 20),
@@ -499,7 +500,7 @@ class _BooksScreenState extends State<BooksScreen> {
       margin: const EdgeInsets.symmetric(vertical: 5),
       color: Colors.white.withValues(alpha: 0.05),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () => _showDownloadDialog(book),
         child: Padding(

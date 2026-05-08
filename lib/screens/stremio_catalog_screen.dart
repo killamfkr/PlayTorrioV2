@@ -14,6 +14,7 @@ import '../utils/app_theme.dart';
 import '../utils/stremio_tv_schedule.dart';
 import 'details_screen.dart';
 import 'stremio_tv_guide_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 /// Full-screen catalog browser for Stremio addons.
 /// Shows all catalogs from installed addons, supports genre filtering,
@@ -654,7 +655,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
   Widget _buildFilterChip(String label, String type) {
     final selected = _filterType == type;
     return Expanded(
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: () => setState(() => _filterType = type),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -733,7 +734,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       child: Material(
         color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.12) : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () => _selectCatalog(cat),
           child: Padding(
@@ -908,7 +909,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
 
   Widget _buildMobileFilterPill(String label, String type) {
     final selected = _filterType == type;
-    return GestureDetector(
+    return TvGestureTap(
       onTap: () => setState(() => _filterType = type),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -956,7 +957,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
                 _selectedCatalog!['catalogType'] == cat['catalogType'];
             final addonIcon = (cat['addonIcon'] ?? '').toString();
 
-            return GestureDetector(
+            return TvGestureTap(
               onTap: () => _selectCatalog(cat),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -1120,7 +1121,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
       child: Material(
         color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.12) : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () {
             Navigator.pop(sheetCtx);
@@ -1197,7 +1198,7 @@ class _StremioCatalogScreenState extends State<StremioCatalogScreen> {
 
   Widget _buildGenreChip(String label, String? genre) {
     final isSelected = _selectedGenre == genre;
-    return GestureDetector(
+    return TvGestureTap(
       onTap: () => _selectGenre(genre),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -1643,7 +1644,7 @@ class _AddToMyListStremioButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(uid);
-        return GestureDetector(
+        return TvGestureTap(
           onTap: () async {
             final added = await MyListService().toggleStremioItem(item);
             if (context.mounted) {

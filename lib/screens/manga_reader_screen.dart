@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../api/manga_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class MangaReaderScreen extends StatefulWidget {
   final Manga manga;
@@ -474,7 +475,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen> {
               ? const Text('Failed to load pages', style: TextStyle(color: Colors.white70))
               : _isLoadingPage || _currentImageUrl == null
                   ? const CircularProgressIndicator(color: AppTheme.primaryColor)
-                  : GestureDetector(
+                  : TvGestureTap(
                       onTap: () {
                         // Toggle zoom controls on mobile
                         if (MediaQuery.of(context).size.width <= 600) {

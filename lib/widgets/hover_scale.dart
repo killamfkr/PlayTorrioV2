@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
+import 'tv_interactive.dart';
 
 /// A small interactive wrapper that scales + glows on mouse hover.
 /// Cheap drop-in replacement for `GestureDetector(onTap: …)` on cards.
@@ -28,6 +30,14 @@ class _HoverScaleState extends State<HoverScale> {
 
   @override
   Widget build(BuildContext context) {
+    if (DeviceProfile.isAndroidTv) {
+      return TvGestureTap(
+        borderRadius: widget.radius,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        child: widget.child,
+      );
+    }
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
