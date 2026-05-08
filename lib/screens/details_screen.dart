@@ -3076,7 +3076,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
 
   Widget _buildAudioFilterButton() {
     final active = _activeAudioFilters.isNotEmpty;
-    return TvGestureTap(
+    return GestureDetector(
       onTapDown: (details) async {
         final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
         final position = RelativeRect.fromRect(

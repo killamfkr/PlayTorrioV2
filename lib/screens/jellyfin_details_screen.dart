@@ -32,7 +32,7 @@ class _HoverCardState extends State<_HoverCard> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       cursor: SystemMouseCursors.click,
-      child: TvGestureTap(
+      child: GestureDetector(
         onTapDown: (_) => setState(() => _pressed = true),
         onTapUp: (_) {
           setState(() => _pressed = false);

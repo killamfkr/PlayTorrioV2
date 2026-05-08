@@ -375,7 +375,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                     ? _buildErrorWidget()
                     : _isLoadingPage || _currentImageUrl == null
                         ? const CircularProgressIndicator(color: AppTheme.primaryColor)
-                        : TvGestureTap(
+                        : GestureDetector(
                             onTap: () {
                               // Toggle zoom controls on mobile
                               if (MediaQuery.of(context).size.width <= 600) {

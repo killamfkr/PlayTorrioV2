@@ -475,7 +475,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen> {
               ? const Text('Failed to load pages', style: TextStyle(color: Colors.white70))
               : _isLoadingPage || _currentImageUrl == null
                   ? const CircularProgressIndicator(color: AppTheme.primaryColor)
-                  : TvGestureTap(
+                  : GestureDetector(
                       onTap: () {
                         // Toggle zoom controls on mobile
                         if (MediaQuery.of(context).size.width <= 600) {

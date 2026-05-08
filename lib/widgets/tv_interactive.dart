@@ -46,8 +46,7 @@ class TvInkWell extends StatelessWidget {
     if (customBorder is CircleBorder) return 999;
     final shape = _resolvedShape();
     if (shape is BorderRadius) {
-      final tl = shape.topLeft;
-      if (tl is Radius.circular) return tl.x;
+      return shape.topLeft.x;
     }
     return cornerRadius ?? 12;
   }
