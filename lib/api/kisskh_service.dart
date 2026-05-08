@@ -11,6 +11,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/playtorrio_cloud_sync_service.dart';
+
 class KissKhService {
   static const String baseUrl = 'https://kisskh.co';
   static const String apiBase = '$baseUrl/api';
@@ -210,9 +212,13 @@ class KissKhService {
   }
 
   // ─── Watch history (continue watching) ──────────────────────────
-  static const String _historyKey = 'kisskh_history_v1';
+  static const String watchHistoryPrefsKey = 'kisskh_history_v1';
 
   static final ValueNotifier<int> watchHistoryRevision = ValueNotifier<int>(0);
+
+  static void bumpWatchHistoryRevision() {
+    watchHistoryRevision.value++;
+  }
 
   Future<void> recordWatch({
     required KdramaCard drama,
@@ -222,7 +228,7 @@ class KissKhService {
     Duration? duration,
   }) async {
     final p = await SharedPreferences.getInstance();
-    final list = p.getStringList(_historyKey) ?? [];
+    final list = p.getStringList(watchHistoryPrefsKey) ?? [];
     list.removeWhere((e) {
       try {
         return jsonDecode(e)['id'] == drama.id;
@@ -244,13 +250,14 @@ class KissKhService {
       }),
     );
     if (list.length > 50) list.removeRange(50, list.length);
-    await p.setStringList(_historyKey, list);
+    await p.setStringList(watchHistoryPrefsKey, list);
     watchHistoryRevision.value++;
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<List<Map<String, dynamic>>> getWatchHistory() async {
     final p = await SharedPreferences.getInstance();
-    final list = p.getStringList(_historyKey) ?? [];
+    final list = p.getStringList(watchHistoryPrefsKey) ?? [];
     final out = <Map<String, dynamic>>[];
     for (final raw in list) {
       try {
@@ -270,7 +277,7 @@ class KissKhService {
 
   Future<void> removeFromHistory(int id) async {
     final p = await SharedPreferences.getInstance();
-    final list = p.getStringList(_historyKey) ?? [];
+    final list = p.getStringList(watchHistoryPrefsKey) ?? [];
     list.removeWhere((e) {
       try {
         return jsonDecode(e)['id'] == id;
@@ -278,8 +285,9 @@ class KissKhService {
         return true;
       }
     });
-    await p.setStringList(_historyKey, list);
+    await p.setStringList(watchHistoryPrefsKey, list);
     watchHistoryRevision.value++;
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 }
 

@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' as html_parser;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/playtorrio_cloud_sync_service.dart';
+
 const String _baseUrl = 'https://weebcentral.com';
 const String _coverCdn = 'https://temp.compsci88.com/cover';
 
@@ -126,7 +128,7 @@ class MangaChapter {
 }
 
 class MangaService {
-  static const String _likedKey = 'liked_manga';
+  static const String prefsLikedKey = 'liked_manga';
   static const int _pageSize = 32;
   static const String _userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
@@ -372,7 +374,7 @@ class MangaService {
 
   Future<void> toggleLike(Manga manga) async {
     final prefs = await SharedPreferences.getInstance();
-    final likedJson = prefs.getStringList(_likedKey) ?? [];
+    final likedJson = prefs.getStringList(prefsLikedKey) ?? [];
 
     final index = likedJson.indexWhere((j) {
       final m = jsonDecode(j) as Map<String, dynamic>;
@@ -385,12 +387,13 @@ class MangaService {
       likedJson.add(jsonEncode(manga.toJson()));
     }
 
-    await prefs.setStringList(_likedKey, likedJson);
+    await prefs.setStringList(prefsLikedKey, likedJson);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<bool> isLiked(String id) async {
     final prefs = await SharedPreferences.getInstance();
-    final likedJson = prefs.getStringList(_likedKey) ?? [];
+    final likedJson = prefs.getStringList(prefsLikedKey) ?? [];
     return likedJson.any((j) {
       final m = jsonDecode(j) as Map<String, dynamic>;
       return m['id'] == id;
@@ -399,7 +402,7 @@ class MangaService {
 
   Future<List<Manga>> getLikedManga() async {
     final prefs = await SharedPreferences.getInstance();
-    final likedJson = prefs.getStringList(_likedKey) ?? [];
+    final likedJson = prefs.getStringList(prefsLikedKey) ?? [];
     return likedJson.map((j) => Manga.fromJson(jsonDecode(j))).toList();
   }
 
