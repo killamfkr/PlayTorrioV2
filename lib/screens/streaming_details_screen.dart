@@ -8,6 +8,8 @@ import '../api/stremio_service.dart';
 import '../utils/stremio_stream_headers.dart';
 import '../api/stream_providers.dart';
 import '../api/webstreamr_service.dart';
+import '../api/vidsrc_extractor.dart';
+import '../api/videasy_extractor.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
 import '../api/torrent_stream_service.dart';
@@ -19,6 +21,7 @@ import '../services/watch_history_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
 import '../widgets/movie_atmosphere.dart';
 import 'player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class StreamingDetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -546,6 +549,98 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
       }
     }
 
+    // Vidsrc (vsembed.ru → cloudnestra m3u8, no WebView).
+    if (!found && !_extractionCancelled && _providers.containsKey('vidsrc')) {
+      if (mounted) setState(() => _statusMessage = 'Searching Vidsrc…');
+      try {
+        final ext = VidsrcExtractor();
+        final isMovie = _movie.mediaType != 'tv';
+        final result = await ext.extract(
+          tmdbId: _movie.id.toString(),
+          isMovie: isMovie,
+          season: isMovie ? null : _selectedSeason,
+          episode: isMovie ? null : _selectedEpisode,
+        );
+        if (!_extractionCancelled && result != null) {
+          found = true;
+          if (mounted && !_extractionCancelled) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PlayerScreen(
+                  streamUrl: result.url,
+                  audioUrl: result.audioUrl,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                      : _movie.title,
+                  headers: result.headers,
+                  movie: _movie,
+                  providers: _providers,
+                  activeProvider: 'vidsrc',
+                  selectedSeason:
+                      _movie.mediaType == 'tv' ? _selectedSeason : null,
+                  selectedEpisode:
+                      _movie.mediaType == 'tv' ? _selectedEpisode : null,
+                  startPosition: widget.startPosition,
+                  sources: result.sources,
+                  externalSubtitles: result.externalSubtitles,
+                ),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error extracting from Vidsrc: $e');
+      }
+    }
+
+    // Videasy (API + bundled WASM decrypt).
+    if (!found && !_extractionCancelled && _providers.containsKey('videasy')) {
+      if (mounted) setState(() => _statusMessage = 'Searching Videasy…');
+      try {
+        final ext = VideasyExtractor(onLog: (m) => debugPrint(m));
+        final isMovie = _movie.mediaType != 'tv';
+        final result = await ext.extract(
+          tmdbId: _movie.id.toString(),
+          isMovie: isMovie,
+          season: isMovie ? null : _selectedSeason,
+          episode: isMovie ? null : _selectedEpisode,
+        );
+        if (!_extractionCancelled && result != null) {
+          found = true;
+          if (mounted && !_extractionCancelled) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PlayerScreen(
+                  streamUrl: result.url,
+                  audioUrl: result.audioUrl,
+                  title: _movie.mediaType == 'tv'
+                      ? '${_movie.title} - S$_selectedSeason E$_selectedEpisode'
+                      : _movie.title,
+                  headers: result.headers,
+                  movie: _movie,
+                  providers: _providers,
+                  activeProvider: 'videasy',
+                  selectedSeason:
+                      _movie.mediaType == 'tv' ? _selectedSeason : null,
+                  selectedEpisode:
+                      _movie.mediaType == 'tv' ? _selectedEpisode : null,
+                  startPosition: widget.startPosition,
+                  sources: result.sources,
+                  externalSubtitles: result.externalSubtitles,
+                ),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error extracting from Videasy: $e');
+      }
+    }
+
     // Fallback: web embeds (VidLink/etc.) if WebStreamr returned nothing.
     if (!found) {
       final providerKeys = _providers.keys.toList();
@@ -982,7 +1077,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
         final description = s['description'] ?? '';
         return Material(
           color: Colors.transparent,
-          child: InkWell(
+          child: TvInkWell(
             onTap: () => _playStremioStream(s),
             borderRadius: BorderRadius.circular(12),
             child: Container(
@@ -1056,7 +1151,7 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
             else
               MouseRegion(
                 cursor: SystemMouseCursors.click,
-                child: GestureDetector(
+                child: TvGestureTap(
                   onTap: _startExtraction,
                   child: Container(
                     width: isDesktop ? 300 : double.infinity,
@@ -1555,7 +1650,7 @@ class _HorizontalEpisodeCardState extends State<_HorizontalEpisodeCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -1640,7 +1735,7 @@ class _HorizontalEpisodeCardState extends State<_HorizontalEpisodeCard> {
                 // watched checkmark
                 Positioned(
                   top: 6, right: 6,
-                  child: GestureDetector(
+                  child: TvGestureTap(
                     onTap: widget.onToggleWatched,
                     child: Container(
                       padding: const EdgeInsets.all(3),
@@ -1722,7 +1817,7 @@ class _EpisodeCardState extends State<_EpisodeCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
@@ -1873,7 +1968,7 @@ class _SeasonChipState extends State<_SeasonChip> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTapDown: (_) => setState(() => _isPressed = true),
         onTapUp: (_) {
           setState(() => _isPressed = false);
@@ -1948,7 +2043,7 @@ class _SimilarMovieCardState extends State<_SimilarMovieCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: () {
           Navigator.pushReplacement(
             context,

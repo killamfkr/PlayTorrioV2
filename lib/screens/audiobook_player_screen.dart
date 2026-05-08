@@ -6,6 +6,7 @@ import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/audiobook_download_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class AudiobookPlayerScreen extends StatefulWidget {
   final Audiobook audiobook;
@@ -165,7 +166,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         final progress = downloads[widget.audiobook.audioBookId];
 
         if (progress != null && progress.status == 'downloading') {
-          return GestureDetector(
+          return TvGestureTap(
             onTap: () {
               _downloadService.cancelDownload(widget.audiobook.audioBookId);
             },
@@ -374,7 +375,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                     if (buffering && !playing) {
                       return const SizedBox(width: 80, height: 80, child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: Colors.white)));
                     }
-                    return GestureDetector(
+                    return TvGestureTap(
                       onTap: () => _service.playOrPause(),
                       child: Container(
                         width: 84, height: 84,
@@ -471,7 +472,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
             if (downloaded.contains(key)) {
               return const Icon(Icons.download_done, color: Colors.greenAccent, size: 20);
             }
-            return GestureDetector(
+            return TvGestureTap(
               onTap: () {
                 _downloadService.downloadSingleChapter(
                   widget.audiobook,

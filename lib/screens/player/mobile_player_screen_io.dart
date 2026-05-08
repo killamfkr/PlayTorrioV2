@@ -29,6 +29,8 @@ import '../../api/webstreamr_service.dart';
 import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
+import '../../api/vidsrc_extractor.dart';
+import '../../api/videasy_extractor.dart';
 import '../../api/settings_service.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
@@ -45,6 +47,7 @@ import '../../utils/stremio_stream_headers.dart';
 import '../player_screen.dart';
 import 'utils.dart';
 import 'menus.dart';
+import '../../widgets/tv_interactive.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASS PRIMITIVES  (mobile — press feedback only, no hover)
@@ -404,6 +407,10 @@ class MobilePlayerScreen extends StatefulWidget {
   /// Stremio `/stream/{type}/...` segment (e.g. `tv` for live channels).
   final String stremioStreamType;
   final Map<String, dynamic>? providers;
+  final Future<void> Function(Duration position, Duration duration)?
+      onPlaybackProgress;
+  final bool hasCustomNextEpisode;
+  final VoidCallback? onCustomNextEpisode;
 
   const MobilePlayerScreen({
     super.key,
@@ -424,6 +431,9 @@ class MobilePlayerScreen extends StatefulWidget {
     this.stremioAddonBaseUrl,
     this.stremioStreamType = 'series',
     this.providers,
+    this.onPlaybackProgress,
+    this.hasCustomNextEpisode = false,
+    this.onCustomNextEpisode,
   });
 
   @override
@@ -1135,9 +1145,20 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
   /// Saves URL + position without finalizing playback (Trakt stop).
   void _checkpointResumeSnapshot() {
-    if (_disposed || widget.movie == null || _isStremioLiveTv) return;
-    final pos = _positionNotifier.value.inMilliseconds;
-    final dur = _durationNotifier.value.inMilliseconds;
+    if (_disposed || _isStremioLiveTv) return;
+    final posMs = _positionNotifier.value.inMilliseconds;
+    final durMs = _durationNotifier.value.inMilliseconds;
+    final cb = widget.onPlaybackProgress;
+    if (cb != null && durMs > 0) {
+      unawaited(cb(
+        Duration(milliseconds: posMs),
+        Duration(milliseconds: durMs),
+      ));
+    }
+
+    if (widget.movie == null) return;
+    final pos = posMs;
+    final dur = durMs;
     if (pos < 15000 || dur <= 0) return;
 
     final isTorrent = widget.magnetLink != null;
@@ -2990,10 +3011,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   // ─────────────────────────────────────────────────────────────────────────
 
   bool get _isNextEpisodeAvailable =>
-      widget.movie != null &&
-      widget.movie!.mediaType == 'tv' &&
-      widget.selectedSeason != null &&
-      widget.selectedEpisode != null;
+      (widget.onCustomNextEpisode != null && widget.hasCustomNextEpisode) ||
+      (widget.movie != null &&
+          widget.movie!.mediaType == 'tv' &&
+          widget.selectedSeason != null &&
+          widget.selectedEpisode != null);
 
   bool get _showNextEpButton =>
       _isNextEpisodeAvailable && (_nearEndOfEpisode || _isLoadingNextEp);
@@ -3001,6 +3023,11 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
   Future<void> _nextEpisode() async {
     if (!_isNextEpisodeAvailable || _isLoadingNextEp) return;
     _cancelNextEpisodeCountdown();
+
+    if (widget.onCustomNextEpisode != null && widget.hasCustomNextEpisode) {
+      widget.onCustomNextEpisode!();
+      return;
+    }
 
     setState(() => _isLoadingNextEp = true);
 
@@ -3208,6 +3235,32 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
           episode: nextEpisode,
         );
         if (result == null) throw Exception('AMRI extraction failed for S${nextSeason}E$nextEpisode');
+        streamUrl = result.url;
+        headers = result.headers.isNotEmpty ? result.headers : null;
+      } else if (widget.activeProvider == 'vidsrc') {
+        final ext = VidsrcExtractor();
+        final result = await ext.extract(
+          tmdbId: widget.movie!.id.toString(),
+          isMovie: false,
+          season: nextSeason,
+          episode: nextEpisode,
+        );
+        if (result == null) {
+          throw Exception('Vidsrc failed for S${nextSeason}E$nextEpisode');
+        }
+        streamUrl = result.url;
+        headers = result.headers.isNotEmpty ? result.headers : null;
+      } else if (widget.activeProvider == 'videasy') {
+        final ext = VideasyExtractor(onLog: (m) => debugPrint(m));
+        final result = await ext.extract(
+          tmdbId: widget.movie!.id.toString(),
+          isMovie: false,
+          season: nextSeason,
+          episode: nextEpisode,
+        );
+        if (result == null) {
+          throw Exception('Videasy failed for S${nextSeason}E$nextEpisode');
+        }
         streamUrl = result.url;
         headers = result.headers.isNotEmpty ? result.headers : null;
       } else if (widget.activeProvider != null) {
@@ -3448,7 +3501,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                   right: 16,
                   child: Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       onTap: _performSkip,
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
@@ -3512,7 +3565,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                InkWell(
+                                TvInkWell(
                                   onTap: _cancelNextEpisodeCountdown,
                                   borderRadius: BorderRadius.circular(8),
                                   child: Container(
@@ -3538,7 +3591,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                               ],
                             ),
                           ),
-                        InkWell(
+                        TvInkWell(
                           onTap: _isLoadingNextEp ? null : _nextEpisode,
                           borderRadius: BorderRadius.circular(8),
                           child: Container(

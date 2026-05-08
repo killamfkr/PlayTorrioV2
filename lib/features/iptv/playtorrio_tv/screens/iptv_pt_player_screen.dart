@@ -15,6 +15,7 @@ import '../../../../platform_flags.dart';
 import '../../../../services/built_in_video_media_session.dart';
 import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
+import '../../../../widgets/tv_interactive.dart';
 
 /// Single source for the IPTV player.
 class IptvPlaySource {
@@ -1054,7 +1055,7 @@ class _RoundIcon extends StatelessWidget {
     return Material(
       color: Colors.white.withValues(alpha: 0.12),
       shape: const CircleBorder(),
-      child: InkWell(
+      child: TvInkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
         onLongPress: onLongPress,
@@ -1075,7 +1076,7 @@ class _SourceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: onTap,
       child: Container(

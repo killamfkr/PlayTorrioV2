@@ -6,6 +6,7 @@ import 'package:libtorrent_flutter/libtorrent_flutter.dart';
 import '../api/torrent_stream_service.dart';
 import '../utils/app_theme.dart';
 import 'player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class MagnetPlayerScreen extends StatefulWidget {
   const MagnetPlayerScreen({super.key});
@@ -326,7 +327,7 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Material(
                         color: Colors.transparent,
-                        child: InkWell(
+                        child: TvInkWell(
                           borderRadius: BorderRadius.circular(12),
                           onTap: isVideo && !isStreaming ? () => _playFile(file) : null,
                           child: Container(

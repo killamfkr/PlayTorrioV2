@@ -4,8 +4,184 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'audiobook_prefs_keys.dart';
 import '../features/iptv/playtorrio_tv/data/iptv_cloud_bundle.dart';
+import '../services/my_list_service.dart';
+import 'anime_service.dart';
+import 'kisskh_service.dart';
+import 'manga_service.dart';
 import 'music_storage_service.dart';
 import 'trakt_service.dart';
+
+String? _mergeMyListJsonForCloud(String? local, String? remote) {
+  if (remote == null || remote.isEmpty) return local;
+  if (local == null || local.isEmpty) return remote;
+  try {
+    List<Map<String, dynamic>> parse(String s) =>
+        List<Map<String, dynamic>>.from(
+          (json.decode(s) as List)
+              .map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+    final la = parse(local);
+    final ra = parse(remote);
+    final byId = <String, Map<String, dynamic>>{};
+    for (final e in ra) {
+      final id = e['uniqueId']?.toString();
+      if (id != null) byId[id] = e;
+    }
+    for (final e in la) {
+      final id = e['uniqueId']?.toString();
+      if (id == null) continue;
+      final ex = byId[id];
+      if (ex == null) {
+        byId[id] = e;
+      } else {
+        final aEx = (ex['addedAt'] as num?)?.toInt() ?? 0;
+        final aLoc = (e['addedAt'] as num?)?.toInt() ?? 0;
+        byId[id] = aLoc >= aEx ? e : ex;
+      }
+    }
+    final merged = byId.values.toList()
+      ..sort((a, b) => ((b['addedAt'] as num?)?.toInt() ?? 0)
+          .compareTo((a['addedAt'] as num?)?.toInt() ?? 0));
+    return json.encode(merged);
+  } catch (_) {
+    return local ?? remote;
+  }
+}
+
+List<String> _mergeKissKhHistoryLists(List<String> local, List<String> remote) {
+  int updatedAt(String raw) {
+    try {
+      return (json.decode(raw) as Map)['updatedAt'] as int? ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  String idOf(String raw) {
+    try {
+      return ((json.decode(raw) as Map)['id'] as num?)?.toInt().toString() ??
+          '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  final map = <String, String>{};
+  void ingest(String x) {
+    final id = idOf(x);
+    if (id.isEmpty) return;
+    final prev = map[id];
+    if (prev == null || updatedAt(x) >= updatedAt(prev)) {
+      map[id] = x;
+    }
+  }
+
+  for (final x in remote) {
+    ingest(x);
+  }
+  for (final x in local) {
+    ingest(x);
+  }
+  final out = map.values.toList()
+    ..sort((a, b) => updatedAt(b).compareTo(updatedAt(a)));
+  if (out.length > 50) return out.sublist(0, 50);
+  return out;
+}
+
+List<String> _mergeAnimeLikedLists(List<String> local, List<String> remote) {
+  String idOf(String raw) {
+    try {
+      return ((json.decode(raw) as Map)['id'] as num?)?.toInt().toString() ??
+          '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  final map = <String, String>{};
+  for (final x in remote) {
+    final id = idOf(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  for (final x in local) {
+    final id = idOf(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  return map.values.toList();
+}
+
+List<String> _mergeAnimeWatchHistoryLists(List<String> local, List<String> remote) {
+  int ts(String raw) {
+    try {
+      return (json.decode(raw) as Map)['timestamp'] as int? ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  String aid(String raw) {
+    try {
+      return ((json.decode(raw) as Map)['animeId'] as num?)?.toInt().toString() ??
+          '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  final map = <String, String>{};
+  void ingest(String x) {
+    final id = aid(x);
+    if (id.isEmpty) return;
+    final prev = map[id];
+    if (prev == null || ts(x) >= ts(prev)) map[id] = x;
+  }
+
+  for (final x in remote) {
+    ingest(x);
+  }
+  for (final x in local) {
+    ingest(x);
+  }
+  final out = map.values.toList()
+    ..sort((a, b) => ts(b).compareTo(ts(a)));
+  if (out.length > 20) return out.sublist(0, 20);
+  return out;
+}
+
+List<String> _mergeMangaLikedLists(List<String> local, List<String> remote) {
+  String idOf(String raw) {
+    try {
+      return (json.decode(raw) as Map)['id']?.toString() ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  final map = <String, String>{};
+  for (final x in remote) {
+    final id = idOf(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  for (final x in local) {
+    final id = idOf(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  return map.values.toList();
+}
+
+Future<void> _importMergeStringListPref(
+  SharedPreferences prefs,
+  Map<String, dynamic> prefsMap,
+  String key,
+  List<String> Function(List<String> local, List<String> remote) merge,
+) async {
+  if (!prefsMap.containsKey(key)) return;
+  final rv = prefsMap.remove(key);
+  if (rv is! List) return;
+  final remote = rv.map((x) => x.toString()).toList();
+  final local = prefs.getStringList(key) ?? [];
+  await prefs.setStringList(key, merge(local, remote));
+}
 
 class SettingsService {
   static final SettingsService _instance = SettingsService._internal();
@@ -58,6 +234,15 @@ class SettingsService {
   /// Keeps [media_kit_video] `Video` in sync: it pauses on background unless this is true.
   static final ValueNotifier<bool> continuePlaybackInBackgroundNotifier =
       ValueNotifier<bool>(true);
+
+  /// Incremented when preferences change from the TV LAN “phone remote” page so
+  /// Settings (and similar listeners) can reload from disk.
+  static final ValueNotifier<int> remoteLanSettingsRevision =
+      ValueNotifier<int>(0);
+
+  static void bumpRemoteLanSettingsRevision() {
+    remoteLanSettingsRevision.value++;
+  }
 
   // External player setting
   static const String _externalPlayerKey = 'external_player';
@@ -803,6 +988,20 @@ class SettingsService {
     m[AudiobookPrefsKeys.liked] =
         prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
     m[IptvCloudBundle.prefsKey] = await IptvCloudBundle.exportAll();
+
+    final myListRaw = prefs.getString(MyListService.prefsKey);
+    if (myListRaw != null && myListRaw.isNotEmpty) {
+      m[MyListService.prefsKey] = myListRaw;
+    }
+    m[KissKhService.watchHistoryPrefsKey] =
+        prefs.getStringList(KissKhService.watchHistoryPrefsKey) ?? [];
+    m[AnimeService.prefsLikedKey] =
+        prefs.getStringList(AnimeService.prefsLikedKey) ?? [];
+    m[AnimeService.prefsWatchHistoryKey] =
+        prefs.getStringList(AnimeService.prefsWatchHistoryKey) ?? [];
+    m[MangaService.prefsLikedKey] =
+        prefs.getStringList(MangaService.prefsLikedKey) ?? [];
+
     return m;
   }
 
@@ -816,7 +1015,12 @@ class SettingsService {
           k != 'prefsPlaylistsKey' &&
           k != AudiobookPrefsKeys.history &&
           k != AudiobookPrefsKeys.liked &&
-          k != IptvCloudBundle.prefsKey) {
+          k != IptvCloudBundle.prefsKey &&
+          k != MyListService.prefsKey &&
+          k != KissKhService.watchHistoryPrefsKey &&
+          k != AnimeService.prefsLikedKey &&
+          k != AnimeService.prefsWatchHistoryKey &&
+          k != MangaService.prefsLikedKey) {
         continue;
       }
       final v = e.value;
@@ -883,6 +1087,49 @@ class SettingsService {
         final localBundle = await IptvCloudBundle.exportAll();
         final merged = IptvCloudBundle.mergeForPull(localBundle, remoteBundle);
         await IptvCloudBundle.applyAll(merged);
+        continue;
+      }
+      if (k == MyListService.prefsKey && v is String) {
+        final cur = p.getString(MyListService.prefsKey);
+        final merged = _mergeMyListJsonForCloud(cur, v);
+        if (merged != null && merged.isNotEmpty) {
+          await p.setString(MyListService.prefsKey, merged);
+          await MyListService().reloadFromPreferences();
+        }
+        continue;
+      }
+      if (k == KissKhService.watchHistoryPrefsKey && v is List) {
+        final loc = p.getStringList(KissKhService.watchHistoryPrefsKey) ?? [];
+        final rem =
+            (v as List<dynamic>).map((x) => x.toString()).toList();
+        final merged = _mergeKissKhHistoryLists(loc, rem);
+        await p.setStringList(KissKhService.watchHistoryPrefsKey, merged);
+        KissKhService.bumpWatchHistoryRevision();
+        continue;
+      }
+      if (k == AnimeService.prefsLikedKey && v is List) {
+        final loc = p.getStringList(AnimeService.prefsLikedKey) ?? [];
+        final rem =
+            (v as List<dynamic>).map((x) => x.toString()).toList();
+        final merged = _mergeAnimeLikedLists(loc, rem);
+        await p.setStringList(AnimeService.prefsLikedKey, merged);
+        continue;
+      }
+      if (k == AnimeService.prefsWatchHistoryKey && v is List) {
+        final loc =
+            p.getStringList(AnimeService.prefsWatchHistoryKey) ?? [];
+        final rem =
+            (v as List<dynamic>).map((x) => x.toString()).toList();
+        final merged = _mergeAnimeWatchHistoryLists(loc, rem);
+        await p.setStringList(AnimeService.prefsWatchHistoryKey, merged);
+        continue;
+      }
+      if (k == MangaService.prefsLikedKey && v is List) {
+        final loc = p.getStringList(MangaService.prefsLikedKey) ?? [];
+        final rem =
+            (v as List<dynamic>).map((x) => x.toString()).toList();
+        final merged = _mergeMangaLikedLists(loc, rem);
+        await p.setStringList(MangaService.prefsLikedKey, merged);
         continue;
       }
       if (k == _lightModeKey && v is bool) {
@@ -1061,7 +1308,7 @@ class SettingsService {
   static const List<String> allNavIds = [
     'home', 'discover', 'live_matches', 'sports',
     'iptv', 'iptv_pt', 'iptv_pt_guide', 'audiobooks', 'books', 'music', 'comics', 'manga',
-    'jellyfin', 'anime', 'search', 'mylist', 'magnet',
+    'jellyfin', 'anime', 'asian_drama', 'search', 'mylist', 'magnet',
   ];
 
   static const List<String> _navTailIds = ['search', 'mylist', 'magnet'];
@@ -1164,6 +1411,7 @@ class SettingsService {
       _subFontKey,
       _themePresetKey,
       _ptProfileLocalMetaKey,
+      MyListService.prefsKey,
     ]) {
       final v = prefs.getString(key);
       if (v != null) prefsMap[key] = v;
@@ -1196,6 +1444,10 @@ class SettingsService {
       MusicStorageService.prefsPlaylistsKey,
       AudiobookPrefsKeys.history,
       AudiobookPrefsKeys.liked,
+      KissKhService.watchHistoryPrefsKey,
+      AnimeService.prefsLikedKey,
+      AnimeService.prefsWatchHistoryKey,
+      MangaService.prefsLikedKey,
     ]) {
       final v = prefs.getStringList(key);
       if (v != null) prefsMap[key] = v;
@@ -1294,6 +1546,50 @@ class SettingsService {
         await prefs.setDouble(key, (prefsMap[key] as num).toDouble());
       }
     }
+
+    if (prefsMap.containsKey(MyListService.prefsKey) &&
+        prefsMap[MyListService.prefsKey] is String) {
+      final merged = _mergeMyListJsonForCloud(
+        prefs.getString(MyListService.prefsKey),
+        prefsMap[MyListService.prefsKey] as String,
+      );
+      prefsMap.remove(MyListService.prefsKey);
+      if (merged != null && merged.isNotEmpty) {
+        await prefs.setString(MyListService.prefsKey, merged);
+        await MyListService().reloadFromPreferences();
+      }
+    }
+
+    var kissImported = false;
+    if (prefsMap.containsKey(KissKhService.watchHistoryPrefsKey)) {
+      kissImported = true;
+      await _importMergeStringListPref(
+        prefs,
+        prefsMap,
+        KissKhService.watchHistoryPrefsKey,
+        _mergeKissKhHistoryLists,
+      );
+    }
+    await _importMergeStringListPref(
+      prefs,
+      prefsMap,
+      AnimeService.prefsLikedKey,
+      _mergeAnimeLikedLists,
+    );
+    await _importMergeStringListPref(
+      prefs,
+      prefsMap,
+      AnimeService.prefsWatchHistoryKey,
+      _mergeAnimeWatchHistoryLists,
+    );
+    await _importMergeStringListPref(
+      prefs,
+      prefsMap,
+      MangaService.prefsLikedKey,
+      _mergeMangaLikedLists,
+    );
+    if (kissImported) KissKhService.bumpWatchHistoryRevision();
+
     // StringList keys
     for (final key in [
       _stremioAddonsKey,
@@ -1303,6 +1599,10 @@ class SettingsService {
       MusicStorageService.prefsPlaylistsKey,
       AudiobookPrefsKeys.history,
       AudiobookPrefsKeys.liked,
+      KissKhService.watchHistoryPrefsKey,
+      AnimeService.prefsLikedKey,
+      AnimeService.prefsWatchHistoryKey,
+      MangaService.prefsLikedKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setStringList(

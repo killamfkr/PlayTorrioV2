@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'utils.dart'; // Ensure formatDuration is available
+import '../../widgets/tv_interactive.dart';
 
 class PlayerIconButton extends StatelessWidget {
   final IconData icon;
@@ -30,7 +31,7 @@ class PlayerIconButton extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
           child: Center(
@@ -69,7 +70,7 @@ class PlayPauseButton extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
           child: Center(
@@ -356,7 +357,7 @@ class PillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(

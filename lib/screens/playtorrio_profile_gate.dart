@@ -10,6 +10,7 @@ import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/watch_history_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../widgets/tv_interactive.dart';
 
 const List<IconData> kProfileAvatars = [
   Icons.account_circle,
@@ -259,7 +260,7 @@ class _PlaytorrioProfileGateState extends State<PlaytorrioProfileGate> {
                       itemCount: kProfileAvatars.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 8),
                       itemBuilder: (_, i) {
-                        return GestureDetector(
+                        return TvGestureTap(
                           onTap: () {
                             setModal(() => _editAv = i);
                             setState(() {});
@@ -409,7 +410,7 @@ class _PlaytorrioProfileGateState extends State<PlaytorrioProfileGate> {
                             : 'Profile $p';
                         return Material(
                           color: Colors.transparent,
-                          child: InkWell(
+                          child: TvInkWell(
                             onTap: _busy ? null : () => _continueWithProfile(p),
                             onLongPress: () => _openEdit(p),
                             borderRadius: BorderRadius.circular(16),

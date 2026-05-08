@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../api/comics_service.dart';
 import '../api/comic_page_extractor.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class ComicReaderScreen extends StatefulWidget {
   final String chapterTitle;
@@ -374,7 +375,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                     ? _buildErrorWidget()
                     : _isLoadingPage || _currentImageUrl == null
                         ? const CircularProgressIndicator(color: AppTheme.primaryColor)
-                        : GestureDetector(
+                        : TvGestureTap(
                             onTap: () {
                               // Toggle zoom controls on mobile
                               if (MediaQuery.of(context).size.width <= 600) {
