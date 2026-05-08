@@ -94,7 +94,10 @@ Future<bool> _tryResumeSavedStreamDirect(
         startPosition: startPos,
         stremioId: item['stremioId'] as String?,
         stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
-        stremioStreamType: season != null ? 'tv' : 'movie',
+        stremioStreamType: StremioService.streamTypeForStremioMetaType(
+          item['stremioType']?.toString(),
+          fallbackMediaType: season != null ? 'tv' : 'movie',
+        ),
       ),
     ),
   );
@@ -2254,6 +2257,10 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               startPosition: startPos,
               stremioId: stremioItemId,
               stremioAddonBaseUrl: stremioAddonBase,
+              stremioStreamType: StremioService.streamTypeForStremioMetaType(
+                row['stremioType']?.toString(),
+                fallbackMediaType: season != null ? 'tv' : 'movie',
+              ),
             ),
           ),
         );
