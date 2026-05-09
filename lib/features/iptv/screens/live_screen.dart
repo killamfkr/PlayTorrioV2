@@ -70,6 +70,7 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
         builder: (_) => PlayerScreen(
           streamUrl: url,
           title: channel.name,
+          isLiveBroadcast: true,
         ),
       ),
     );

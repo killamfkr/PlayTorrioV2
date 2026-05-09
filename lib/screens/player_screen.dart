@@ -26,6 +26,8 @@ class PlayerScreen extends StatefulWidget {
   final String? stremioId;
   final String? stremioAddonBaseUrl;
   final String? stremioStreamType;
+  /// Live IPTV / sports streams without Stremio metadata — enables Cast “live” mode.
+  final bool isLiveBroadcast;
   /// Called periodically during playback (e.g. KissKh / custom hubs without TMDB rows).
   final Future<void> Function(Duration position, Duration duration)?
       onPlaybackProgress;
@@ -52,6 +54,7 @@ class PlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.stremioStreamType,
+    this.isLiveBroadcast = false,
     this.onPlaybackProgress,
     this.hasCustomNextEpisode = false,
     this.onCustomNextEpisode,
@@ -176,6 +179,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioId: widget.stremioId,
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioStreamType: _resolvedStremioStreamType,
+        liveBroadcast: widget.isLiveBroadcast,
         providers: widget.providers,
         onPlaybackProgress: widget.onPlaybackProgress,
         hasCustomNextEpisode: widget.hasCustomNextEpisode,
@@ -200,6 +204,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       stremioId: widget.stremioId,
       stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
       stremioStreamType: _resolvedStremioStreamType,
+      liveBroadcast: widget.isLiveBroadcast,
       providers: widget.providers,
       onPlaybackProgress: widget.onPlaybackProgress,
       hasCustomNextEpisode: widget.hasCustomNextEpisode,

@@ -113,6 +113,64 @@ class PlaytorrioCastService {
     }
   }
 
+  /// Rough hint for UI: Cast receiver appears to be playing or trying to play.
+  Stream<bool> get castRemoteIsPlayingStream {
+    if (!_initialized) return Stream<bool>.value(false);
+    return GoogleCastRemoteMediaClient.instance.mediaStatusStream.map((s) {
+      final ps = s?.playerState;
+      return ps == CastMediaPlayerState.playing ||
+          ps == CastMediaPlayerState.buffering ||
+          ps == CastMediaPlayerState.loading;
+    });
+  }
+
+  Future<void> remotePlay() async {
+    if (!_initialized || !isCastingActiveNow) return;
+    try {
+      await GoogleCastRemoteMediaClient.instance.play();
+    } catch (e, st) {
+      debugPrint('[Cast] remotePlay: $e\n$st');
+    }
+  }
+
+  Future<void> remotePause() async {
+    if (!_initialized || !isCastingActiveNow) return;
+    try {
+      await GoogleCastRemoteMediaClient.instance.pause();
+    } catch (e, st) {
+      debugPrint('[Cast] remotePause: $e\n$st');
+    }
+  }
+
+  Future<void> remoteSeekRelative(Duration delta) async {
+    if (!_initialized || !isCastingActiveNow) return;
+    try {
+      await GoogleCastRemoteMediaClient.instance.seek(
+        GoogleCastMediaSeekOption(
+          position: delta,
+          relative: true,
+        ),
+      );
+    } catch (e, st) {
+      debugPrint('[Cast] remoteSeekRelative: $e\n$st');
+    }
+  }
+
+  /// Jump to live edge for Cast live / event streams (when supported by the receiver).
+  Future<void> remoteSeekLiveEdge() async {
+    if (!_initialized || !isCastingActiveNow) return;
+    try {
+      await GoogleCastRemoteMediaClient.instance.seek(
+        GoogleCastMediaSeekOption(
+          position: Duration.zero,
+          seekToInfinity: true,
+        ),
+      );
+    } catch (e, st) {
+      debugPrint('[Cast] remoteSeekLiveEdge: $e\n$st');
+    }
+  }
+
   /// Whether to show Cast controls for this playback. Does not require [_initialized]
   /// so a failed/timed-out SDK init still shows the icon (tap explains / retries).
   bool eligibleForCastUi({
@@ -336,7 +394,9 @@ class PlaytorrioCastService {
                                   headers: headers,
                                 ),
                                 autoPlay: true,
-                                playPosition: startPosition,
+                                // Live streams use infinite timeline; local player position is meaningless.
+                                playPosition:
+                                    liveStream ? Duration.zero : startPosition,
                               );
                               onCastStarted?.call();
                               if (rootContext.mounted) {

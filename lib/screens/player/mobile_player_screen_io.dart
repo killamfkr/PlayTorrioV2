@@ -409,6 +409,8 @@ class MobilePlayerScreen extends StatefulWidget {
   final String? stremioAddonBaseUrl;
   /// Stremio `/stream/{type}/...` segment (e.g. `tv` for live channels).
   final String stremioStreamType;
+  /// HTTP(S) live channels opened outside Stremio (IPTV tab, etc.) — Cast uses live stream mode.
+  final bool liveBroadcast;
   final Map<String, dynamic>? providers;
   final Future<void> Function(Duration position, Duration duration)?
       onPlaybackProgress;
@@ -433,6 +435,7 @@ class MobilePlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.stremioStreamType = 'series',
+    this.liveBroadcast = false,
     this.providers,
     this.onPlaybackProgress,
     this.hasCustomNextEpisode = false,
@@ -498,6 +501,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         magnetLink: widget.magnetLink,
       );
 
+  bool get _castUsesLiveStream =>
+      widget.stremioStreamType == 'tv' || widget.liveBroadcast;
+
   Future<void> _openChromecast() async {
     final poster = widget.movie != null && widget.movie!.posterPath.isNotEmpty
         ? TmdbApi.getImageUrl(widget.movie!.posterPath)
@@ -508,7 +514,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       title: widget.title,
       subtitle: _mediaSessionSubtitle,
       posterUrl: poster,
-      liveStream: widget.stremioStreamType == 'tv',
+      liveStream: _castUsesLiveStream,
       startPosition: _player.state.position,
       headers: widget.headers,
       onCastStarted: () {
@@ -3334,6 +3340,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
             stremioId: widget.stremioId,
             stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
             stremioStreamType: widget.stremioStreamType,
+            isLiveBroadcast: widget.liveBroadcast,
             providers: widget.providers,
           ),
         ),
@@ -3483,7 +3490,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                 ),
               ),
 
-              // ── Chromecast stop banner (always visible while casting) ────────
+              // ── Chromecast banner + remote controls ──────────────────────────
               StreamBuilder<bool>(
                 stream: PlaytorrioCastService.instance.isCastingActiveStream,
                 initialData: PlaytorrioCastService.instance.isCastingActiveNow,
@@ -3504,12 +3511,12 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       elevation: 6,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 8),
+                            horizontal: 6, vertical: 6),
                         child: Row(
                           children: [
                             Icon(Icons.cast_connected_rounded,
                                 color: AppTheme.primaryColor, size: 22),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 8),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3534,6 +3541,86 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
+                                ],
+                              ),
+                            ),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Back 30s',
+                                    visualDensity: VisualDensity.compact,
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                        minWidth: 36, minHeight: 36),
+                                    onPressed: () => PlaytorrioCastService
+                                        .instance
+                                        .remoteSeekRelative(
+                                            const Duration(seconds: -30)),
+                                    icon: Icon(Icons.replay_30_rounded,
+                                        size: 22,
+                                        color: Colors.white.withValues(
+                                            alpha: 0.9)),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Forward 30s',
+                                    visualDensity: VisualDensity.compact,
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                        minWidth: 36, minHeight: 36),
+                                    onPressed: () => PlaytorrioCastService
+                                        .instance
+                                        .remoteSeekRelative(
+                                            const Duration(seconds: 30)),
+                                    icon: Icon(Icons.forward_30_rounded,
+                                        size: 22,
+                                        color: Colors.white.withValues(
+                                            alpha: 0.9)),
+                                  ),
+                                  StreamBuilder<bool>(
+                                    stream: PlaytorrioCastService
+                                        .instance.castRemoteIsPlayingStream,
+                                    initialData: false,
+                                    builder: (_, ps) {
+                                      final playing = ps.data == true;
+                                      return IconButton(
+                                        tooltip: playing ? 'Pause TV' : 'Play',
+                                        visualDensity: VisualDensity.compact,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                            minWidth: 36, minHeight: 36),
+                                        onPressed: () => playing
+                                            ? PlaytorrioCastService.instance
+                                                .remotePause()
+                                            : PlaytorrioCastService.instance
+                                                .remotePlay(),
+                                        icon: Icon(
+                                          playing
+                                              ? Icons.pause_rounded
+                                              : Icons.play_arrow_rounded,
+                                          size: 26,
+                                          color: Colors.white,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  if (_castUsesLiveStream)
+                                    IconButton(
+                                      tooltip: 'Jump to live',
+                                      visualDensity: VisualDensity.compact,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                          minWidth: 36, minHeight: 36),
+                                      onPressed: () => PlaytorrioCastService
+                                          .instance
+                                          .remoteSeekLiveEdge(),
+                                      icon: Icon(Icons.live_tv_rounded,
+                                          size: 22,
+                                          color: Colors.redAccent
+                                              .withValues(alpha: 0.95)),
+                                    ),
                                 ],
                               ),
                             ),

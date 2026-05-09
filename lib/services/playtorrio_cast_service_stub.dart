@@ -43,4 +43,14 @@ class PlaytorrioCastService {
       const SnackBar(content: Text('Chromecast is not available in this build.')),
     );
   }
+
+  Stream<bool> get castRemoteIsPlayingStream => Stream<bool>.value(false);
+
+  Future<void> remotePlay() async {}
+
+  Future<void> remotePause() async {}
+
+  Future<void> remoteSeekRelative(Duration delta) async {}
+
+  Future<void> remoteSeekLiveEdge() async {}
 }
