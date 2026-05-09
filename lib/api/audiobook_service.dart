@@ -132,7 +132,7 @@ class AudiobookService {
     caseSensitive: false,
   );
   static final RegExp _abbColspan2Re = RegExp(
-    r"<td\s+colspan=['\"]2['\"][^>]*>\s*([^<]+?)\s*</td>",
+    r"""<td\s+colspan=['"]2['"][^>]*>\s*([^<]+?)\s*</td>""",
     caseSensitive: false,
   );
   static final RegExp _abbAudioFileRe = RegExp(
