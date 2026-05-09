@@ -4,6 +4,7 @@ import '../utils/app_theme.dart';
 import '../api/arabic_service.dart';
 import 'arabic_details_screen.dart';
 import 'arabic_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class ArabicScreen extends StatefulWidget {
   const ArabicScreen({super.key});
@@ -235,7 +236,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
               ],
             ),
             if (_isCategoryDropdownOpen)
-              GestureDetector(
+              TvGestureTap(
                 onTap: () => setState(() => _isCategoryDropdownOpen = false),
                 child: Container(color: Colors.black.withValues(alpha: 0.5)),
               ),
@@ -265,7 +266,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
           ),
           const Spacer(),
           // Category filter
-          GestureDetector(
+          TvGestureTap(
             onTap: () => setState(() => _isCategoryDropdownOpen = !_isCategoryDropdownOpen),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -302,7 +303,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
           ),
           const SizedBox(width: 8),
           // Liked toggle
-          GestureDetector(
+          TvGestureTap(
             onTap: () {
               if (_isShowingLiked) {
                 _currentPage = 1;
@@ -398,7 +399,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // "All" option
-                  InkWell(
+                  TvInkWell(
                     onTap: () {
                       setState(() {
                         _selectedCategory = null;
@@ -424,7 +425,7 @@ class _ArabicScreenState extends State<ArabicScreen> {
                       ),
                     ),
                   ),
-                  ...arabicCategories.map((cat) => InkWell(
+                  ...arabicCategories.map((cat) => TvInkWell(
                         onTap: () {
                           setState(() {
                             _selectedCategory = cat.slug;
@@ -602,7 +603,7 @@ class _ShowCardState extends State<_ShowCard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -701,7 +702,7 @@ class _ShowCardState extends State<_ShowCard> {
                 Positioned(
                   top: 4,
                   left: 4,
-                  child: GestureDetector(
+                  child: TvGestureTap(
                     onTap: _toggleLike,
                     child: Container(
                       padding: const EdgeInsets.all(4),

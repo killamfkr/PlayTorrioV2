@@ -10,6 +10,7 @@ import '../utils/app_theme.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'main_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 /// A single result section that streams in dynamically.
 class _SearchSection {
@@ -569,8 +570,10 @@ class _ArrowButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
+      borderRadius: 999,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         width: 32,
         alignment: alignment,
@@ -805,7 +808,9 @@ class _AddToMyListButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(uid);
-        return GestureDetector(
+        return TvGestureTap(
+          borderRadius: 999,
+          behavior: HitTestBehavior.opaque,
           onTap: () async {
             final added = await MyListService().toggleMovie(
               tmdbId: movie.id,
@@ -853,7 +858,9 @@ class _AddToMyListStremioButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(uid);
-        return GestureDetector(
+        return TvGestureTap(
+          borderRadius: 999,
+          behavior: HitTestBehavior.opaque,
           onTap: () async {
             final added = await MyListService().toggleStremioItem(item);
             if (context.mounted) {

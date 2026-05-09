@@ -7,6 +7,7 @@ import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class MyListScreen extends StatefulWidget {
   const MyListScreen({super.key});
@@ -342,8 +343,9 @@ class _MyListCard extends StatelessWidget {
             // Remove button — must be AFTER title so it renders on top
             Positioned(
               bottom: 4, right: 4,
-              child: GestureDetector(
+              child: TvGestureTap(
                 behavior: HitTestBehavior.opaque,
+                borderRadius: 999,
                 onTap: onRemove,
                 child: Container(
                   padding: const EdgeInsets.all(6),

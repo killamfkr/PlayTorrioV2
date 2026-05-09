@@ -13,8 +13,11 @@ import 'package:window_manager/window_manager.dart';
 import '../../../../api/settings_service.dart';
 import '../../../../platform_flags.dart';
 import '../../../../services/built_in_video_media_session.dart';
+import '../../../../services/playtorrio_cast_service.dart';
+import '../../../../api/local_server_service.dart';
 import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
+import '../../../../widgets/tv_interactive.dart';
 
 /// Single source for the IPTV player.
 class IptvPlaySource {
@@ -604,6 +607,196 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     });
   }
 
+  bool get _eligibleForPtCast {
+    if (kIsWeb) return false;
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+    final url = widget.sources[_sourceIdx].url.trim();
+    return PlaytorrioCastService.instance.eligibleForCastUi(
+      mediaPath: url,
+      magnetLink: null,
+    );
+  }
+
+  Future<void> _openPtCast() async {
+    var castUrl = widget.sources[_sourceIdx].url;
+    try {
+      await LocalServerService().start();
+      final lanUrl =
+          await LocalServerService().urlWithLanHostForCast(castUrl);
+      if (lanUrl != null && lanUrl.isNotEmpty) {
+        castUrl = lanUrl;
+      }
+    } catch (_) {}
+    await PlaytorrioCastService.instance.openCastSheet(
+      context: context,
+      streamUrl: castUrl,
+      title: widget.title,
+      subtitle: widget.subtitle,
+      posterUrl: widget.logoUrl,
+      liveStream: true,
+      startPosition: Duration.zero,
+      headers: null,
+      onCastStarted: () {
+        if (mounted) unawaited(_player.pause());
+      },
+    );
+  }
+
+  Widget _buildPtCastBanner() {
+    return StreamBuilder<bool>(
+      stream: PlaytorrioCastService.instance.isCastingActiveStream,
+      initialData: PlaytorrioCastService.instance.isCastingActiveNow,
+      builder: (context, snap) {
+        final casting = snap.data == true;
+        if (!casting) return const SizedBox.shrink();
+        final pad = MediaQuery.of(context).padding;
+        final name =
+            PlaytorrioCastService.instance.connectedCastDeviceName ?? 'TV';
+        return Positioned(
+          top: pad.top + 8,
+          left: 10,
+          right: 10,
+          child: Material(
+            color: const Color(0xE6151520),
+            borderRadius: BorderRadius.circular(12),
+            elevation: 6,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.cast_connected_rounded,
+                      color: Color(0xFF00E5FF), size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Casting',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.65),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Back 30s',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekRelative(
+                                  const Duration(seconds: -30)),
+                          icon: Icon(Icons.replay_30_rounded,
+                              size: 22,
+                              color:
+                                  Colors.white.withValues(alpha: 0.9)),
+                        ),
+                        IconButton(
+                          tooltip: 'Forward 30s',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekRelative(
+                                  const Duration(seconds: 30)),
+                          icon: Icon(Icons.forward_30_rounded,
+                              size: 22,
+                              color:
+                                  Colors.white.withValues(alpha: 0.9)),
+                        ),
+                        StreamBuilder<bool>(
+                          stream: PlaytorrioCastService
+                              .instance.castRemoteIsPlayingStream,
+                          initialData: false,
+                          builder: (_, ps) {
+                            final playing = ps.data == true;
+                            return IconButton(
+                              tooltip: playing ? 'Pause' : 'Play',
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                  minWidth: 36, minHeight: 36),
+                              onPressed: () => playing
+                                  ? PlaytorrioCastService.instance
+                                      .remotePause()
+                                  : PlaytorrioCastService.instance
+                                      .remotePlay(),
+                              icon: Icon(
+                                playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                size: 26,
+                                color: Colors.white,
+                              ),
+                            );
+                          },
+                        ),
+                        IconButton(
+                          tooltip: 'Jump to live',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekLiveEdge(),
+                          icon: Icon(Icons.live_tv_rounded,
+                              size: 22,
+                              color: Colors.redAccent
+                                  .withValues(alpha: 0.95)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await PlaytorrioCastService.instance.stopCasting();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Stopped casting'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'Stop',
+                      style: TextStyle(
+                        color: Color(0xFF00E5FF),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   void _toggleControls() {
     setState(() => _controlsVisible = !_controlsVisible);
     if (_controlsVisible) _scheduleHideControls();
@@ -692,6 +885,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
                 child: _buildOverlay(compact),
               ),
             ),
+            _buildPtCastBanner(),
           ],
         ),
       ),
@@ -821,6 +1015,16 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
             _SourceChip(
               label: widget.sources[_sourceIdx].label,
               onTap: _showSourcePicker,
+            ),
+          ],
+          if (_eligibleForPtCast) ...[
+            IconButton(
+              tooltip: 'Cast',
+              onPressed: () async {
+                await _openPtCast();
+                _scheduleHideControls();
+              },
+              icon: const Icon(Icons.cast_rounded, color: Colors.white70),
             ),
           ],
         ],
@@ -1054,7 +1258,7 @@ class _RoundIcon extends StatelessWidget {
     return Material(
       color: Colors.white.withValues(alpha: 0.12),
       shape: const CircleBorder(),
-      child: InkWell(
+      child: TvInkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
         onLongPress: onLongPress,
@@ -1075,7 +1279,7 @@ class _SourceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: onTap,
       child: Container(

@@ -5,6 +5,7 @@ import '../controller/iptv_controller.dart';
 import '../data/iptv_network.dart';
 import '../data/models.dart';
 import 'iptv_pt_player_screen.dart';
+import '../../../../widgets/tv_interactive.dart';
 
 /// App bar styled like PT IPTV (`iptv_pt_screen` keeps [_PtAppBar] library-private).
 class _GuideScreenAppBar extends StatelessWidget {
@@ -225,7 +226,7 @@ class _GuideChannelTile extends StatelessWidget {
     return Material(
       color: Colors.white.withValues(alpha: 0.04),
       borderRadius: BorderRadius.circular(14),
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: () => _play(context),
         child: Padding(

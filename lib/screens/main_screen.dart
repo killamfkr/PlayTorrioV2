@@ -15,6 +15,7 @@ import 'comics_screen.dart';
 import 'manga_screen.dart';
 import 'jellyfin_screen.dart';
 import 'anime_screen.dart';
+import 'asian_drama_screen.dart';
 import 'stremio_catalog_screen.dart';
 import 'magnet_player_screen.dart';
 import 'live_matches_screen.dart';
@@ -28,6 +29,7 @@ import '../utils/tv_guide_refresh.dart';
 import '../utils/tv_settings_remote_service.dart';
 import '../api/settings_service.dart';
 import '../platform_flags.dart';
+import '../widgets/tv_interactive.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -48,6 +50,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   Timer? _metricsDebounce;
   Timer? _metricsSafety;
+  final FocusNode _tvNavRailFocus = FocusNode(debugLabel: 'tvNavRail');
 
   /// All screens keyed by nav ID — created once, never recreated.
   late final Map<String, Widget> _allScreens;
@@ -71,6 +74,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     'manga':        {'icon': Icons.book_outlined,               'active': Icons.book,                    'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_outlined,                'active': Icons.dns_rounded,             'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_outline,         'active': Icons.play_circle_filled,      'label': 'Anime'},
+    'asian_drama':  {'icon': Icons.video_library_outlined,      'active': Icons.video_library_rounded,    'label': 'Asian Drama'},
     'settings':     {'icon': Icons.settings_outlined,           'active': Icons.settings,                'label': 'Settings'},
   };
 
@@ -107,12 +111,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       'manga':        MangaScreen(initialSearch: null),
       'jellyfin':     const JellyfinScreen(),
       'anime':        const AnimeScreen(),
+      'asian_drama':  const AsianDramaScreen(),
       'settings':     const SettingsScreen(),
     };
 
     _loadNavbarConfig();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       TvGuideRefresh.bump();
+      if (mounted && DeviceProfile.isAndroidTv) {
+        _tvNavRailFocus.requestFocus();
+      }
     });
   }
 
@@ -209,6 +217,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void dispose() {
     _metricsDebounce?.cancel();
     _metricsSafety?.cancel();
+    _tvNavRailFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     MainScreen.stremioSearchNotifier.removeListener(_onStremioSearch);
     SettingsService.navbarChangeNotifier.removeListener(_onNavbarConfigChanged);
@@ -294,11 +303,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 // Android TV: avoid wrapping the rail in a scroll view — it can steal
                 // focus and make the selected destination / content highlight feel "lost".
                 DeviceProfile.isAndroidTv
-                    ? ConstrainedBox(
-                        constraints:
-                            BoxConstraints(minHeight: MediaQuery.of(context).size.height),
-                        child: IntrinsicHeight(
-                          child: NavigationRail(
+                    ? Focus(
+                        focusNode: _tvNavRailFocus,
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(minHeight: MediaQuery.of(context).size.height),
+                          child: IntrinsicHeight(
+                            child: NavigationRail(
                             backgroundColor: Colors.transparent,
                             selectedIndex: _selectedIndex,
                             onDestinationSelected: _onItemTapped,
@@ -330,7 +341,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             }).toList(),
                           ),
                         ),
-                      )
+                      ),
+                    )
                     : SingleChildScrollView(
                         child: ConstrainedBox(
                           constraints:
@@ -408,7 +420,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 final meta = _navMeta[id]!;
                 final bool isSelected = _selectedIndex == idx;
 
-                return InkWell(
+                return TvInkWell(
                   onTap: () => _onItemTapped(idx),
                   child: Container(
                     width: 100,

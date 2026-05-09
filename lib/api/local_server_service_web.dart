@@ -31,5 +31,9 @@ class LocalServerService {
     return targetUrl;
   }
 
+  Future<String?> preferredLanIpv4() async => null;
+
+  Future<String?> urlWithLanHostForCast(String url) async => null;
+
   Future<void> stop() async {}
 }
