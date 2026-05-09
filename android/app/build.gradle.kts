@@ -68,5 +68,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    implementation("com.arthenica:ffmpeg-kit-min:6.0.LTS")
+    // Official `com.arthenica:ffmpeg-kit-*` artifacts were removed from Maven Central (~Apr 2025).
+    // Community rebuild (same FFmpeg Kit JNI surface): https://github.com/moizhassankh/ffmpeg-kit-android-16KB
+    implementation("com.moizhassan.ffmpeg:ffmpeg-kit-16kb:6.1.1")
 }
