@@ -306,6 +306,7 @@ class PlaytorrioCastService {
       return;
     }
 
+    final streamTrim = streamUrl.trim();
     if (Uri.tryParse(streamTrim)?.hasScheme != true) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
