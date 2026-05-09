@@ -195,6 +195,7 @@ class AudiobookPlayerService {
       ch.torrentFileIndex!,
       allowNonStreamable: true,
       stopSiblingStreams: false,
+      fileNameHint: ch.title,
     );
     if (url == null || url.isEmpty) {
       throw Exception('Could not stream torrent file: ${ch.title}');

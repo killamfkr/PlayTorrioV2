@@ -167,6 +167,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
             book.magnetCoverFileIndex!,
             allowNonStreamable: true,
             stopSiblingStreams: true,
+            fileNameHint: book.magnetCoverFileName,
           );
           if (coverUrl != null && coverUrl.isNotEmpty) {
             try {

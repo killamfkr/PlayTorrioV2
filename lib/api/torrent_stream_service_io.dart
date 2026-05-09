@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'package:path/path.dart' as p;
 import 'settings_service.dart';
 import 'torrent_filter.dart';
 
@@ -204,6 +205,7 @@ class TorrentStreamService {
     int fileIdx, {
     bool allowNonStreamable = false,
     bool stopSiblingStreams = true,
+    String? fileNameHint,
   }) async {
     if (_state != EngineState.ready) {
       final started = await start();
@@ -216,71 +218,103 @@ class TorrentStreamService {
     final hash = _extractHash(magnetLink);
     final key = hash ?? magnetLink;
 
-    try {
-      final cacheType = await _settings.getTorrentCacheType();
-      final ramCacheMb = await _settings.getTorrentRamCacheMb();
-      final saveToRam = cacheType == 'ram';
-      final maxCacheBytes = saveToRam ? (ramCacheMb * 1024 * 1024) : 0;
+    final cacheType = await _settings.getTorrentCacheType();
+    final ramCacheMb = await _settings.getTorrentRamCacheMb();
+    final saveToRam = cacheType == 'ram';
+    final maxCacheBytes = saveToRam ? (ramCacheMb * 1024 * 1024) : 0;
 
-      late final int torrentId;
-      if (hash != null && _activeTorrents.containsKey(hash)) {
-        torrentId = _activeTorrents[hash]!;
-      } else {
-        torrentId = LibtorrentFlutter.instance.addMagnet(magnetLink, null, saveToRam);
-        if (hash != null) {
-          _activeTorrents[hash] = torrentId;
-        }
-        _log('Audiobook: added magnet, torrentId=$torrentId');
-        final metaFiles = await _waitForMetadata(torrentId);
-        if (metaFiles == null || metaFiles.isEmpty) {
-          _log('Audiobook: no files in torrent');
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        late final int torrentId;
+        if (hash != null && _activeTorrents.containsKey(hash)) {
+          torrentId = _activeTorrents[hash]!;
+        } else {
+          torrentId =
+              LibtorrentFlutter.instance.addMagnet(magnetLink, null, saveToRam);
           if (hash != null) {
-            _safeDisposeTorrent(torrentId);
-            _activeTorrents.remove(hash);
-          } else {
-            _safeDisposeTorrent(torrentId);
+            _activeTorrents[hash] = torrentId;
+          }
+          _log('Audiobook: added magnet, torrentId=$torrentId');
+          final metaFiles = await _waitForMetadata(torrentId);
+          if (metaFiles == null || metaFiles.isEmpty) {
+            _log('Audiobook: no files in torrent');
+            if (hash != null) {
+              _safeDisposeTorrent(torrentId);
+              _activeTorrents.remove(hash);
+            } else {
+              _safeDisposeTorrent(torrentId);
+            }
+            return null;
+          }
+        }
+
+        final files = LibtorrentFlutter.instance.getFiles(torrentId);
+        if (files.isEmpty) {
+          _log('Audiobook: empty file list torrentId=$torrentId');
+          if (attempt == 0 && hash != null) {
+            _disposeTorrentForAudiobookRetry(hash, key);
+            continue;
           }
           return null;
         }
-      }
 
-      final files = LibtorrentFlutter.instance.getFiles(torrentId);
-      FileInfo? fi;
-      for (final f in files) {
-        if (f.index == fileIdx) {
-          fi = f;
-          break;
+        final fi = _resolveAudiobookFileInfo(
+          files,
+          fileIdx,
+          fileNameHint,
+          allowNonStreamable,
+        );
+        if (fi == null) {
+          _log(
+            'Audiobook: no match idx=$fileIdx hint=$fileNameHint '
+            'files=${files.map((f) => '${f.index}:${p.basename(f.name)}').join(', ')}',
+          );
+          return null;
         }
-      }
-      if (fi == null || (!allowNonStreamable && !fi.isStreamable)) {
-        _log('Audiobook: file index $fileIdx not streamable');
+
+        final streamIdx = fi.index;
+
+        if (stopSiblingStreams) {
+          _stopAudiobookStreamsForMapKey(key);
+        }
+
+        final byFile = _audiobookStreamsByFile.putIfAbsent(key, () => {});
+        if (!stopSiblingStreams) {
+          final oldSid = byFile[streamIdx];
+          if (oldSid != null) {
+            _safeStopStream(oldSid);
+          }
+        }
+
+        try {
+          final streamInfo = LibtorrentFlutter.instance.startStream(
+            torrentId,
+            fileIndex: streamIdx,
+            maxCacheBytes: maxCacheBytes,
+          );
+          byFile[streamIdx] = streamInfo.id;
+          _log(
+            'Audiobook stream started idx=$streamIdx file=${fi.name} → ${streamInfo.url}',
+          );
+          return streamInfo.url;
+        } catch (e) {
+          _log('Audiobook startStream failed (attempt $attempt): $e');
+          if (attempt == 0 && hash != null) {
+            _disposeTorrentForAudiobookRetry(hash, key);
+            continue;
+          }
+          return null;
+        }
+      } catch (e) {
+        _log('streamAudiobookFile error: $e');
+        if (attempt == 0 && hash != null) {
+          _disposeTorrentForAudiobookRetry(hash, key);
+          continue;
+        }
         return null;
       }
-
-      if (stopSiblingStreams) {
-        _stopAudiobookStreamsForMapKey(key);
-      }
-
-      final byFile = _audiobookStreamsByFile.putIfAbsent(key, () => {});
-      if (!stopSiblingStreams) {
-        final oldSid = byFile[fileIdx];
-        if (oldSid != null) {
-          _safeStopStream(oldSid);
-        }
-      }
-
-      final streamInfo = LibtorrentFlutter.instance.startStream(
-        torrentId,
-        fileIndex: fileIdx,
-        maxCacheBytes: maxCacheBytes,
-      );
-      byFile[fileIdx] = streamInfo.id;
-      _log('Audiobook stream started file=$fileIdx → ${streamInfo.url}');
-      return streamInfo.url;
-    } catch (e) {
-      _log('streamAudiobookFile error: $e');
-      return null;
     }
+    return null;
   }
 
   /// Stops audiobook streams and drops the torrent for this magnet.
@@ -541,9 +575,57 @@ class TorrentStreamService {
 
   static final _hashRegExp = RegExp(r'[0-9a-fA-F]{40}');
 
+  /// Prefer explicit `btih:` from magnet URIs so we never grab an unrelated
+  /// 40-char hex substring elsewhere in the string.
   String? _extractHash(String magnetOrHash) {
+    final btih = RegExp(r'btih:([0-9a-fA-F]{40})', caseSensitive: false)
+        .firstMatch(magnetOrHash);
+    if (btih != null) return btih.group(1)!.toLowerCase();
     final match = _hashRegExp.firstMatch(magnetOrHash);
     return match?.group(0)?.toLowerCase();
+  }
+
+  /// Match [fileIdx] to libtorrent files; if missing or wrong, fall back to
+  /// basename match against [fileNameHint] (chapter / cover filename).
+  FileInfo? _resolveAudiobookFileInfo(
+    List<FileInfo> files,
+    int fileIdx,
+    String? fileNameHint,
+    bool allowNonStreamable,
+  ) {
+    FileInfo? byIndex;
+    for (final f in files) {
+      if (f.index == fileIdx) {
+        byIndex = f;
+        break;
+      }
+    }
+    if (byIndex != null) {
+      if (allowNonStreamable || byIndex.isStreamable) return byIndex;
+    }
+    final hint = fileNameHint?.trim();
+    if (hint == null || hint.isEmpty) return null;
+    final want = p.basename(hint).toLowerCase();
+    if (want.isEmpty) return null;
+    for (final f in files) {
+      final bn = p.basename(f.name).toLowerCase();
+      final full = f.name.toLowerCase().replaceAll('\\', '/');
+      if (bn != want && !full.endsWith('/$want')) continue;
+      if (!allowNonStreamable && !f.isStreamable) continue;
+      return f;
+    }
+    return null;
+  }
+
+  void _disposeTorrentForAudiobookRetry(String hash, String mapKey) {
+    _stopAudiobookStreamsForMapKey(mapKey);
+    final tid = _activeTorrents.remove(hash);
+    if (tid == null) return;
+    try {
+      LibtorrentFlutter.instance.disposeTorrent(tid);
+    } catch (e) {
+      _log('Audiobook retry disposeTorrent: $e');
+    }
   }
 
   void _setState(EngineState s) {

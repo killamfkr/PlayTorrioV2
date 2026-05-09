@@ -65,6 +65,7 @@ class TorrentStreamService {
     int fileIdx, {
     bool allowNonStreamable = false,
     bool stopSiblingStreams = true,
+    String? fileNameHint,
   }) async =>
       null;
 

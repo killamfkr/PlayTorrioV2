@@ -146,6 +146,7 @@ class AudiobookDownloadService {
             book.magnetLink!,
             book.magnetCoverFileIndex!,
             allowNonStreamable: true,
+            fileNameHint: book.magnetCoverFileName,
           );
           if (url != null && url.isNotEmpty) {
             final bytes = await _downloadDirectChapter(
@@ -541,6 +542,7 @@ class AudiobookDownloadService {
         book.magnetLink!,
         chapter.torrentFileIndex!,
         allowNonStreamable: true,
+        fileNameHint: chapter.title,
       );
       if (url == null || url.isEmpty) return null;
       return _downloadDirectChapter(
