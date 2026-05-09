@@ -418,6 +418,8 @@ class _AudiobookDownloadsScreenState extends State<AudiobookDownloadsScreen> {
         return 'GoldenAudiobook';
       case 'appaudiobooks':
         return 'AppAudiobooks';
+      case 'magnet':
+        return 'Magnet';
       default:
         return source ?? 'Unknown';
     }

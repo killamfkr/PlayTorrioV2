@@ -5,6 +5,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/audiobook_download_service.dart';
+import '../api/audiobook_magnet_resolver.dart';
+import '../api/torrent_stream_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/tv_interactive.dart';
 
@@ -32,33 +34,110 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   double _playbackSpeed = 1.0;
   bool _isDownloaded = false;
 
+  List<AudiobookChapter>? _playableChapters;
+  bool _magnetResolving = false;
+  String? _magnetError;
+
+  List<AudiobookChapter> get _chaptersForUi =>
+      _playableChapters ?? widget.chapters;
+
   @override
   void initState() {
     super.initState();
-    _checkDownloadStatus();
-    _service.loadBook(
-      widget.audiobook, 
-      widget.chapters, 
+    _bootstrapPlayback();
+  }
+
+  Future<void> _bootstrapPlayback() async {
+    final magnet = widget.audiobook.magnetLink;
+    final needsMagnet = widget.audiobook.source == 'magnet' &&
+        magnet != null &&
+        magnet.isNotEmpty &&
+        widget.chapters.any((c) => c.torrentFileIndex != null);
+
+    if (needsMagnet) {
+      setState(() => _magnetResolving = true);
+      try {
+        _playableChapters =
+            await AudiobookMagnetResolver.resolvePlaybackChapters(
+          magnet!,
+          widget.chapters,
+        );
+      } catch (e) {
+        _magnetError = '$e';
+      }
+      if (mounted) setState(() => _magnetResolving = false);
+    } else {
+      _playableChapters = widget.chapters;
+    }
+
+    if (!mounted) return;
+
+    if (_magnetError != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_magnetError!),
+            backgroundColor: Colors.red.shade900,
+          ),
+        );
+        Navigator.pop(context);
+      });
+      return;
+    }
+
+    final ch = _playableChapters;
+    if (ch == null || ch.isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No playable chapters')),
+        );
+        Navigator.pop(context);
+      });
+      return;
+    }
+
+    await _refreshDownloadState(ch.length);
+    await _service.loadBook(
+      widget.audiobook,
+      ch,
       initialChapter: widget.initialChapterIndex,
       resumePosition: widget.initialPosition,
     );
+  }
+
+  Future<void> _refreshDownloadState(int chapterCount) async {
+    final downloaded =
+        await _downloadService.isBookDownloaded(widget.audiobook.audioBookId);
+    if (mounted) setState(() => _isDownloaded = downloaded);
+    _downloadService.checkDownloadedChapters(
+      widget.audiobook.audioBookId,
+      chapterCount,
+    );
+  }
+
+  @override
+  void dispose() {
+    if (widget.audiobook.source == 'magnet' &&
+        widget.audiobook.magnetLink != null) {
+      TorrentStreamService()
+          .releaseAudiobookMagnet(widget.audiobook.magnetLink!);
+    }
+    super.dispose();
   }
 
   void _changeChapter(int index) async {
     await _service.changeChapter(index);
   }
 
-  void _checkDownloadStatus() async {
-    final downloaded = await _downloadService.isBookDownloaded(widget.audiobook.audioBookId);
-    if (mounted) setState(() => _isDownloaded = downloaded);
-    // Load per-chapter download state
-    _downloadService.checkDownloadedChapters(widget.audiobook.audioBookId, widget.chapters.length);
-  }
-
   void _startDownload() {
-    _downloadService.downloadBook(widget.audiobook, widget.chapters);
+    final ch = _playableChapters;
+    if (ch == null || ch.isEmpty) return;
+    _downloadService.downloadBook(widget.audiobook, ch);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Download started...'), duration: Duration(seconds: 2)),
+      const SnackBar(
+          content: Text('Download started...'), duration: Duration(seconds: 2)),
     );
   }
 
@@ -82,7 +161,9 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
           children: [
             // Subtle background blur
             Positioned.fill(
-              child: CachedNetworkImage(
+              child: widget.audiobook.thumbUrl.isEmpty
+                  ? Container(color: Colors.black.withValues(alpha: 0.88))
+                  : CachedNetworkImage(
                 imageUrl: widget.audiobook.thumbUrl,
                 fit: BoxFit.cover,
                 color: Colors.black.withValues(alpha: 0.6),
@@ -126,6 +207,24 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                 ],
               ),
             ),
+            if (_magnetResolving)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black54,
+                  alignment: Alignment.center,
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: AppTheme.primaryColor),
+                      SizedBox(height: 16),
+                      Text(
+                        'Connecting to torrent…',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -241,11 +340,22 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(24),
-          child: CachedNetworkImage(
-            imageUrl: widget.audiobook.thumbUrl,
-            fit: BoxFit.cover,
-            errorWidget: (context, url, error) => CachedNetworkImage(imageUrl: widget.audiobook.coverImage, fit: BoxFit.cover),
-          ),
+          child: widget.audiobook.thumbUrl.isEmpty
+              ? Container(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  child: const Center(
+                    child: Icon(Icons.menu_book_rounded,
+                        size: 120, color: Colors.white24),
+                  ),
+                )
+              : CachedNetworkImage(
+                  imageUrl: widget.audiobook.thumbUrl,
+                  fit: BoxFit.cover,
+                  errorWidget: (context, url, error) =>
+                      CachedNetworkImage(
+                          imageUrl: widget.audiobook.coverImage,
+                          fit: BoxFit.cover),
+                ),
         ),
       ),
     );
@@ -269,10 +379,12 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
               const SizedBox(height: 12),
               SizedBox(
                 height: 24,
-                child: MarqueeText(
-                  text: 'Chapter ${chapterIndex + 1}: ${widget.chapters[chapterIndex].title}',
+                child: chapterIndex < _chaptersForUi.length
+                    ? MarqueeText(
+                  text: 'Chapter ${chapterIndex + 1}: ${_chaptersForUi[chapterIndex].title}',
                   style: const TextStyle(color: AppTheme.primaryColor, fontSize: 16, fontWeight: FontWeight.w500),
-                ),
+                )
+                    : const SizedBox.shrink(),
               ),
             ],
           );
@@ -392,7 +504,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
               valueListenable: _service.currentChapterIndex,
               builder: (context, index, _) => IconButton(
                 icon: const Icon(Icons.skip_next_rounded, color: Colors.white, size: 48),
-                onPressed: index < widget.chapters.length - 1 ? () => _changeChapter(index + 1) : null,
+                onPressed: index < _chaptersForUi.length - 1 ? () => _changeChapter(index + 1) : null,
               ),
             ),
           ],
@@ -415,7 +527,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
               return ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: widget.chapters.length,
+                itemCount: _chaptersForUi.length,
                 itemBuilder: (context, index) {
                   final isCurrent = currentIdx == index;
                   return Container(
@@ -428,7 +540,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                       onTap: () => _changeChapter(index),
                       leading: Text('${index + 1}', style: TextStyle(color: isCurrent ? AppTheme.primaryColor : Colors.white24, fontWeight: FontWeight.bold)),
                       title: Text(
-                        widget.chapters[index].title,
+                        _chaptersForUi[index].title,
                         style: TextStyle(color: isCurrent ? Colors.white : Colors.white70, fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, fontSize: 14),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -476,7 +588,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
               onTap: () {
                 _downloadService.downloadSingleChapter(
                   widget.audiobook,
-                  widget.chapters[index],
+                  _chaptersForUi[index],
                   index,
                 );
               },

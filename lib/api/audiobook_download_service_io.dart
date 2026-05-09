@@ -9,6 +9,17 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as p;
 import 'audiobook_download_types.dart';
 import 'audiobook_service.dart';
+import 'torrent_stream_service.dart';
+
+/// 1×1 transparent PNG for magnet audiobooks without cover art.
+final Uint8List _kAudiobookPlaceholderPng = Uint8List.fromList([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+  0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+  0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+  0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+]);
 
 class AudiobookDownloadService {
   static final AudiobookDownloadService _instance =
@@ -163,7 +174,11 @@ class AudiobookDownloadService {
     try {
       // 1. Download cover image
       final coverPath = p.join(bookDir.path, 'cover.jpg');
-      await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
+      if (book.source == 'magnet') {
+        await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
+      } else {
+        await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
+      }
 
       if (_cancelledIds.contains(id)) {
         await _cleanup(bookDir, id);
@@ -192,11 +207,11 @@ class AudiobookDownloadService {
         }
 
         final chapter = chapters[i];
-        final ext = _getFileExtension(chapter.url, book.source);
+        final ext = _getFileExtension(chapter, book.source);
         final fileName = 'chapter_$i$ext';
         final filePath = p.join(bookDir.path, fileName);
 
-        final bytes = await _downloadChapter(chapter, book.source);
+        final bytes = await _downloadChapter(chapter, book);
 
         if (_cancelledIds.contains(id)) {
           await _cleanup(bookDir, id);
@@ -322,15 +337,19 @@ class AudiobookDownloadService {
       // Download cover if not present
       final coverPath = p.join(bookDir.path, 'cover.jpg');
       if (!File(coverPath).existsSync()) {
-        await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
+        if (book.source == 'magnet') {
+          await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
+        } else {
+          await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
+        }
       }
 
       // Download the chapter
-      final ext = _getFileExtension(chapter.url, book.source);
+      final ext = _getFileExtension(chapter, book.source);
       final fileName = 'chapter_$chapterIndex$ext';
       final filePath = p.join(bookDir.path, fileName);
 
-      final bytes = await _downloadChapter(chapter, book.source);
+      final bytes = await _downloadChapter(chapter, book);
 
       if (bytes != null && bytes.isNotEmpty) {
         await File(filePath).writeAsBytes(bytes);
@@ -450,11 +469,22 @@ class AudiobookDownloadService {
     } catch (_) {}
   }
 
-  String _getFileExtension(String url, String? source) {
+  String _getFileExtension(AudiobookChapter chapter, String? source) {
+    if (source == 'magnet') {
+      final t = chapter.title.toLowerCase();
+      if (t.endsWith('.mp3')) return '.mp3';
+      if (t.endsWith('.m4a')) return '.m4a';
+      if (t.endsWith('.m4b')) return '.m4b';
+      if (t.endsWith('.ogg')) return '.ogg';
+      if (t.endsWith('.aac')) return '.aac';
+      if (t.endsWith('.wav')) return '.wav';
+      if (t.endsWith('.flac')) return '.flac';
+      if (t.endsWith('.opus')) return '.opus';
+      return '.mp3';
+    }
     if (source == 'tokybook') return '.ts'; // HLS segments concatenated
-    // Extract extension from URL
-    final uri = Uri.parse(url);
-    final path = uri.path.toLowerCase();
+    final uri = Uri.tryParse(chapter.url);
+    final path = (uri?.path ?? '').toLowerCase();
     if (path.endsWith('.mp3')) return '.mp3';
     if (path.endsWith('.m4a')) return '.m4a';
     if (path.endsWith('.ogg')) return '.ogg';
@@ -465,8 +495,23 @@ class AudiobookDownloadService {
   }
 
   Future<Uint8List?> _downloadChapter(
-      AudiobookChapter chapter, String? source) async {
-    if (source == 'tokybook') {
+      AudiobookChapter chapter, Audiobook book) async {
+    if (book.source == 'magnet' &&
+        book.magnetLink != null &&
+        chapter.torrentFileIndex != null) {
+      final torrent = TorrentStreamService();
+      final started = await torrent.start();
+      if (!started) return null;
+      final url = await torrent.streamAudiobookFile(
+        book.magnetLink!,
+        chapter.torrentFileIndex!,
+      );
+      if (url == null || url.isEmpty) return null;
+      return _downloadDirectChapter(
+        AudiobookChapter(title: chapter.title, url: url),
+      );
+    }
+    if (book.source == 'tokybook') {
       return _downloadHlsChapter(chapter);
     }
     return _downloadDirectChapter(chapter);

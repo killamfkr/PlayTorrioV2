@@ -12,6 +12,10 @@ class Audiobook {
   final String coverImage;
   final String? source;
   final String? pageUrl;
+  /// When [source] is `magnet`, full magnet URI for torrent-backed audiobooks.
+  final String? magnetLink;
+  /// Serialized chapter list: `[{"title":"…","fileIndex":int}]`
+  final List<Map<String, dynamic>>? magnetTracks;
 
   Audiobook({
     required this.uuid,
@@ -21,9 +25,12 @@ class Audiobook {
     required this.coverImage,
     this.source = 'tokybook',
     this.pageUrl,
+    this.magnetLink,
+    this.magnetTracks,
   });
 
   String get thumbUrl {
+    if (source == 'magnet') return '';
     if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks' || source == 'ezaudiobookforsoul') return coverImage;
     return 'https://tokybook.com/images/$audioBookId';
   }
@@ -31,6 +38,11 @@ class Audiobook {
   factory Audiobook.fromJson(Map<String, dynamic> json) {
     final source = json['source'] ?? 'tokybook';
     final uuid = json['uuid'] ?? '';
+    List<Map<String, dynamic>>? magnetTracks;
+    final rawMt = json['magnetTracks'];
+    if (rawMt is List) {
+      magnetTracks = rawMt.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
     return Audiobook(
       uuid: uuid,
       audioBookId: json['audioBookId'] ?? '',
@@ -39,6 +51,8 @@ class Audiobook {
       coverImage: json['coverImage'] ?? '',
       source: source,
       pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook' || source == 'ezaudiobookforsoul') ? uuid : null),
+      magnetLink: json['magnetLink'] as String?,
+      magnetTracks: magnetTracks,
     );
   }
 
@@ -51,6 +65,8 @@ class Audiobook {
       'coverImage': coverImage,
       'source': source,
       'pageUrl': pageUrl,
+      if (magnetLink != null) 'magnetLink': magnetLink,
+      if (magnetTracks != null) 'magnetTracks': magnetTracks,
     };
   }
 }
@@ -59,8 +75,15 @@ class AudiobookChapter {
   final String title;
   final String url;
   final Map<String, String>? headers;
+  /// Torrent file index when playing from a magnet audiobook (URLs resolved later).
+  final int? torrentFileIndex;
 
-  AudiobookChapter({required this.title, required this.url, this.headers});
+  AudiobookChapter({
+    required this.title,
+    required this.url,
+    this.headers,
+    this.torrentFileIndex,
+  });
 }
 
 class AudiobookService {
@@ -333,6 +356,19 @@ class AudiobookService {
   }
 
   Future<List<AudiobookChapter>> getChapters(Audiobook book) async {
+    if (book.source == 'magnet' &&
+        book.magnetLink != null &&
+        book.magnetTracks != null &&
+        book.magnetTracks!.isNotEmpty) {
+      return book.magnetTracks!.map((m) {
+        final idx = m['fileIndex'];
+        return AudiobookChapter(
+          title: m['title'] as String? ?? 'Track',
+          url: '',
+          torrentFileIndex: idx is int ? idx : int.tryParse('$idx'),
+        );
+      }).toList();
+    }
     if (book.source == 'goldenaudiobook') {
       return _getGoldenChapters(book);
     }

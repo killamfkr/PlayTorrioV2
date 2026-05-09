@@ -58,8 +58,11 @@ class TorrentStreamService {
   /// Active torrent IDs keyed by info-hash for cleanup.
   final Map<String, int> _activeTorrents = {};
 
-  /// Active stream IDs keyed by info-hash for cleanup.
+  /// Active stream IDs keyed by info-hash for cleanup (video / single stream).
   final Map<String, int> _activeStreams = {};
+
+  /// Audiobook chapter streams: info-hash → file index → stream id.
+  final Map<String, Map<int, int>> _audiobookStreamsByFile = {};
 
   /// Track disposed torrent/stream IDs to prevent double-dispose native crash.
   final Set<int> _disposedTorrentIds = {};
@@ -137,6 +140,7 @@ class TorrentStreamService {
           _safeStopStream(_activeStreams[hash]!);
           _activeStreams.remove(hash);
         }
+        _stopAudiobookStreamsForMapKey(hash ?? magnetLink);
         _safeDisposeTorrent(oldId);
         _activeTorrents.remove(hash);
       } catch (e) {
@@ -191,6 +195,86 @@ class TorrentStreamService {
       _log('streamTorrent error: $e');
       return null;
     }
+  }
+
+  /// HTTP stream URL for one torrent file — keeps the torrent loaded so multiple
+  /// files (audiobook chapters) can be streamed without re-adding the magnet.
+  Future<String?> streamAudiobookFile(String magnetLink, int fileIdx) async {
+    if (_state != EngineState.ready) {
+      final started = await start();
+      if (!started) {
+        _log('Audiobook stream: engine failed to start.');
+        return null;
+      }
+    }
+
+    final hash = _extractHash(magnetLink);
+    final key = hash ?? magnetLink;
+
+    try {
+      final cacheType = await _settings.getTorrentCacheType();
+      final ramCacheMb = await _settings.getTorrentRamCacheMb();
+      final saveToRam = cacheType == 'ram';
+      final maxCacheBytes = saveToRam ? (ramCacheMb * 1024 * 1024) : 0;
+
+      late final int torrentId;
+      if (hash != null && _activeTorrents.containsKey(hash)) {
+        torrentId = _activeTorrents[hash]!;
+      } else {
+        torrentId = LibtorrentFlutter.instance.addMagnet(magnetLink, null, saveToRam);
+        if (hash != null) {
+          _activeTorrents[hash] = torrentId;
+        }
+        _log('Audiobook: added magnet, torrentId=$torrentId');
+        final metaFiles = await _waitForMetadata(torrentId);
+        if (metaFiles == null || metaFiles.isEmpty) {
+          _log('Audiobook: no files in torrent');
+          if (hash != null) {
+            _safeDisposeTorrent(torrentId);
+            _activeTorrents.remove(hash);
+          } else {
+            _safeDisposeTorrent(torrentId);
+          }
+          return null;
+        }
+      }
+
+      final files = LibtorrentFlutter.instance.getFiles(torrentId);
+      FileInfo? fi;
+      for (final f in files) {
+        if (f.index == fileIdx) {
+          fi = f;
+          break;
+        }
+      }
+      if (fi == null || !fi.isStreamable) {
+        _log('Audiobook: file index $fileIdx not streamable');
+        return null;
+      }
+
+      final byFile = _audiobookStreamsByFile.putIfAbsent(key, () => {});
+      final oldSid = byFile[fileIdx];
+      if (oldSid != null) {
+        _safeStopStream(oldSid);
+      }
+
+      final streamInfo = LibtorrentFlutter.instance.startStream(
+        torrentId,
+        fileIndex: fileIdx,
+        maxCacheBytes: maxCacheBytes,
+      );
+      byFile[fileIdx] = streamInfo.id;
+      _log('Audiobook stream started file=$fileIdx → ${streamInfo.url}');
+      return streamInfo.url;
+    } catch (e) {
+      _log('streamAudiobookFile error: $e');
+      return null;
+    }
+  }
+
+  /// Stops audiobook streams and drops the torrent for this magnet.
+  void releaseAudiobookMagnet(String magnetLink) {
+    removeTorrent(magnetLink);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -288,6 +372,8 @@ class TorrentStreamService {
     final hash = _extractHash(magnetOrHash);
     final key = hash ?? magnetOrHash;
 
+    _stopAudiobookStreamsForMapKey(key);
+
     // Stop stream
     if (_activeStreams.containsKey(key)) {
       _safeStopStream(_activeStreams[key]!);
@@ -368,6 +454,13 @@ class TorrentStreamService {
     }
     _activeStreams.clear();
 
+    for (final byFile in _audiobookStreamsByFile.values) {
+      for (final streamId in byFile.values) {
+        _safeStopStream(streamId);
+      }
+    }
+    _audiobookStreamsByFile.clear();
+
     // Dispose all active torrents
     for (final torrentId in _activeTorrents.values) {
       _safeDisposeTorrent(torrentId);
@@ -391,6 +484,14 @@ class TorrentStreamService {
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
+
+  void _stopAudiobookStreamsForMapKey(String mapKey) {
+    final byFile = _audiobookStreamsByFile.remove(mapKey);
+    if (byFile == null) return;
+    for (final streamId in byFile.values) {
+      _safeStopStream(streamId);
+    }
+  }
 
   /// Safely stop a stream, preventing double-stop native crash.
   void _safeStopStream(int streamId) {

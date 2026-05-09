@@ -10,6 +10,8 @@ import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
 import 'generate_audiobook_screen.dart';
 import '../widgets/tv_interactive.dart';
+import '../platform_flags.dart';
+import 'audiobook_magnet_screen.dart';
 
 class AudiobookScreen extends StatefulWidget {
   const AudiobookScreen({super.key});
@@ -261,6 +263,25 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 },
                 tooltip: 'Generate your own audiobook',
               ),
+              if (!platformIsWeb)
+                IconButton(
+                  icon: const Icon(Icons.link_rounded, color: Colors.white, size: 24),
+                  tooltip: 'Add audiobook from magnet link',
+                  onPressed: () async {
+                    final book = await Navigator.push<Audiobook>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const AudiobookMagnetScreen()),
+                    );
+                    if (book != null && mounted) {
+                      setState(() {
+                        _books.removeWhere((b) => b.audioBookId == book.audioBookId);
+                        _books.insert(0, book);
+                      });
+                      _openAudiobook(book);
+                    }
+                  },
+                ),
               IconButton(
                 icon: const Icon(Icons.download_rounded, color: Colors.white, size: 26),
                 onPressed: () {
