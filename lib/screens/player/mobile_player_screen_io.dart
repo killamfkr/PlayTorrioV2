@@ -3994,6 +3994,7 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
                       SizedBox(width: gap),
                     ],
                     _GlassIconButton(
+                      icon: Icons.link_rounded,
                       onPressed: () async {
                         await Clipboard.setData(ClipboardData(text: widget.mediaPath));
                         if (mounted) {
