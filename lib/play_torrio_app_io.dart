@@ -34,7 +34,9 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
     }
     if (platformIsAndroid || platformIsIOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(PlaytorrioCastService.instance.initialize());
+        Future.delayed(const Duration(milliseconds: 600), () {
+          unawaited(PlaytorrioCastService.instance.initialize());
+        });
       });
     }
   }

@@ -19,6 +19,8 @@ class PlaytorrioCastService {
 
   Future<void> retryInitialize() async {}
 
+  String? get lastCastInitializationError => null;
+
   bool eligibleForCastUi({
     required String mediaPath,
     String? magnetLink,

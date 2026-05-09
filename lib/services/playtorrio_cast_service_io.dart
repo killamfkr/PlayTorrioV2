@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_chrome_cast/flutter_chrome_cast.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// Google Cast (Chromecast) sender — Android + iOS (including Android TV).
 class PlaytorrioCastService {
@@ -10,12 +12,26 @@ class PlaytorrioCastService {
   static final PlaytorrioCastService instance = PlaytorrioCastService._();
 
   bool _initialized = false;
-  bool _initFailed = false;
+
+  String? _lastCastInitializationError;
+
+  /// Last Cast init failure (Platform channel / Dart); exposed for diagnostics UI.
+  String? get lastCastInitializationError => _lastCastInitializationError;
+
+  Future<void>? _initFuture;
 
   Future<void> initialize() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (_initialized) return;
+    final fut = _initFuture ??= _initializeOnce();
+    await fut;
+  }
+
+  Future<void> _initializeOnce() async {
     try {
+      if (Platform.isAndroid) {
+        await _ensureAndroidNearbyWifiPermission();
+      }
       const appId = GoogleCastDiscoveryCriteria.kDefaultApplicationId;
       final GoogleCastOptions options = Platform.isIOS
           ? IOSGoogleCastOptions(
@@ -26,13 +42,36 @@ class PlaytorrioCastService {
               appId: appId,
               stopCastingOnAppTerminated: false,
             );
-      await GoogleCastContext.instance.setSharedInstanceWithOptions(options);
+      final ok =
+          await GoogleCastContext.instance.setSharedInstanceWithOptions(options);
+      if (ok != true) {
+        throw StateError(
+          'Google Cast initialization returned false (native channel declined).',
+        );
+      }
       _initialized = true;
+      _lastCastInitializationError = null;
       debugPrint('[Cast] Google Cast context ready');
     } catch (e, st) {
-      _initFailed = true;
       _initialized = false;
+      _lastCastInitializationError = e is PlatformException
+          ? '${e.code}: ${e.message}'
+          : '$e';
       debugPrint('[Cast] init failed: $e\n$st');
+    } finally {
+      _initFuture = null;
+    }
+  }
+
+  Future<void> _ensureAndroidNearbyWifiPermission() async {
+    try {
+      final perm = Permission.nearbyWifiDevices;
+      final status = await perm.status;
+      if (!status.isGranted) {
+        await perm.request();
+      }
+    } catch (e) {
+      debugPrint('[Cast] nearbyWifiDevices permission: $e');
     }
   }
 
@@ -40,7 +79,6 @@ class PlaytorrioCastService {
   Future<void> retryInitialize() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (_initialized) return;
-    _initFailed = false;
     await initialize();
   }
 
@@ -151,22 +189,29 @@ class PlaytorrioCastService {
     VoidCallback? onCastStarted,
   }) async {
     if (!_initialized) {
-      for (var attempt = 0; attempt < 3 && !_initialized; attempt++) {
+      for (var attempt = 0; attempt < 6 && !_initialized; attempt++) {
         await retryInitialize();
-        if (!_initialized && attempt < 2) {
-          await Future.delayed(const Duration(milliseconds: 400));
+        if (!_initialized && attempt < 5) {
+          await Future.delayed(const Duration(milliseconds: 450));
         }
       }
     }
     if (!_initialized) {
       if (context.mounted) {
+        final detail = lastCastInitializationError;
+        final tail = (detail != null && detail.isNotEmpty)
+            ? '\n\n$detail'
+            : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               Platform.isAndroid
-                  ? 'Chromecast could not start. Ensure Google Play services are installed and updated, '
-                      'and that this build includes Cast setup in AndroidManifest.'
-                  : 'Chromecast could not start. Allow local network access for PlayTorrio in Settings → Privacy.',
+                  ? 'Chromecast failed to start. Install a build with Cast ProGuard rules, '
+                      'accept Nearby devices/Wi‑Fi if prompted, and ensure Google Play services are available.'
+                      '$tail'
+                  : 'Chromecast failed to start. Settings → PlayTorrio → enable Local Network, '
+                      'then try again.'
+                      '$tail',
             ),
           ),
         );
