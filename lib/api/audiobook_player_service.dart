@@ -7,12 +7,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'audiobook_service.dart';
 import 'audiobook_prefs_keys.dart';
 import 'audio_handler.dart';
+import 'torrent_stream_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
 
 class AudiobookPlayerService {
   static final AudiobookPlayerService _instance = AudiobookPlayerService._internal();
   factory AudiobookPlayerService() => _instance;
   AudiobookPlayerService._internal();
+
+  /// Headers for libtorrent's loopback HTTP stream (mpv is picky without these).
+  static const Map<String, String> magnetStreamHttpHeaders = {
+    'User-Agent':
+        'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Accept': '*/*',
+  };
 
   final Player _player = Player();
   PlayTorrioAudioHandler? _handler;
@@ -61,7 +69,7 @@ class AudiobookPlayerService {
       if (completed && autoplay.value) {
         final nextIdx = currentChapterIndex.value + 1;
         if (nextIdx < _currentChapters.length) {
-          changeChapter(nextIdx);
+          unawaited(changeChapter(nextIdx));
         }
       }
     }));
@@ -109,13 +117,16 @@ class AudiobookPlayerService {
     if (book.source == 'appaudiobooks') artist = 'AppAudiobooks';
     if (book.source == 'magnet') artist = 'Torrent';
 
+    String art = book.thumbUrl.trim();
+    if (art.isEmpty) art = book.coverImage.trim();
+
     _handler?.updateMediaItem(MediaItem(
       id: book.audioBookId,
       album: 'Audiobook',
       title: book.title,
       artist: artist,
       duration: null,
-      artUri: Uri.tryParse(book.thumbUrl),
+      artUri: art.isEmpty ? null : Uri.tryParse(art),
     ));
 
     // Optimize for streaming audiobooks
@@ -126,10 +137,15 @@ class AudiobookPlayerService {
       await p.setProperty('demuxer-max-bytes', '50000000'); // 50MB cache
       await p.setProperty('demuxer-max-back-bytes', '50000000');
       await p.setProperty('demuxer-readahead-secs', '30');
+      if (book.source == 'magnet') {
+        await p.setProperty('force-seekable', 'yes');
+      }
     }
 
+    final media = await _mediaForChapter(book, chapters[initialChapter]);
+
     // Open without auto-playing first to allow seek to settle
-    await _player.open(Media(chapters[initialChapter].url, httpHeaders: chapters[initialChapter].headers), play: false);
+    await _player.open(media, play: false);
     
     if (_isResuming) {
       debugPrint('AudiobookPlayerService: Resuming at $resumePosition');
@@ -158,6 +174,38 @@ class AudiobookPlayerService {
     _player.play();
   }
 
+  Future<Media> _mediaForChapter(Audiobook book, AudiobookChapter ch) async {
+    final magnet = book.magnetLink;
+    if (book.source != 'magnet' ||
+        magnet == null ||
+        magnet.isEmpty ||
+        ch.torrentFileIndex == null) {
+      final headers = ch.headers ?? const <String, String>{};
+      return Media(ch.url, httpHeaders: headers);
+    }
+
+    final torrent = TorrentStreamService();
+    final started = await torrent.start();
+    if (!started) {
+      throw Exception('Torrent engine failed to start');
+    }
+    torrent.stopAudiobookStreamsForMagnet(magnet);
+    final url = await torrent.streamAudiobookFile(
+      magnet,
+      ch.torrentFileIndex!,
+      allowNonStreamable: true,
+      stopSiblingStreams: false,
+    );
+    if (url == null || url.isEmpty) {
+      throw Exception('Could not stream torrent file: ${ch.title}');
+    }
+    final merged = Map<String, String>.from(magnetStreamHttpHeaders);
+    if (ch.headers != null) {
+      merged.addAll(ch.headers!);
+    }
+    return Media(url, httpHeaders: merged);
+  }
+
   void playOrPause() => _player.playOrPause();
   void seek(Duration p) => _player.seek(p);
   void setRate(double r) => _player.setRate(r);
@@ -165,14 +213,14 @@ class AudiobookPlayerService {
   void skipToNextChapter() {
     final nextIdx = currentChapterIndex.value + 1;
     if (nextIdx < _currentChapters.length) {
-      changeChapter(nextIdx);
+      unawaited(changeChapter(nextIdx));
     }
   }
 
   void skipToPreviousChapter() {
     final prevIdx = currentChapterIndex.value - 1;
     if (prevIdx >= 0) {
-      changeChapter(prevIdx);
+      unawaited(changeChapter(prevIdx));
     }
   }
 
@@ -184,8 +232,15 @@ class AudiobookPlayerService {
   Future<void> changeChapter(int index) async {
     if (index < 0 || index >= _currentChapters.length) return;
     currentChapterIndex.value = index;
-    await _player.open(Media(_currentChapters[index].url, httpHeaders: _currentChapters[index].headers));
-    _player.play();
+    final book = currentBook.value;
+    if (book == null) return;
+    try {
+      final media = await _mediaForChapter(book, _currentChapters[index]);
+      await _player.open(media);
+      _player.play();
+    } catch (e, st) {
+      debugPrint('AudiobookPlayerService.changeChapter: $e\n$st');
+    }
   }
 
   // --- Persistence (History) ---

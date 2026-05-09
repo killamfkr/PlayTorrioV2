@@ -64,8 +64,11 @@ class TorrentStreamService {
     String magnetLink,
     int fileIdx, {
     bool allowNonStreamable = false,
+    bool stopSiblingStreams = true,
   }) async =>
       null;
+
+  void stopAudiobookStreamsForMagnet(String magnetLink) {}
 
   void releaseAudiobookMagnet(String magnetLink) {}
 

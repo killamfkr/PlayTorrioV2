@@ -1,11 +1,12 @@
+import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:http/http.dart' as http;
 import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/audiobook_download_service.dart';
-import '../api/audiobook_magnet_resolver.dart';
 import '../api/torrent_stream_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/tv_interactive.dart';
@@ -44,25 +45,35 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   List<AudiobookChapter>? _playableChapters;
   bool _magnetResolving = false;
   String? _magnetError;
-  /// Resolved HTTP URL from torrent engine for embedded magnet cover art.
-  String? _magnetCoverArtUrl;
+  Uint8List? _magnetCoverBytes;
 
   List<AudiobookChapter> get _chaptersForUi =>
       _playableChapters ?? widget.chapters;
 
-  String get _coverArtUrl {
-    final m = _magnetCoverArtUrl?.trim() ?? '';
-    if (m.isNotEmpty) return m;
-    return widget.audiobook.thumbUrl;
+  String get _remoteThumbUrl {
+    final t = widget.audiobook.thumbUrl.trim();
+    if (t.isNotEmpty) return t;
+    return widget.audiobook.coverImage.trim();
   }
 
   Widget _backgroundCover() {
-    if (_coverArtUrl.isEmpty) {
+    final bytes = _magnetCoverBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        color: Colors.black.withValues(alpha: 0.6),
+        colorBlendMode: BlendMode.darken,
+        errorBuilder: (_, __, ___) =>
+            Container(color: Colors.black.withValues(alpha: 0.88)),
+      );
+    }
+    if (_remoteThumbUrl.isEmpty) {
       return Container(color: Colors.black.withValues(alpha: 0.88));
     }
-    if (_isTorrentEngineLoopbackUrl(_coverArtUrl)) {
+    if (_isTorrentEngineLoopbackUrl(_remoteThumbUrl)) {
       return Image.network(
-        _coverArtUrl,
+        _remoteThumbUrl,
         fit: BoxFit.cover,
         color: Colors.black.withValues(alpha: 0.6),
         colorBlendMode: BlendMode.darken,
@@ -71,7 +82,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       );
     }
     return CachedNetworkImage(
-      imageUrl: _coverArtUrl,
+      imageUrl: _remoteThumbUrl,
       fit: BoxFit.cover,
       color: Colors.black.withValues(alpha: 0.6),
       colorBlendMode: BlendMode.darken,
@@ -85,7 +96,18 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   }
 
   Widget _foregroundCover() {
-    if (_coverArtUrl.isEmpty) {
+    final bytes = _magnetCoverBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => CachedNetworkImage(
+          imageUrl: widget.audiobook.coverImage,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+    if (_remoteThumbUrl.isEmpty) {
       return Container(
         color: Colors.white.withValues(alpha: 0.08),
         child: const Center(
@@ -94,9 +116,9 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         ),
       );
     }
-    if (_isTorrentEngineLoopbackUrl(_coverArtUrl)) {
+    if (_isTorrentEngineLoopbackUrl(_remoteThumbUrl)) {
       return Image.network(
-        _coverArtUrl,
+        _remoteThumbUrl,
         fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => CachedNetworkImage(
           imageUrl: widget.audiobook.coverImage,
@@ -105,7 +127,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       );
     }
     return CachedNetworkImage(
-      imageUrl: _coverArtUrl,
+      imageUrl: _remoteThumbUrl,
       fit: BoxFit.cover,
       errorWidget: (context, url, error) => CachedNetworkImage(
           imageUrl: widget.audiobook.coverImage, fit: BoxFit.cover),
@@ -119,49 +141,52 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   }
 
   Future<void> _bootstrapPlayback() async {
-    final magnet = widget.audiobook.magnetLink;
-    final needsMagnet = widget.audiobook.source == 'magnet' &&
+    final book = widget.audiobook;
+    final magnet = book.magnetLink;
+    final needsMagnet = book.source == 'magnet' &&
         magnet != null &&
         magnet.isNotEmpty &&
         widget.chapters.any((c) => c.torrentFileIndex != null);
 
+    _playableChapters = widget.chapters;
+
     if (needsMagnet) {
-      setState(() => _magnetResolving = true);
+      setState(() {
+        _magnetResolving = true;
+        _magnetError = null;
+      });
       try {
-        _playableChapters =
-            await AudiobookMagnetResolver.resolvePlaybackChapters(
-          magnet!,
-          widget.chapters,
-        );
+        final torrent = TorrentStreamService();
+        if (!await torrent.start()) {
+          throw Exception('Torrent engine failed to start');
+        }
+        if (book.magnetCoverFileIndex != null) {
+          torrent.stopAudiobookStreamsForMagnet(magnet);
+          final coverUrl = await torrent.streamAudiobookFile(
+            magnet,
+            book.magnetCoverFileIndex!,
+            allowNonStreamable: true,
+            stopSiblingStreams: true,
+          );
+          if (coverUrl != null && coverUrl.isNotEmpty) {
+            try {
+              final res = await http.get(
+                Uri.parse(coverUrl),
+                headers: AudiobookPlayerService.magnetStreamHttpHeaders,
+              );
+              if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+                _magnetCoverBytes = res.bodyBytes;
+              }
+            } catch (_) {}
+          }
+          torrent.stopAudiobookStreamsForMagnet(magnet);
+        }
       } catch (e) {
         _magnetError = '$e';
       }
-      if (mounted) setState(() => _magnetResolving = false);
-    } else {
-      _playableChapters = widget.chapters;
+      if (!mounted) return;
+      setState(() {});
     }
-
-    if (!mounted) return;
-
-    if (_magnetError == null &&
-        widget.audiobook.source == 'magnet' &&
-        magnet != null &&
-        magnet.isNotEmpty &&
-        widget.audiobook.magnetCoverFileIndex != null &&
-        (_playableChapters?.isNotEmpty ?? false)) {
-      try {
-        final url = await TorrentStreamService().streamAudiobookFile(
-          magnet,
-          widget.audiobook.magnetCoverFileIndex!,
-          allowNonStreamable: true,
-        );
-        if (mounted && url != null && url.isNotEmpty) {
-          setState(() => _magnetCoverArtUrl = url);
-        }
-      } catch (_) {}
-    }
-
-    if (!mounted) return;
 
     if (_magnetError != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -174,6 +199,9 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         );
         Navigator.pop(context);
       });
+      if (needsMagnet && mounted) {
+        setState(() => _magnetResolving = false);
+      }
       return;
     }
 
@@ -189,13 +217,29 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       return;
     }
 
-    await _refreshDownloadState(ch.length);
-    await _service.loadBook(
-      widget.audiobook,
-      ch,
-      initialChapter: widget.initialChapterIndex,
-      resumePosition: widget.initialPosition,
-    );
+    try {
+      await _refreshDownloadState(ch.length);
+      await _service.loadBook(
+        book,
+        ch,
+        initialChapter: widget.initialChapterIndex,
+        resumePosition: widget.initialPosition,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Playback failed: $e'),
+          backgroundColor: Colors.red.shade900,
+        ),
+      );
+      Navigator.pop(context);
+      return;
+    } finally {
+      if (mounted && needsMagnet) {
+        setState(() => _magnetResolving = false);
+      }
+    }
   }
 
   Future<void> _refreshDownloadState(int chapterCount) async {

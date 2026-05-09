@@ -203,6 +203,7 @@ class TorrentStreamService {
     String magnetLink,
     int fileIdx, {
     bool allowNonStreamable = false,
+    bool stopSiblingStreams = true,
   }) async {
     if (_state != EngineState.ready) {
       final started = await start();
@@ -256,10 +257,16 @@ class TorrentStreamService {
         return null;
       }
 
+      if (stopSiblingStreams) {
+        _stopAudiobookStreamsForMapKey(key);
+      }
+
       final byFile = _audiobookStreamsByFile.putIfAbsent(key, () => {});
-      final oldSid = byFile[fileIdx];
-      if (oldSid != null) {
-        _safeStopStream(oldSid);
+      if (!stopSiblingStreams) {
+        final oldSid = byFile[fileIdx];
+        if (oldSid != null) {
+          _safeStopStream(oldSid);
+        }
       }
 
       final streamInfo = LibtorrentFlutter.instance.startStream(
@@ -279,6 +286,13 @@ class TorrentStreamService {
   /// Stops audiobook streams and drops the torrent for this magnet.
   void releaseAudiobookMagnet(String magnetLink) {
     removeTorrent(magnetLink);
+  }
+
+  /// Stops HTTP streams for audiobook files only (torrent stays in session).
+  void stopAudiobookStreamsForMagnet(String magnetLink) {
+    final hash = _extractHash(magnetLink);
+    final key = hash ?? magnetLink;
+    _stopAudiobookStreamsForMapKey(key);
   }
 
   /// Dispose a torrent opened elsewhere (e.g. magnet picker preview) that was
