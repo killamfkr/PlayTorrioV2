@@ -26,6 +26,12 @@ class PlayerScreen extends StatefulWidget {
   final String? stremioId;
   final String? stremioAddonBaseUrl;
   final String? stremioStreamType;
+  /// Called periodically during playback (e.g. KissKh / custom hubs without TMDB rows).
+  final Future<void> Function(Duration position, Duration duration)?
+      onPlaybackProgress;
+  /// When set with [onCustomNextEpisode], shows the built-in next-episode affordance.
+  final bool hasCustomNextEpisode;
+  final VoidCallback? onCustomNextEpisode;
 
   const PlayerScreen({
     super.key,
@@ -46,6 +52,9 @@ class PlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.stremioStreamType,
+    this.onPlaybackProgress,
+    this.hasCustomNextEpisode = false,
+    this.onCustomNextEpisode,
   });
 
   @override
@@ -168,6 +177,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
         stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
         stremioStreamType: _resolvedStremioStreamType,
         providers: widget.providers,
+        onPlaybackProgress: widget.onPlaybackProgress,
+        hasCustomNextEpisode: widget.hasCustomNextEpisode,
+        onCustomNextEpisode: widget.onCustomNextEpisode,
       );
     }
 
@@ -189,6 +201,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       stremioAddonBaseUrl: widget.stremioAddonBaseUrl,
       stremioStreamType: _resolvedStremioStreamType,
       providers: widget.providers,
+      onPlaybackProgress: widget.onPlaybackProgress,
+      hasCustomNextEpisode: widget.hasCustomNextEpisode,
+      onCustomNextEpisode: widget.onCustomNextEpisode,
     );
   }
 }

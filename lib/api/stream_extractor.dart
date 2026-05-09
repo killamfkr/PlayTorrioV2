@@ -13,6 +13,8 @@ class ExtractedMedia {
   final Map<String, String> headers;
   final List<StreamSource>? sources;
   final String? provider;
+  /// Optional external subtitles: [{url, title, language}].
+  final List<Map<String, dynamic>>? externalSubtitles;
 
   ExtractedMedia({
     required this.url,
@@ -20,6 +22,7 @@ class ExtractedMedia {
     required this.headers,
     this.sources,
     this.provider,
+    this.externalSubtitles,
   });
 }
 
@@ -120,7 +123,12 @@ class StreamExtractor {
     }
   }
 
-  Future<ExtractedMedia?> extract(String url, {Duration timeout = const Duration(seconds: 60)}) async {
+  Future<ExtractedMedia?> extract(
+    String url, {
+    Duration timeout = const Duration(seconds: 60),
+    String? referer,
+    String? iframeWrapperBaseUrl,
+  }) async {
     // 0. Ensure previous instance is fully cleaned up before starting new one
     await _cleanup();
     
@@ -146,19 +154,76 @@ class StreamExtractor {
       }
     });
 
-    debugPrint('[StreamExtractor] RAW SNIFFER START: $url');
-    
-    _headlessWebView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(url)),
-      initialSize: const Size(1280, 720),
-      initialUserScripts: UnmodifiableListView([
-        UserScript(
-          source: _getRawSpyJs(),
-          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-          forMainFrameOnly: false,
+    debugPrint('[StreamExtractor] RAW SNIFFER START: $url'
+        '${referer != null ? ' (referer=$referer)' : ''}'
+        '${iframeWrapperBaseUrl != null ? ' (wrapper=$iframeWrapperBaseUrl)' : ''}');
+
+    // Build the headless webview. There are two modes:
+    //  1) Direct: load `url` itself (with optional Referer/Origin headers).
+    //  2) Wrapped: load a tiny HTML page via `loadData` whose baseUrl is
+    //     `iframeWrapperBaseUrl`. We then iframe `url` inside it. The iframe
+    //     receives `document.referrer = iframeWrapperBaseUrl`, defeating
+    //     embed providers that block direct loads (megaplay/vidwish).
+    if (iframeWrapperBaseUrl != null) {
+      _headlessWebView = HeadlessInAppWebView(
+        initialData: InAppWebViewInitialData(
+          data: _buildIframeWrapperHtml(url),
+          baseUrl: WebUri(iframeWrapperBaseUrl),
+          historyUrl: WebUri(iframeWrapperBaseUrl),
+          mimeType: 'text/html',
+          encoding: 'utf-8',
         ),
-      ]),
-      initialSettings: InAppWebViewSettings(
+        initialSize: const Size(1280, 720),
+        initialUserScripts: UnmodifiableListView([
+          UserScript(
+            source: _getRawSpyJs(),
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+            forMainFrameOnly: false,
+          ),
+        ]),
+        initialSettings: _wrapperSettings(),
+        onLoadResource: _onLoadResource(url),
+        onLoadStop: _onLoadStop(),
+        onConsoleMessage: _onConsoleMessage(url),
+      );
+    } else {
+      final initialReq = URLRequest(
+        url: WebUri(url),
+        headers: referer != null
+            ? {
+                'Referer': referer,
+                'Origin': Uri.tryParse(referer)?.origin ?? referer,
+              }
+            : null,
+      );
+      _headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest: initialReq,
+        initialSize: const Size(1280, 720),
+        initialUserScripts: UnmodifiableListView([
+          UserScript(
+            source: _getRawSpyJs(),
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+            forMainFrameOnly: false,
+          ),
+        ]),
+        initialSettings: _wrapperSettings(),
+        onLoadResource: _onLoadResource(url),
+        onLoadStop: _onLoadStop(),
+        onConsoleMessage: _onConsoleMessage(url),
+      );
+    }
+
+    try {
+      await _headlessWebView?.run();
+    } catch (e) {
+      debugPrint('[StreamExtractor] Engine Error: $e');
+    }
+    return _completer?.future;
+  }
+
+  // ── Wrapper helpers ──────────────────────────────────────────────────────
+
+  InAppWebViewSettings _wrapperSettings() => InAppWebViewSettings(
         javaScriptEnabled: true,
         domStorageEnabled: true,
         userAgent: _userAgent,
@@ -166,36 +231,39 @@ class StreamExtractor {
         cacheEnabled: true,
         clearCache: false,
         allowsInlineMediaPlayback: true,
-        useOnLoadResource: true, // SNIFF EVERYTHING
-      ),
-      onLoadResource: (controller, resource) {
+        useOnLoadResource: true,
+        iframeAllow: 'autoplay; fullscreen; encrypted-media',
+        iframeAllowFullscreen: true,
+      );
+
+  void Function(InAppWebViewController, LoadedResource) _onLoadResource(String fallbackReferer) =>
+      (controller, resource) {
         final rUrl = resource.url.toString();
         debugPrint('[StreamExtractor Resource] $rUrl');
-        _processUrl(rUrl, url);
-      },
-      onLoadStop: (controller, url) async {
-        debugPrint('[StreamExtractor] Page Loaded: $url');
+        _processUrl(rUrl, fallbackReferer);
+      };
+
+  void Function(InAppWebViewController, WebUri?) _onLoadStop() =>
+      (controller, loadedUrl) async {
+        debugPrint('[StreamExtractor] Page Loaded: $loadedUrl');
         await controller.evaluateJavascript(source: _getRawSpyJs());
-      },
-      onConsoleMessage: (controller, consoleMessage) {
+      };
+
+  void Function(InAppWebViewController, ConsoleMessage) _onConsoleMessage(String fallbackReferer) =>
+      (controller, consoleMessage) {
         final msg = consoleMessage.message;
         debugPrint('[StreamExtractor Console] $msg');
-        
         if (msg.contains('PT_EXTRACT:')) {
-          // Clean up the message from potential quotes and prefixes
-          String fullMsg = msg.substring(msg.indexOf('PT_EXTRACT:') + 'PT_EXTRACT:'.length).trim();
+          String fullMsg =
+              msg.substring(msg.indexOf('PT_EXTRACT:') + 'PT_EXTRACT:'.length).trim();
           String streamUrl = fullMsg;
           String? frameUrl;
-
           if (fullMsg.contains(' | FRAME: ')) {
             final parts = fullMsg.split(' | FRAME: ');
             streamUrl = parts[0];
             frameUrl = parts[1];
           }
-
           streamUrl = streamUrl.replaceAll('"', '').replaceAll("'", "").trim();
-          
-          // Remove prefixes if present
           streamUrl = streamUrl
               .replaceFirst('[FETCH]', '')
               .replaceFirst('[XHR]', '')
@@ -207,19 +275,27 @@ class StreamExtractor {
               .replaceFirst('[SOURCE_SRC]', '')
               .replaceFirst('[MEDIA_PLAY]', '')
               .trim();
-          
-          _processUrl(streamUrl, frameUrl ?? url);
+          _processUrl(streamUrl, frameUrl ?? fallbackReferer);
         }
-      },
-    );
+      };
 
-    try {
-      await _headlessWebView?.run();
-    } catch (e) {
-      debugPrint('[StreamExtractor] Engine Error: $e');
-    }
-    return _completer?.future;
+  String _buildIframeWrapperHtml(String embedUrl) {
+    // Minimal page: full-bleed iframe with autoplay + fullscreen perms.
+    // Because we load this via `loadData(baseUrl: …)`, the iframe's
+    // `document.referrer` and `window.parent.location.origin` reflect the
+    // base URL (e.g. https://www.enma.lol/), which is what megaplay/vidwish
+    // gate on. No HTML-escaping needed: the URL was built by us.
+    return '''<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="referrer" content="unsafe-url">
+<title>player</title>
+<style>html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}</style>
+</head><body>
+<iframe id="p" src="$embedUrl" allow="autoplay; fullscreen; encrypted-media" allowfullscreen referrerpolicy="unsafe-url"></iframe>
+</body></html>''';
   }
+
 
   void _processUrl(String rUrl, String referer) {
     if ((rUrl.contains('.m3u8') ||

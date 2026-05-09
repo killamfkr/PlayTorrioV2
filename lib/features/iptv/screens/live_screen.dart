@@ -6,6 +6,7 @@ import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_channel.dart';
 import '../../../screens/player_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvLiveScreen extends StatefulWidget {
   const IptvLiveScreen({super.key});
@@ -314,7 +315,7 @@ class _ChannelTile extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Padding(
@@ -408,7 +409,7 @@ class _CategoryArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(

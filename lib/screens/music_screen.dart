@@ -10,10 +10,12 @@ import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/performance_tuning.dart';
+import '../utils/device_profile.dart';
 import '../platform_flags.dart';
 import '../widgets/local_file_image.dart';
 import '../utils/music_file_ops.dart';
 import 'music_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class MusicScreen extends StatefulWidget {
   const MusicScreen({super.key});
@@ -322,7 +324,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     final itemColor = color ?? AppTheme.current.primaryColor;
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         onTap: () => setState(() => _currentView = view),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -483,7 +485,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       padding: const EdgeInsets.only(right: 10),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () => setState(() => _currentView = view),
           child: Container(
@@ -1156,7 +1158,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   Widget _buildPillButton(IconData icon, String label, VoidCallback? onTap, {bool filled = false}) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(24),
         onTap: onTap,
         child: Container(
@@ -1299,7 +1301,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
           padding: const EdgeInsets.symmetric(vertical: 3),
           child: Material(
             color: Colors.transparent,
-            child: InkWell(
+            child: TvInkWell(
               borderRadius: BorderRadius.circular(12),
               onTap: () => _playerService.playTrack(track, newPlaylist: queue),
               child: Container(
@@ -1436,7 +1438,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     top: 8, right: 8,
                     child: Material(
                       color: Colors.transparent,
-                      child: InkWell(
+                      child: TvInkWell(
                         onTap: () async {
                           if (isSaved) {
                             await _storageService.unsaveAlbum(album.id);
@@ -1668,7 +1670,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                 constraints: const BoxConstraints(maxWidth: 700),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: GestureDetector(
+                  child: TvGestureTap(
+                    borderRadius: 18,
                     onTap: _openFullPlayer,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(18),
@@ -1726,7 +1729,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     final isEnabled = onTap != null;
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
@@ -1804,7 +1807,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   Widget _buildActionButton(IconData icon, String label, VoidCallback onTap) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Container(
@@ -2021,7 +2024,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   Widget _buildMenuItem(IconData icon, String label, Color iconColor, VoidCallback onTap) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
@@ -2080,7 +2083,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
             ),
             ...playlists.map((p) => Material(
               color: Colors.transparent,
-              child: InkWell(
+              child: TvInkWell(
                 onTap: () async {
                   final navigator = Navigator.of(context);
                   final messenger = ScaffoldMessenger.of(context);
@@ -2179,7 +2182,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   const SizedBox(width: 12),
                   Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(12),
                       onTap: () async {
                         if (controller.text.isNotEmpty) {
@@ -2403,6 +2406,14 @@ class _HoverScaleCardState extends State<_HoverScaleCard> with SingleTickerProvi
 
   @override
   Widget build(BuildContext context) {
+    if (DeviceProfile.isAndroidTv) {
+      return TvGestureTap(
+        borderRadius: widget.borderRadius,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        child: widget.child,
+      );
+    }
     return MouseRegion(
       onEnter: (_) => _onEnter(),
       onExit: (_) => _onExit(),

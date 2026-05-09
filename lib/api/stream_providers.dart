@@ -36,5 +36,17 @@ class StreamProviders {
       'movie': (tmdbId) => 'https://111movies.com/movie/$tmdbId',
       'tv': (tmdbId, s, e) => 'https://111movies.com/tv/$tmdbId/$s/$e',
     },
+    // Videasy — WASM/API decrypt pipeline (see VideasyExtractor).
+    'videasy': {
+      'name': 'Videasy',
+      'movie': null,
+      'tv': null,
+    },
+    // Vidsrc / vsembed.ru — HTTP-only embed unwrap (see VidsrcExtractor).
+    'vidsrc': {
+      'name': 'Vidsrc',
+      'movie': null,
+      'tv': null,
+    },
   };
 }

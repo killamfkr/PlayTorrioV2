@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/playtorrio_cloud_sync_service.dart';
+
 /// Service to interact with miruro.tv API for anime streaming.
 /// Uses the secure pipe protocol: base64url-encoded GET requests
 /// with XOR-obfuscated + deflate-compressed responses.
@@ -214,11 +216,11 @@ class AnimeService {
 
   // ─── Likes ─────────────────────────────────────────────────────
 
-  static const String _likedKey = 'liked_anime';
+  static const String prefsLikedKey = 'liked_anime';
 
   Future<void> toggleLike(AnimeCard anime) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     final idx = list.indexWhere((e) {
       final m = jsonDecode(e);
       return m['id'] == anime.id;
@@ -228,24 +230,25 @@ class AnimeService {
     } else {
       list.add(jsonEncode(anime.toJson()));
     }
-    await prefs.setStringList(_likedKey, list);
+    await prefs.setStringList(prefsLikedKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<bool> isLiked(int id) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     return list.any((e) => jsonDecode(e)['id'] == id);
   }
 
   Future<List<AnimeCard>> getLiked() async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     return list.map((e) => AnimeCard.fromJson(jsonDecode(e))).toList().reversed.toList();
   }
 
   // ─── Continue Watching ─────────────────────────────────────────
 
-  static const String _watchHistoryKey = 'anime_watch_history';
+  static const String prefsWatchHistoryKey = 'anime_watch_history';
 
   Future<void> addToWatchHistory({
     required AnimeCard anime,
@@ -259,7 +262,7 @@ class AnimeService {
     int? duration,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     // Remove existing entry for this anime
     list.removeWhere((e) => jsonDecode(e)['animeId'] == anime.id);
     // Add to front
@@ -278,20 +281,22 @@ class AnimeService {
     }));
     // Keep max 20
     if (list.length > 20) list.removeLast();
-    await prefs.setStringList(_watchHistoryKey, list);
+    await prefs.setStringList(prefsWatchHistoryKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<List<Map<String, dynamic>>> getWatchHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     return list.map((e) => jsonDecode(e) as Map<String, dynamic>).toList();
   }
 
   Future<void> removeFromWatchHistory(int animeId) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     list.removeWhere((e) => jsonDecode(e)['animeId'] == animeId);
-    await prefs.setStringList(_watchHistoryKey, list);
+    await prefs.setStringList(prefsWatchHistoryKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 }
 

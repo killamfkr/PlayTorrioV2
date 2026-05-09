@@ -6,6 +6,7 @@ import '../api/audiobook_service.dart';
 import '../api/music_player_service.dart';
 import '../utils/app_theme.dart';
 import 'audiobook_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AudiobookDownloadsScreen extends StatefulWidget {
   const AudiobookDownloadsScreen({super.key});
@@ -337,7 +338,7 @@ class _AudiobookDownloadsScreenState extends State<AudiobookDownloadsScreen> {
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: InkWell(
+      child: TvInkWell(
         onTap: () => _playDownloaded(book),
         borderRadius: BorderRadius.circular(16),
         child: Padding(
@@ -393,7 +394,7 @@ class _AudiobookDownloadsScreenState extends State<AudiobookDownloadsScreen> {
                   const Icon(Icons.play_circle_fill,
                       color: AppTheme.primaryColor, size: 36),
                   const SizedBox(height: 8),
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: () => _deleteDownload(book),
                     child: const Icon(Icons.delete_outline,
                         color: Colors.white38, size: 22),

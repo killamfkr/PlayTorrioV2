@@ -9,7 +9,9 @@ import '../api/music_storage_service.dart';
 import '../api/music_downloader_service.dart';
 import '../api/lyrics_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
 import '../widgets/local_file_image.dart';
+import '../widgets/tv_interactive.dart';
 
 enum PlayerView { art, lyrics, related }
 
@@ -274,7 +276,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
 
   Widget _viewTab(String label, PlayerView view, IconData icon) {
     final isSelected = _currentView == view;
-    return GestureDetector(
+    return TvGestureTap(
       onTap: () => _switchView(view),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
@@ -474,7 +476,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
                     final isActive = index == activeIndex;
                     _lyricKeys[index] ??= GlobalKey();
 
-                    return GestureDetector(
+                    return TvGestureTap(
                       onTap: () {
                         // Tap to seek to this lyric line
                         player.seek(lyricsList[index].startTime);
@@ -733,7 +735,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
                   }
                   return ValueListenableBuilder<bool>(
                     valueListenable: player.isPlaying,
-                    builder: (context, playing, _) => GestureDetector(
+                    builder: (context, playing, _) => TvGestureTap(
                       onTap: () => player.togglePlay(),
                       child: Container(
                         width: 72, height: 72,
@@ -778,7 +780,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen> with WidgetsBindi
   }
 
   Widget _buildControlIcon(IconData icon, {required VoidCallback onTap, bool isActive = false, double size = 24}) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(8),
@@ -877,11 +879,18 @@ class _PlayerHoverScaleCardState extends State<_PlayerHoverScaleCard>
 
   @override
   Widget build(BuildContext context) {
+    if (DeviceProfile.isAndroidTv) {
+      return TvGestureTap(
+        borderRadius: 14,
+        onTap: widget.onTap,
+        child: widget.child,
+      );
+    }
     return MouseRegion(
       onEnter: _onEnter,
       onExit: _onExit,
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: widget.onTap,
         child: ScaleTransition(
           scale: _scale,
