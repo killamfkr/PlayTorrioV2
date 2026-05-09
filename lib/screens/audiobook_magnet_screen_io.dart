@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'package:path/path.dart' as p;
 
 import '../api/audiobook_service.dart';
 import '../api/torrent_stream_service.dart';
@@ -27,6 +28,53 @@ bool _isAudioFileName(String name) {
       lower.endsWith('.wav');
 }
 
+bool _isCoverFileName(String name) {
+  final lower = name.toLowerCase();
+  return lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.webp');
+}
+
+int _coverSortPriority(String name) {
+  final n = name.toLowerCase();
+  if (n.contains('cover')) return 0;
+  if (n.contains('folder')) return 1;
+  if (n.contains('front')) return 2;
+  if (n.contains('album')) return 3;
+  return 50;
+}
+
+/// Natural sort (e.g. `chapter 2` before `chapter 10`).
+int compareNaturalAscii(String a, String b) {
+  final ta =
+      RegExp(r'\d+|\D+').allMatches(a).map((m) => m.group(0)!).toList();
+  final tb =
+      RegExp(r'\d+|\D+').allMatches(b).map((m) => m.group(0)!).toList();
+  final n = ta.length < tb.length ? ta.length : tb.length;
+  for (var i = 0; i < n; i++) {
+    final ia = int.tryParse(ta[i]);
+    final ib = int.tryParse(tb[i]);
+    if (ia != null && ib != null) {
+      final c = ia.compareTo(ib);
+      if (c != 0) return c;
+    } else {
+      final c = ta[i].toLowerCase().compareTo(tb[i].toLowerCase());
+      if (c != 0) return c;
+    }
+  }
+  return ta.length.compareTo(tb.length);
+}
+
+void _sortCoverCandidates(List<FileInfo> covers) {
+  covers.sort((a, b) {
+    final pa = _coverSortPriority(a.name);
+    final pb = _coverSortPriority(b.name);
+    if (pa != pb) return pa.compareTo(pb);
+    return compareNaturalAscii(p.basename(a.name), p.basename(b.name));
+  });
+}
+
 /// Paste a magnet, pick audio files in order, return an [Audiobook] for the hub.
 class AudiobookMagnetScreen extends StatefulWidget {
   const AudiobookMagnetScreen({super.key});
@@ -42,7 +90,10 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
 
   bool _loading = false;
   String? _error;
-  List<FileInfo> _audioFiles = [];
+  /// Playback order (use ↑↓ to reorder).
+  List<FileInfo> _orderedAudioFiles = [];
+  List<FileInfo> _coverArtFiles = [];
+  int? _selectedCoverTorrentIndex;
   final Set<int> _selectedFileIndexes = {};
 
   @override
@@ -62,7 +113,9 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
     setState(() {
       _loading = true;
       _error = null;
-      _audioFiles = [];
+      _orderedAudioFiles = [];
+      _coverArtFiles = [];
+      _selectedCoverTorrentIndex = null;
       _selectedFileIndexes.clear();
     });
 
@@ -81,13 +134,21 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       final audio = files
           .where((f) => f.isStreamable && _isAudioFileName(f.name))
           .toList()
-        ..sort((a, b) => a.index.compareTo(b.index));
+        ..sort((a, b) => compareNaturalAscii(
+              p.basename(a.name),
+              p.basename(b.name),
+            ));
 
       if (audio.isEmpty) {
         throw Exception(
           'No streamable audio files (.mp3, .m4b, .flac, …) in this torrent',
         );
       }
+
+      final covers = files
+          .where((f) => f.isStreamable && _isCoverFileName(f.name))
+          .toList();
+      _sortCoverCandidates(covers);
 
       var titleGuess = 'Magnet audiobook';
       try {
@@ -105,7 +166,11 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       _titleController.text = titleGuess;
 
       setState(() {
-        _audioFiles = audio;
+        _orderedAudioFiles = List<FileInfo>.from(audio);
+        _coverArtFiles = covers;
+        _selectedCoverTorrentIndex =
+            covers.isEmpty ? null : covers.first.index;
+        _selectedFileIndexes.clear();
         for (final f in audio) {
           _selectedFileIndexes.add(f.index);
         }
@@ -162,6 +227,31 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
     });
   }
 
+  void _moveAudioUp(int position) {
+    if (position <= 0) return;
+    setState(() {
+      final t = _orderedAudioFiles[position - 1];
+      _orderedAudioFiles[position - 1] = _orderedAudioFiles[position];
+      _orderedAudioFiles[position] = t;
+    });
+  }
+
+  void _moveAudioDown(int position) {
+    if (position >= _orderedAudioFiles.length - 1) return;
+    setState(() {
+      final t = _orderedAudioFiles[position + 1];
+      _orderedAudioFiles[position + 1] = _orderedAudioFiles[position];
+      _orderedAudioFiles[position] = t;
+    });
+  }
+
+  String? _coverNameForTorrentIndex(int index) {
+    for (final c in _coverArtFiles) {
+      if (c.index == index) return c.name;
+    }
+    return null;
+  }
+
   void _confirmAdd() {
     final magnet = _magnetController.text.trim();
     final hash = _hashFromMagnet(magnet);
@@ -169,10 +259,9 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       setState(() => _error = 'Magnet has no btih hash');
       return;
     }
-    final selected = _audioFiles
+    final selected = _orderedAudioFiles
         .where((f) => _selectedFileIndexes.contains(f.index))
-        .toList()
-      ..sort((a, b) => a.index.compareTo(b.index));
+        .toList();
     if (selected.isEmpty) {
       setState(() => _error = 'Select at least one audio file');
       return;
@@ -181,6 +270,9 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
     final title = _titleController.text.trim().isEmpty
         ? 'Magnet audiobook'
         : _titleController.text.trim();
+
+    final coverIdx = _selectedCoverTorrentIndex;
+    final coverName = coverIdx != null ? _coverNameForTorrentIndex(coverIdx) : null;
 
     final book = Audiobook(
       uuid: 'magnet_$hash',
@@ -192,6 +284,8 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       magnetLink: magnet,
       magnetTracks:
           selected.map((f) => {'title': f.name, 'fileIndex': f.index}).toList(),
+      magnetCoverFileIndex: coverIdx,
+      magnetCoverFileName: coverName,
     );
     Navigator.pop(context, book);
   }
@@ -223,7 +317,8 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                       borderRadius: BorderRadius.circular(12),
                       onTap: () {
                         final m = _magnetController.text.trim();
-                        if (m.startsWith('magnet:') && _audioFiles.isNotEmpty) {
+                        if (m.startsWith('magnet:') &&
+                            _orderedAudioFiles.isNotEmpty) {
                           TorrentStreamService().removeTorrent(m);
                         }
                         Navigator.pop(context);
@@ -302,7 +397,7 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                   ],
                 ),
               ),
-              if (_audioFiles.isNotEmpty)
+              if (_orderedAudioFiles.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                   child: TextField(
@@ -318,6 +413,48 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                     ),
                   ),
                 ),
+              if (_coverArtFiles.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Cover art (optional)',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('None'),
+                            selected: _selectedCoverTorrentIndex == null,
+                            onSelected: (_) => setState(
+                                () => _selectedCoverTorrentIndex = null),
+                          ),
+                          ..._coverArtFiles.map((f) {
+                            final on = _selectedCoverTorrentIndex == f.index;
+                            return ChoiceChip(
+                              label: Text(
+                                p.basename(f.name),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              selected: on,
+                              onSelected: (_) => setState(
+                                  () => _selectedCoverTorrentIndex = f.index),
+                            );
+                          }),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.all(20),
@@ -325,11 +462,11 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                       Text(_error!, style: const TextStyle(color: Colors.redAccent)),
                 ),
               Expanded(
-                child: _audioFiles.isEmpty
+                child: _orderedAudioFiles.isEmpty
                     ? Center(
                         child: Text(
                           'Paste a magnet for an audiobook torrent,\n'
-                          'tap Fetch, choose files, then add.',
+                          'tap Fetch, choose files, reorder if needed, then add.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.45)),
@@ -337,9 +474,9 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                       )
                     : ListView.builder(
                         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                        itemCount: _audioFiles.length,
+                        itemCount: _orderedAudioFiles.length,
                         itemBuilder: (_, i) {
-                          final f = _audioFiles[i];
+                          final f = _orderedAudioFiles[i];
                           final on = _selectedFileIndexes.contains(f.index);
                           return Card(
                             color: AppTheme.bgCard,
@@ -350,44 +487,87 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                                     on ? AppTheme.primaryColor : Colors.white12,
                               ),
                             ),
-                            child: TvInkWell(
-                              onTap: () => _toggleFile(f.index),
-                              borderRadius: BorderRadius.circular(12),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      on
-                                          ? Icons.check_circle_rounded
-                                          : Icons.circle_outlined,
-                                      color: on
-                                          ? AppTheme.primaryColor
-                                          : Colors.white38,
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        f.name,
-                                        style: const TextStyle(
-                                            color: Colors.white, fontSize: 13),
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 4, right: 4),
+                              child: Row(
+                                children: [
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        icon: Icon(
+                                          Icons.arrow_upward_rounded,
+                                          color: i > 0
+                                              ? Colors.white54
+                                              : Colors.white12,
+                                          size: 20,
+                                        ),
+                                        onPressed:
+                                            i > 0 ? () => _moveAudioUp(i) : null,
+                                      ),
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        icon: Icon(
+                                          Icons.arrow_downward_rounded,
+                                          color: i <
+                                                  _orderedAudioFiles.length - 1
+                                              ? Colors.white54
+                                              : Colors.white12,
+                                          size: 20,
+                                        ),
+                                        onPressed: i <
+                                                _orderedAudioFiles.length - 1
+                                            ? () => _moveAudioDown(i)
+                                            : null,
+                                      ),
+                                    ],
+                                  ),
+                                  Expanded(
+                                    child: TvInkWell(
+                                      onTap: () => _toggleFile(f.index),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 10),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              on
+                                                  ? Icons.check_circle_rounded
+                                                  : Icons.circle_outlined,
+                                              color: on
+                                                  ? AppTheme.primaryColor
+                                                  : Colors.white38,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                f.name,
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 13),
+                                              ),
+                                            ),
+                                            Text(
+                                              _formatSize(f.size),
+                                              style: const TextStyle(
+                                                  color: Colors.white38,
+                                                  fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
-                                    Text(
-                                      _formatSize(f.size),
-                                      style: const TextStyle(
-                                          color: Colors.white38, fontSize: 12),
-                                    ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
                           );
                         },
                       ),
               ),
-              if (_audioFiles.isNotEmpty)
+              if (_orderedAudioFiles.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                   child: ElevatedButton.icon(

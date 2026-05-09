@@ -16,6 +16,10 @@ class Audiobook {
   final String? magnetLink;
   /// Serialized chapter list: `[{"title":"…","fileIndex":int}]`
   final List<Map<String, dynamic>>? magnetTracks;
+  /// Optional torrent file index for embedded cover art (jpg/png/webp).
+  final int? magnetCoverFileIndex;
+  /// Basename of cover file in the torrent (used when downloading).
+  final String? magnetCoverFileName;
 
   Audiobook({
     required this.uuid,
@@ -27,10 +31,17 @@ class Audiobook {
     this.pageUrl,
     this.magnetLink,
     this.magnetTracks,
+    this.magnetCoverFileIndex,
+    this.magnetCoverFileName,
   });
 
   String get thumbUrl {
-    if (source == 'magnet') return '';
+    if (source == 'magnet') {
+      final c = coverImage.trim();
+      if (c.isEmpty) return '';
+      if (c.startsWith('http://') || c.startsWith('https://')) return c;
+      return c;
+    }
     if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks' || source == 'ezaudiobookforsoul') return coverImage;
     return 'https://tokybook.com/images/$audioBookId';
   }
@@ -53,6 +64,10 @@ class Audiobook {
       pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook' || source == 'ezaudiobookforsoul') ? uuid : null),
       magnetLink: json['magnetLink'] as String?,
       magnetTracks: magnetTracks,
+      magnetCoverFileIndex: json['magnetCoverFileIndex'] is int
+          ? json['magnetCoverFileIndex'] as int
+          : int.tryParse('${json['magnetCoverFileIndex'] ?? ''}'),
+      magnetCoverFileName: json['magnetCoverFileName'] as String?,
     );
   }
 
@@ -67,6 +82,8 @@ class Audiobook {
       'pageUrl': pageUrl,
       if (magnetLink != null) 'magnetLink': magnetLink,
       if (magnetTracks != null) 'magnetTracks': magnetTracks,
+      if (magnetCoverFileIndex != null) 'magnetCoverFileIndex': magnetCoverFileIndex,
+      if (magnetCoverFileName != null) 'magnetCoverFileName': magnetCoverFileName,
     };
   }
 }

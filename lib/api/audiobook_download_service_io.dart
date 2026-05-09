@@ -126,6 +126,46 @@ class AudiobookDownloadService {
     return bases.toList();
   }
 
+  String _coverOutputBasename(Audiobook book) {
+    if (book.source != 'magnet') return 'cover.jpg';
+    if (book.magnetCoverFileIndex == null) return 'cover.jpg';
+    final n = book.magnetCoverFileName?.toLowerCase() ?? '';
+    if (n.endsWith('.png')) return 'cover.png';
+    if (n.endsWith('.webp')) return 'cover.webp';
+    if (n.endsWith('.jpeg') || n.endsWith('.jpg')) return 'cover.jpg';
+    return 'cover.jpg';
+  }
+
+  Future<void> _saveAudiobookCover(Audiobook book, String coverPath) async {
+    if (book.source == 'magnet') {
+      if (book.magnetCoverFileIndex != null && book.magnetLink != null) {
+        final torrent = TorrentStreamService();
+        final started = await torrent.start();
+        if (started) {
+          final url = await torrent.streamAudiobookFile(
+            book.magnetLink!,
+            book.magnetCoverFileIndex!,
+          );
+          if (url != null && url.isNotEmpty) {
+            final bytes = await _downloadDirectChapter(
+              AudiobookChapter(
+                title: book.magnetCoverFileName ?? 'cover',
+                url: url,
+              ),
+            );
+            if (bytes != null && bytes.isNotEmpty) {
+              await File(coverPath).writeAsBytes(bytes);
+              return;
+            }
+          }
+        }
+      }
+      await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
+      return;
+    }
+    await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
+  }
+
   String _sanitizeFileName(String name) {
     return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
   }
@@ -173,12 +213,9 @@ class AudiobookDownloadService {
 
     try {
       // 1. Download cover image
-      final coverPath = p.join(bookDir.path, 'cover.jpg');
-      if (book.source == 'magnet') {
-        await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
-      } else {
-        await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
-      }
+      final coverFileName = _coverOutputBasename(book);
+      final coverPath = p.join(bookDir.path, coverFileName);
+      await _saveAudiobookCover(book, coverPath);
 
       if (_cancelledIds.contains(id)) {
         await _cleanup(bookDir, id);
@@ -335,13 +372,10 @@ class AudiobookDownloadService {
       }
 
       // Download cover if not present
-      final coverPath = p.join(bookDir.path, 'cover.jpg');
+      final coverFileName = _coverOutputBasename(book);
+      final coverPath = p.join(bookDir.path, coverFileName);
       if (!File(coverPath).existsSync()) {
-        if (book.source == 'magnet') {
-          await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
-        } else {
-          await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
-        }
+        await _saveAudiobookCover(book, coverPath);
       }
 
       // Download the chapter
@@ -386,7 +420,7 @@ class AudiobookDownloadService {
       data = {
         'book': book.toJson(),
         'chapters': [],
-        'coverFile': 'cover.jpg',
+        'coverFile': _coverOutputBasename(book),
         'totalSizeBytes': 0,
         'downloadedAt': DateTime.now().millisecondsSinceEpoch,
       };
