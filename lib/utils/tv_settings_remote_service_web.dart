@@ -11,5 +11,6 @@ class TvSettingsRemoteService {
 
   Future<void> ensureStarted() async {}
   Future<void> refreshLanIp() async {}
+  Future<void> restart() async {}
   Future<void> stop() async {}
 }

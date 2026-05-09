@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/trakt_service.dart';
 import '../api/simkl_service.dart';
+import 'playtorrio_cloud_sync_service.dart';
 
 /// Persisted "My List" service — stores movies & shows the user bookmarks.
 /// Works with both TMDB [Movie] objects and Stremio catalog Map items.
@@ -28,7 +29,8 @@ class MyListService {
   factory MyListService() => _instance;
   MyListService._internal() { _init(); }
 
-  static const String _key = 'my_list_items';
+  /// SharedPreferences key (mirrored to Supabase when settings sync is on).
+  static const String prefsKey = 'my_list_items';
 
   final _controller = StreamController<List<Map<String, dynamic>>>.broadcast();
   List<Map<String, dynamic>> _items = [];
@@ -47,7 +49,7 @@ class MyListService {
   Future<void> _init() async {
     if (_loaded) return;
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
+    final raw = prefs.getString(prefsKey);
     if (raw != null) {
       try {
         _items = List<Map<String, dynamic>>.from(
@@ -64,7 +66,28 @@ class MyListService {
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, json.encode(_items));
+    await prefs.setString(prefsKey, json.encode(_items));
+    _notify();
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+  }
+
+  /// Reload list from disk after cloud merge (same process).
+  Future<void> reloadFromPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(prefsKey);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        _items = List<Map<String, dynamic>>.from(
+          (json.decode(raw) as List)
+              .map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      } catch (e) {
+        debugPrint('[MyList] reload decode failed: $e');
+      }
+    } else {
+      _items = [];
+    }
+    _loaded = true;
     _notify();
   }
 

@@ -28,6 +28,8 @@ import '../../api/webstreamr_service.dart';
 import '../../api/arabic_service.dart';
 import '../../api/stremio_service.dart';
 import '../../api/stream_providers.dart';
+import '../../api/vidsrc_extractor.dart';
+import '../../api/videasy_extractor.dart';
 import '../../api/settings_service.dart';
 import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
@@ -39,6 +41,7 @@ import '../../utils/mpv_http_headers.dart';
 import '../../utils/stremio_hls_playback.dart';
 import '../../utils/stremio_stream_headers.dart';
 import '../player_screen.dart';
+import '../../widgets/tv_interactive.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASSY WIDGET PRIMITIVES  (MPVEx-style frosted black glass)
@@ -405,6 +408,10 @@ class DesktopPlayerScreen extends StatefulWidget {
   final String? stremioAddonBaseUrl;
   final String stremioStreamType;
   final Map<String, dynamic>? providers;
+  final Future<void> Function(Duration position, Duration duration)?
+      onPlaybackProgress;
+  final bool hasCustomNextEpisode;
+  final VoidCallback? onCustomNextEpisode;
 
   const DesktopPlayerScreen({
     super.key,
@@ -425,6 +432,9 @@ class DesktopPlayerScreen extends StatefulWidget {
     this.stremioAddonBaseUrl,
     this.stremioStreamType = 'series',
     this.providers,
+    this.onPlaybackProgress,
+    this.hasCustomNextEpisode = false,
+    this.onCustomNextEpisode,
   });
 
   @override
@@ -725,9 +735,20 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   }
 
   void _checkpointResumeSnapshot() {
-    if (_disposed || widget.movie == null || _isStremioLiveTv) return;
-    final pos = _positionNotifier.value.inMilliseconds;
-    final dur = _durationNotifier.value.inMilliseconds;
+    if (_disposed || _isStremioLiveTv) return;
+    final posMs = _positionNotifier.value.inMilliseconds;
+    final durMs = _durationNotifier.value.inMilliseconds;
+    final cb = widget.onPlaybackProgress;
+    if (cb != null && durMs > 0) {
+      unawaited(cb(
+        Duration(milliseconds: posMs),
+        Duration(milliseconds: durMs),
+      ));
+    }
+
+    if (widget.movie == null) return;
+    final pos = posMs;
+    final dur = durMs;
     if (pos < 15000 || dur <= 0) return;
 
     final isTorrent = widget.magnetLink != null;
@@ -2318,10 +2339,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   // ───────────────────────────────────────────────────────────────────────────
 
   bool get _isNextEpisodeAvailable =>
-      widget.movie != null &&
-      widget.movie!.mediaType == 'tv' &&
-      widget.selectedSeason != null &&
-      widget.selectedEpisode != null;
+      (widget.onCustomNextEpisode != null && widget.hasCustomNextEpisode) ||
+      (widget.movie != null &&
+          widget.movie!.mediaType == 'tv' &&
+          widget.selectedSeason != null &&
+          widget.selectedEpisode != null);
 
   bool get _showNextEpButton =>
       _isNextEpisodeAvailable && (_nearEndOfEpisode || _isLoadingNextEp);
@@ -2329,6 +2351,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
   Future<void> _nextEpisode() async {
     if (!_isNextEpisodeAvailable || _isLoadingNextEp) return;
     _cancelNextEpisodeCountdown();
+
+    if (widget.onCustomNextEpisode != null && widget.hasCustomNextEpisode) {
+      widget.onCustomNextEpisode!();
+      return;
+    }
 
     setState(() => _isLoadingNextEp = true);
 
@@ -2536,6 +2563,32 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           episode: nextEpisode,
         );
         if (result == null) throw Exception('AMRI extraction failed for S${nextSeason}E$nextEpisode');
+        streamUrl = result.url;
+        headers = result.headers.isNotEmpty ? result.headers : null;
+      } else if (widget.activeProvider == 'vidsrc') {
+        final ext = VidsrcExtractor();
+        final result = await ext.extract(
+          tmdbId: widget.movie!.id.toString(),
+          isMovie: false,
+          season: nextSeason,
+          episode: nextEpisode,
+        );
+        if (result == null) {
+          throw Exception('Vidsrc failed for S${nextSeason}E$nextEpisode');
+        }
+        streamUrl = result.url;
+        headers = result.headers.isNotEmpty ? result.headers : null;
+      } else if (widget.activeProvider == 'videasy') {
+        final ext = VideasyExtractor(onLog: (m) => debugPrint(m));
+        final result = await ext.extract(
+          tmdbId: widget.movie!.id.toString(),
+          isMovie: false,
+          season: nextSeason,
+          episode: nextEpisode,
+        );
+        if (result == null) {
+          throw Exception('Videasy failed for S${nextSeason}E$nextEpisode');
+        }
         streamUrl = result.url;
         headers = result.headers.isNotEmpty ? result.headers : null;
       } else if (widget.activeProvider != null) {
@@ -3100,7 +3153,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
           child: Material(
             color: Colors.transparent,
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              InkWell(
+              TvInkWell(
                 onTap: _performSkip,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
@@ -3164,7 +3217,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                           ),
                         ),
                         const SizedBox(width: 10),
-                        InkWell(
+                        TvInkWell(
                           onTap: _cancelNextEpisodeCountdown,
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
@@ -3188,7 +3241,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen>
                       ],
                     ),
                   ),
-                InkWell(
+                TvInkWell(
                   onTap: _isLoadingNextEp ? null : _nextEpisode,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(

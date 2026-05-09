@@ -54,7 +54,7 @@ class DownloadedAudiobook {
     return {
       'book': book.toJson(),
       'chapters': chapters.map((c) => c.toJson()).toList(),
-      'coverFile': 'cover.jpg',
+      'coverFile': p.basename(coverPath),
       'totalSizeBytes': totalSizeBytes,
       'downloadedAt': downloadedAt.millisecondsSinceEpoch,
     };

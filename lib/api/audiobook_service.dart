@@ -12,6 +12,14 @@ class Audiobook {
   final String coverImage;
   final String? source;
   final String? pageUrl;
+  /// When [source] is `magnet`, full magnet URI for torrent-backed audiobooks.
+  final String? magnetLink;
+  /// Serialized chapter list: `[{"title":"…","fileIndex":int}]`
+  final List<Map<String, dynamic>>? magnetTracks;
+  /// Optional torrent file index for embedded cover art (jpg/png/webp).
+  final int? magnetCoverFileIndex;
+  /// Basename of cover file in the torrent (used when downloading).
+  final String? magnetCoverFileName;
 
   Audiobook({
     required this.uuid,
@@ -21,9 +29,19 @@ class Audiobook {
     required this.coverImage,
     this.source = 'tokybook',
     this.pageUrl,
+    this.magnetLink,
+    this.magnetTracks,
+    this.magnetCoverFileIndex,
+    this.magnetCoverFileName,
   });
 
   String get thumbUrl {
+    if (source == 'magnet') {
+      final c = coverImage.trim();
+      if (c.isEmpty) return '';
+      if (c.startsWith('http://') || c.startsWith('https://')) return c;
+      return c;
+    }
     if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks' || source == 'ezaudiobookforsoul') return coverImage;
     return 'https://tokybook.com/images/$audioBookId';
   }
@@ -31,6 +49,11 @@ class Audiobook {
   factory Audiobook.fromJson(Map<String, dynamic> json) {
     final source = json['source'] ?? 'tokybook';
     final uuid = json['uuid'] ?? '';
+    List<Map<String, dynamic>>? magnetTracks;
+    final rawMt = json['magnetTracks'];
+    if (rawMt is List) {
+      magnetTracks = rawMt.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
     return Audiobook(
       uuid: uuid,
       audioBookId: json['audioBookId'] ?? '',
@@ -39,6 +62,12 @@ class Audiobook {
       coverImage: json['coverImage'] ?? '',
       source: source,
       pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook' || source == 'ezaudiobookforsoul') ? uuid : null),
+      magnetLink: json['magnetLink'] as String?,
+      magnetTracks: magnetTracks,
+      magnetCoverFileIndex: json['magnetCoverFileIndex'] is int
+          ? json['magnetCoverFileIndex'] as int
+          : int.tryParse('${json['magnetCoverFileIndex'] ?? ''}'),
+      magnetCoverFileName: json['magnetCoverFileName'] as String?,
     );
   }
 
@@ -51,6 +80,10 @@ class Audiobook {
       'coverImage': coverImage,
       'source': source,
       'pageUrl': pageUrl,
+      if (magnetLink != null) 'magnetLink': magnetLink,
+      if (magnetTracks != null) 'magnetTracks': magnetTracks,
+      if (magnetCoverFileIndex != null) 'magnetCoverFileIndex': magnetCoverFileIndex,
+      if (magnetCoverFileName != null) 'magnetCoverFileName': magnetCoverFileName,
     };
   }
 }
@@ -59,8 +92,15 @@ class AudiobookChapter {
   final String title;
   final String url;
   final Map<String, String>? headers;
+  /// Torrent file index when playing from a magnet audiobook (URLs resolved later).
+  final int? torrentFileIndex;
 
-  AudiobookChapter({required this.title, required this.url, this.headers});
+  AudiobookChapter({
+    required this.title,
+    required this.url,
+    this.headers,
+    this.torrentFileIndex,
+  });
 }
 
 class AudiobookService {
@@ -332,7 +372,28 @@ class AudiobookService {
     return [];
   }
 
+  static int? _torrentFileIndexFromJson(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    if (raw is num) return raw.round();
+    return int.tryParse(raw.toString());
+  }
+
   Future<List<AudiobookChapter>> getChapters(Audiobook book) async {
+    if (book.source == 'magnet' &&
+        book.magnetLink != null &&
+        book.magnetTracks != null &&
+        book.magnetTracks!.isNotEmpty) {
+      return book.magnetTracks!.map((m) {
+        final idx = _torrentFileIndexFromJson(m['fileIndex']);
+        return AudiobookChapter(
+          title: '${m['title'] ?? 'Track'}',
+          url: '',
+          torrentFileIndex: idx,
+        );
+      }).toList();
+    }
     if (book.source == 'goldenaudiobook') {
       return _getGoldenChapters(book);
     }
