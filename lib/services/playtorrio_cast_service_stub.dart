@@ -37,6 +37,7 @@ class PlaytorrioCastService {
     Duration startPosition = Duration.zero,
     Map<String, String>? headers,
     VoidCallback? onCastStarted,
+    bool preferAndroidHwTranscode = false,
   }) async {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

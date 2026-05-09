@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_chrome_cast/flutter_chrome_cast.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../api/local_server_service.dart';
+import 'cast_hw_transcode_android.dart';
+
 /// Google Cast (Chromecast) sender — Android + iOS (including Android TV).
 class PlaytorrioCastService {
   PlaytorrioCastService._();
@@ -111,6 +114,7 @@ class PlaytorrioCastService {
     } catch (e, st) {
       debugPrint('[Cast] stopCasting: $e\n$st');
     }
+    await CastHwTranscodeCoordinator.instance.disposeActive();
   }
 
   /// Rough hint for UI: Cast receiver appears to be playing or trying to play.
@@ -235,6 +239,30 @@ class PlaytorrioCastService {
     throw StateError('Timed out connecting to the Cast device.');
   }
 
+  Future<String> _resolveCastUrlForPlayback({
+    required String streamUrl,
+    Map<String, String>? headers,
+    required bool preferAndroidHwTranscode,
+  }) async {
+    await LocalServerService().start();
+    if (preferAndroidHwTranscode && Platform.isAndroid) {
+      final hw = await androidHwTranscodeCastUrlIfEnabled(
+        inputUrl: streamUrl,
+        headers: headers,
+        enabled: true,
+      );
+      if (hw != null && hw.isNotEmpty) {
+        return hw;
+      }
+    }
+    var castUrl = streamUrl.trim();
+    final lanUrl = await LocalServerService().urlWithLanHostForCast(castUrl);
+    if (lanUrl != null && lanUrl.isNotEmpty) {
+      castUrl = lanUrl;
+    }
+    return castUrl;
+  }
+
   Future<void> openCastSheet({
     required BuildContext context,
     required String streamUrl,
@@ -245,6 +273,7 @@ class PlaytorrioCastService {
     Duration startPosition = Duration.zero,
     Map<String, String>? headers,
     VoidCallback? onCastStarted,
+    bool preferAndroidHwTranscode = false,
   }) async {
     if (!_initialized) {
       for (var attempt = 0; attempt < 6 && !_initialized; attempt++) {
@@ -277,8 +306,7 @@ class PlaytorrioCastService {
       return;
     }
 
-    final uri = Uri.tryParse(streamUrl.trim());
-    if (uri == null || !uri.hasScheme) {
+    if (Uri.tryParse(streamTrim)?.hasScheme != true) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Invalid stream URL for casting.')),
@@ -305,6 +333,16 @@ class PlaytorrioCastService {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
+        Future<String>? resolvedCastUrlFuture;
+        Future<String> ensureResolvedCastUrl() async {
+          resolvedCastUrlFuture ??= _resolveCastUrlForPlayback(
+            streamUrl: streamTrim,
+            headers: headers,
+            preferAndroidHwTranscode: preferAndroidHwTranscode,
+          );
+          return resolvedCastUrlFuture!;
+        }
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           child: Column(
@@ -330,6 +368,19 @@ class PlaytorrioCastService {
                   ),
                 ],
               ),
+              if (preferAndroidHwTranscode && Platform.isAndroid)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'Hardware transcoding on this phone is enabled for Chromecast. '
+                    'The first TV you pick may take a few seconds while HLS segments are generated.',
+                    style: TextStyle(
+                      color: Colors.cyanAccent.withValues(alpha: 0.82),
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
               if (headers != null && headers.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
@@ -378,6 +429,15 @@ class PlaytorrioCastService {
                           onTap: () async {
                             Navigator.pop(ctx);
                             try {
+                              final resolvedUrl = await ensureResolvedCastUrl();
+                              final castUri = Uri.tryParse(resolvedUrl.trim());
+                              if (castUri == null || !castUri.hasScheme) {
+                                throw StateError('Invalid resolved cast URL.');
+                              }
+                              final castBuffered =
+                                  resolvedUrl.contains('/cast-hw/');
+                              final effectiveLive =
+                                  liveStream && !castBuffered;
                               final ok = await GoogleCastSessionManager.instance
                                   .startSessionWithDevice(d);
                               if (!ok) {
@@ -386,17 +446,18 @@ class PlaytorrioCastService {
                               await _waitConnected();
                               await GoogleCastRemoteMediaClient.instance.loadMedia(
                                 _mediaInfo(
-                                  uri: uri,
+                                  uri: castUri,
                                   title: title,
                                   subtitle: subtitle,
                                   poster: posterUri,
-                                  live: liveStream,
-                                  headers: headers,
+                                  live: effectiveLive,
+                                  headers:
+                                      castBuffered ? null : headers,
                                 ),
                                 autoPlay: true,
-                                // Live streams use infinite timeline; local player position is meaningless.
-                                playPosition:
-                                    liveStream ? Duration.zero : startPosition,
+                                playPosition: effectiveLive
+                                    ? Duration.zero
+                                    : startPosition,
                               );
                               onCastStarted?.call();
                               if (rootContext.mounted) {
@@ -407,6 +468,8 @@ class PlaytorrioCastService {
                                 );
                               }
                             } catch (e) {
+                              await CastHwTranscodeCoordinator.instance
+                                  .disposeActive();
                               if (rootContext.mounted) {
                                 ScaffoldMessenger.of(rootContext).showSnackBar(
                                   SnackBar(content: Text('Cast failed: $e')),

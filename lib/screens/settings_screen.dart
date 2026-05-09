@@ -122,6 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipButton = true;
   bool _autoEnterPipAndroid = false;
+  bool _androidCastHwTranscode = false;
   bool _builtinPlayerSubtitlesEnabled = true;
   bool _autoAdvanceNextEpisode = false;
 
@@ -263,6 +264,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final bgPlay = await _settings.continuePlaybackInBackground();
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
+    final castHw =
+        platformIsAndroid ? await _settings.androidCastHwTranscodeEnabled() : false;
     final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
     final autoNextEp = await _settings.getAutoAdvanceNextEpisode();
     final tvBitrateCap = platformIsAndroid && DeviceProfile.isAndroidTv
@@ -348,6 +351,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _continuePlaybackInBackground = bgPlay;
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
+        _androidCastHwTranscode = castHw;
         _builtinPlayerSubtitlesEnabled = builtinSubs;
         _autoAdvanceNextEpisode = autoNextEp;
         if (platformIsAndroid && DeviceProfile.isAndroidTv) {
@@ -748,6 +752,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           (val) async {
                             await _settings.setAutoEnterPipAndroid(val);
                             setState(() => _autoEnterPipAndroid = val);
+                          },
+                        ),
+                        _buildFocusableToggle(
+                          'Chromecast: hardware transcode on phone (Android)',
+                          'Experimental. Uses the phone GPU (MediaCodec H.264) to produce Cast-friendly HLS when direct casting fails. Increases battery use and adds APK size (FFmpeg Kit).',
+                          _androidCastHwTranscode,
+                          (val) async {
+                            await _settings.setAndroidCastHwTranscodeEnabled(val);
+                            setState(() => _androidCastHwTranscode = val);
                           },
                         ),
                       ],

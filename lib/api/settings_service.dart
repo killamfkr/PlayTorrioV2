@@ -215,6 +215,8 @@ class SettingsService {
   static const String _showAndroidPipButtonKey = 'playback_show_android_pip_button';
   /// Android 12+: enter PiP automatically when user leaves the app while playing.
   static const String _autoEnterPipAndroidKey = 'playback_auto_pip_android';
+  /// Android only: remux/transcode on phone with hardware H.264 for Chromecast.
+  static const String _androidCastHwTranscodeKey = 'android_cast_hw_transcode';
   /// Built-in player: show embedded / external subtitles (Flutter overlay + mpv track).
   static const String _builtinPlayerSubtitlesEnabledKey =
       'playback_builtin_subtitles_enabled';
@@ -518,6 +520,16 @@ class SettingsService {
   Future<void> setAutoEnterPipAndroid(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_autoEnterPipAndroidKey, value);
+  }
+
+  Future<bool> androidCastHwTranscodeEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_androidCastHwTranscodeKey) ?? false;
+  }
+
+  Future<void> setAndroidCastHwTranscodeEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_androidCastHwTranscodeKey, value);
   }
 
   Future<bool> getBuiltinPlayerSubtitlesEnabled() async {

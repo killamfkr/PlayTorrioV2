@@ -20,3 +20,7 @@
 -keepclassmembers class * implements com.google.android.gms.cast.framework.OptionsProvider {
     <methods>;
 }
+
+# FFmpeg Kit (Android HW transcode path for Chromecast)
+-keep class com.arthenica.** { *; }
+-dontwarn com.arthenica.**

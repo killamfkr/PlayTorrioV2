@@ -7,6 +7,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import '../scrapers/scraper_aggregator.dart';
 
 class LocalServerService {
@@ -27,6 +28,9 @@ class LocalServerService {
   final math.Random _hlsSessionRandom = math.Random.secure();
   String? _hlsHeadersJsonCache;
   String? _hlsHeadersTokenCache;
+
+  /// Output dirs for Android HW-transcoded HLS (`/cast-hw/<id>/…`).
+  final Map<String, String> _castHwSessionRoots = {};
 
   int get port => _port;
 
@@ -92,6 +96,14 @@ class LocalServerService {
     return out;
   }
 
+  void registerCastHwSession(String sessionId, String absoluteOutputDir) {
+    _castHwSessionRoots[sessionId] = absoluteOutputDir;
+  }
+
+  void unregisterCastHwSession(String sessionId) {
+    _castHwSessionRoots.remove(sessionId);
+  }
+
   Future<void> start() async {
     if (_server != null) return;
 
@@ -107,6 +119,7 @@ class LocalServerService {
   }
 
   void _setupRoutes() {
+    _router.get('/cast-hw/<session>/<file>', _handleCastHwFile);
     _router.get('/api/ultimate', (Request request) async {
       final params = request.url.queryParameters;
       final query = params['query'];
@@ -705,6 +718,45 @@ class LocalServerService {
     return '$origin/hls-proxy'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&hdr=${Uri.encodeComponent(hdrToken)}';
+  }
+
+  Future<Response> _handleCastHwFile(
+    Request request,
+    String session,
+    String file,
+  ) async {
+    final root = _castHwSessionRoots[session];
+    if (root == null) {
+      return Response.notFound('cast-hw session');
+    }
+    final safe = p.basename(file);
+    if (safe.isEmpty || safe == '.' || safe == '..') {
+      return Response.forbidden('bad file');
+    }
+    final rootCanon = p.normalize(root);
+    final full = p.normalize(p.join(root, safe));
+    if (!full.startsWith(rootCanon)) {
+      return Response.forbidden('path escape');
+    }
+    final f = File(full);
+    if (!await f.exists()) {
+      return Response.notFound('missing');
+    }
+    final bytes = await f.readAsBytes();
+    final lower = safe.toLowerCase();
+    final ct = lower.endsWith('.m3u8')
+        ? 'application/vnd.apple.mpegurl'
+        : lower.endsWith('.ts')
+            ? 'video/mp2t'
+            : 'application/octet-stream';
+    return Response.ok(
+      bytes,
+      headers: {
+        'Content-Type': ct,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      },
+    );
   }
 
   Future<void> stop() async {

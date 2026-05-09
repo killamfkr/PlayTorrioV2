@@ -14,7 +14,6 @@ import '../../../../api/settings_service.dart';
 import '../../../../platform_flags.dart';
 import '../../../../services/built_in_video_media_session.dart';
 import '../../../../services/playtorrio_cast_service.dart';
-import '../../../../api/local_server_service.dart';
 import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 import '../../../../widgets/tv_interactive.dart';
@@ -618,24 +617,20 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   Future<void> _openPtCast() async {
-    var castUrl = widget.sources[_sourceIdx].url;
-    try {
-      await LocalServerService().start();
-      final lanUrl =
-          await LocalServerService().urlWithLanHostForCast(castUrl);
-      if (lanUrl != null && lanUrl.isNotEmpty) {
-        castUrl = lanUrl;
-      }
-    } catch (_) {}
+    final url = widget.sources[_sourceIdx].url;
+    await PlaytorrioCastService.instance.initialize();
+    final hwPref =
+        Platform.isAndroid && await SettingsService().androidCastHwTranscodeEnabled();
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: castUrl,
+      streamUrl: url,
       title: widget.title,
       subtitle: widget.subtitle,
       posterUrl: widget.logoUrl,
       liveStream: true,
       startPosition: Duration.zero,
       headers: null,
+      preferAndroidHwTranscode: hwPref,
       onCastStarted: () {
         if (mounted) unawaited(_player.pause());
       },
