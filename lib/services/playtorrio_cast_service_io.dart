@@ -151,14 +151,22 @@ class PlaytorrioCastService {
     VoidCallback? onCastStarted,
   }) async {
     if (!_initialized) {
-      await retryInitialize();
+      for (var attempt = 0; attempt < 3 && !_initialized; attempt++) {
+        await retryInitialize();
+        if (!_initialized && attempt < 2) {
+          await Future.delayed(const Duration(milliseconds: 400));
+        }
+      }
     }
     if (!_initialized) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Chromecast is not ready. Check Wi‑Fi and local network access, then try again.',
+              Platform.isAndroid
+                  ? 'Chromecast could not start. Ensure Google Play services are installed and updated, '
+                      'and that this build includes Cast setup in AndroidManifest.'
+                  : 'Chromecast could not start. Allow local network access for PlayTorrio in Settings → Privacy.',
             ),
           ),
         );

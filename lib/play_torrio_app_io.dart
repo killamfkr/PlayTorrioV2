@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -9,6 +11,7 @@ import 'utils/tv_guide_refresh.dart';
 import 'utils/device_profile.dart';
 import 'utils/tv_material_scroll_behavior.dart';
 import 'platform_flags.dart';
+import 'services/playtorrio_cast_service.dart';
 
 import 'play_torrio_splash.dart';
 import 'screens/playtorrio_profile_gate.dart';
@@ -28,6 +31,11 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
     if (platformIsDesktop) {
       windowManager.addListener(this);
       windowManager.setPreventClose(true);
+    }
+    if (platformIsAndroid || platformIsIOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(PlaytorrioCastService.instance.initialize());
+      });
     }
   }
 
