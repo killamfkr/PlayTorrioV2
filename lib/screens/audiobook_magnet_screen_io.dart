@@ -146,7 +146,7 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       }
 
       final covers = files
-          .where((f) => f.isStreamable && _isCoverFileName(f.name))
+          .where((f) => _isCoverFileName(f.name))
           .toList();
       _sortCoverCandidates(covers);
 

@@ -199,7 +199,11 @@ class TorrentStreamService {
 
   /// HTTP stream URL for one torrent file — keeps the torrent loaded so multiple
   /// files (audiobook chapters) can be streamed without re-adding the magnet.
-  Future<String?> streamAudiobookFile(String magnetLink, int fileIdx) async {
+  Future<String?> streamAudiobookFile(
+    String magnetLink,
+    int fileIdx, {
+    bool allowNonStreamable = false,
+  }) async {
     if (_state != EngineState.ready) {
       final started = await start();
       if (!started) {
@@ -247,7 +251,7 @@ class TorrentStreamService {
           break;
         }
       }
-      if (fi == null || !fi.isStreamable) {
+      if (fi == null || (!allowNonStreamable && !fi.isStreamable)) {
         _log('Audiobook: file index $fileIdx not streamable');
         return null;
       }

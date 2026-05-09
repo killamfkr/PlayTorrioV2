@@ -145,6 +145,7 @@ class AudiobookDownloadService {
           final url = await torrent.streamAudiobookFile(
             book.magnetLink!,
             book.magnetCoverFileIndex!,
+            allowNonStreamable: true,
           );
           if (url != null && url.isNotEmpty) {
             final bytes = await _downloadDirectChapter(
