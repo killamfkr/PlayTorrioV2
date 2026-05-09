@@ -96,11 +96,21 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
   int? _selectedCoverTorrentIndex;
   final Set<int> _selectedFileIndexes = {};
 
+  int? _previewTorrentId;
+
   @override
   void dispose() {
+    _disposePreviewTorrent();
     _magnetController.dispose();
     _titleController.dispose();
     super.dispose();
+  }
+
+  void _disposePreviewTorrent() {
+    final id = _previewTorrentId;
+    if (id == null) return;
+    _previewTorrentId = null;
+    _torrent.disposeOrphanTorrent(id);
   }
 
   Future<void> _fetchAudioFiles() async {
@@ -110,6 +120,7 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       return;
     }
 
+    _disposePreviewTorrent();
     setState(() {
       _loading = true;
       _error = null;
@@ -125,14 +136,16 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
       }
 
       final torrentId = LibtorrentFlutter.instance.addMagnet(magnet, null, true);
+      _previewTorrentId = torrentId;
 
       final files = await _waitForFiles(torrentId);
       if (files == null || files.isEmpty) {
+        _disposePreviewTorrent();
         throw Exception('No files — metadata timeout');
       }
 
       final audio = files
-          .where((f) => f.isStreamable && _isAudioFileName(f.name))
+          .where((f) => _isAudioFileName(f.name))
           .toList()
         ..sort((a, b) => compareNaturalAscii(
               p.basename(a.name),
@@ -177,6 +190,7 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
         _loading = false;
       });
     } catch (e) {
+      _disposePreviewTorrent();
       if (mounted) {
         setState(() {
           _error = e.toString().replaceFirst('Exception: ', '');
@@ -274,6 +288,8 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
     final coverIdx = _selectedCoverTorrentIndex;
     final coverName = coverIdx != null ? _coverNameForTorrentIndex(coverIdx) : null;
 
+    _disposePreviewTorrent();
+
     final book = Audiobook(
       uuid: 'magnet_$hash',
       audioBookId: 'magnet_$hash',
@@ -317,10 +333,7 @@ class _AudiobookMagnetScreenState extends State<AudiobookMagnetScreen> {
                       borderRadius: BorderRadius.circular(12),
                       onTap: () {
                         final m = _magnetController.text.trim();
-                        if (m.startsWith('magnet:') &&
-                            _orderedAudioFiles.isNotEmpty) {
-                          TorrentStreamService().removeTorrent(m);
-                        }
+                        _disposePreviewTorrent();
                         Navigator.pop(context);
                       },
                       child: const Padding(

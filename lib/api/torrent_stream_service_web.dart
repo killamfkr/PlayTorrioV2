@@ -71,6 +71,8 @@ class TorrentStreamService {
 
   void removeTorrent(String magnetOrHash) {}
 
+  void disposeOrphanTorrent(int torrentId) {}
+
   TorrentStats? getTorrentStats(String magnetOrHash) => null;
 
   Stream<TorrentStats> statsStream(

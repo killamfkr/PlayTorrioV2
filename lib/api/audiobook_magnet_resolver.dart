@@ -18,7 +18,11 @@ class AudiobookMagnetResolver {
       if (idx == null) {
         throw Exception('Missing torrent file index for "${ch.title}"');
       }
-      final url = await torrent.streamAudiobookFile(magnetLink, idx);
+      final url = await torrent.streamAudiobookFile(
+        magnetLink,
+        idx,
+        allowNonStreamable: true,
+      );
       if (url == null || url.isEmpty) {
         throw Exception('Could not stream torrent file: ${ch.title}');
       }
@@ -26,6 +30,7 @@ class AudiobookMagnetResolver {
         title: ch.title,
         url: url,
         headers: ch.headers,
+        torrentFileIndex: ch.torrentFileIndex,
       ));
     }
     return out;

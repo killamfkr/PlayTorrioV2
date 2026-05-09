@@ -372,17 +372,25 @@ class AudiobookService {
     return [];
   }
 
+  static int? _torrentFileIndexFromJson(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    if (raw is num) return raw.round();
+    return int.tryParse(raw.toString());
+  }
+
   Future<List<AudiobookChapter>> getChapters(Audiobook book) async {
     if (book.source == 'magnet' &&
         book.magnetLink != null &&
         book.magnetTracks != null &&
         book.magnetTracks!.isNotEmpty) {
       return book.magnetTracks!.map((m) {
-        final idx = m['fileIndex'];
+        final idx = _torrentFileIndexFromJson(m['fileIndex']);
         return AudiobookChapter(
-          title: m['title'] as String? ?? 'Track',
+          title: '${m['title'] ?? 'Track'}',
           url: '',
-          torrentFileIndex: idx is int ? idx : int.tryParse('$idx'),
+          torrentFileIndex: idx,
         );
       }).toList();
     }

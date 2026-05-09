@@ -10,6 +10,13 @@ import '../api/torrent_stream_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/tv_interactive.dart';
 
+bool _isTorrentEngineLoopbackUrl(String url) {
+  final lower = url.toLowerCase();
+  return lower.contains('127.0.0.1') ||
+      lower.contains('localhost') ||
+      lower.contains('::1');
+}
+
 class AudiobookPlayerScreen extends StatefulWidget {
   final Audiobook audiobook;
   final List<AudiobookChapter> chapters;
@@ -37,9 +44,73 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   List<AudiobookChapter>? _playableChapters;
   bool _magnetResolving = false;
   String? _magnetError;
+  /// Resolved HTTP URL from torrent engine for embedded magnet cover art.
+  String? _magnetCoverArtUrl;
 
   List<AudiobookChapter> get _chaptersForUi =>
       _playableChapters ?? widget.chapters;
+
+  String get _coverArtUrl {
+    final m = _magnetCoverArtUrl?.trim() ?? '';
+    if (m.isNotEmpty) return m;
+    return widget.audiobook.thumbUrl;
+  }
+
+  Widget _backgroundCover() {
+    if (_coverArtUrl.isEmpty) {
+      return Container(color: Colors.black.withValues(alpha: 0.88));
+    }
+    if (_isTorrentEngineLoopbackUrl(_coverArtUrl)) {
+      return Image.network(
+        _coverArtUrl,
+        fit: BoxFit.cover,
+        color: Colors.black.withValues(alpha: 0.6),
+        colorBlendMode: BlendMode.darken,
+        errorBuilder: (_, __, ___) =>
+            Container(color: Colors.black.withValues(alpha: 0.88)),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: _coverArtUrl,
+      fit: BoxFit.cover,
+      color: Colors.black.withValues(alpha: 0.6),
+      colorBlendMode: BlendMode.darken,
+      errorWidget: (context, url, error) => CachedNetworkImage(
+        imageUrl: widget.audiobook.coverImage,
+        fit: BoxFit.cover,
+        color: Colors.black.withValues(alpha: 0.6),
+        colorBlendMode: BlendMode.darken,
+      ),
+    );
+  }
+
+  Widget _foregroundCover() {
+    if (_coverArtUrl.isEmpty) {
+      return Container(
+        color: Colors.white.withValues(alpha: 0.08),
+        child: const Center(
+          child: Icon(Icons.menu_book_rounded,
+              size: 120, color: Colors.white24),
+        ),
+      );
+    }
+    if (_isTorrentEngineLoopbackUrl(_coverArtUrl)) {
+      return Image.network(
+        _coverArtUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => CachedNetworkImage(
+          imageUrl: widget.audiobook.coverImage,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: _coverArtUrl,
+      fit: BoxFit.cover,
+      errorWidget: (context, url, error) => CachedNetworkImage(
+          imageUrl: widget.audiobook.coverImage, fit: BoxFit.cover),
+    );
+  }
 
   @override
   void initState() {
@@ -68,6 +139,26 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       if (mounted) setState(() => _magnetResolving = false);
     } else {
       _playableChapters = widget.chapters;
+    }
+
+    if (!mounted) return;
+
+    if (_magnetError == null &&
+        widget.audiobook.source == 'magnet' &&
+        magnet != null &&
+        magnet.isNotEmpty &&
+        widget.audiobook.magnetCoverFileIndex != null &&
+        (_playableChapters?.isNotEmpty ?? false)) {
+      try {
+        final url = await TorrentStreamService().streamAudiobookFile(
+          magnet,
+          widget.audiobook.magnetCoverFileIndex!,
+          allowNonStreamable: true,
+        );
+        if (mounted && url != null && url.isNotEmpty) {
+          setState(() => _magnetCoverArtUrl = url);
+        }
+      } catch (_) {}
     }
 
     if (!mounted) return;
@@ -161,20 +252,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
           children: [
             // Subtle background blur
             Positioned.fill(
-              child: widget.audiobook.thumbUrl.isEmpty
-                  ? Container(color: Colors.black.withValues(alpha: 0.88))
-                  : CachedNetworkImage(
-                imageUrl: widget.audiobook.thumbUrl,
-                fit: BoxFit.cover,
-                color: Colors.black.withValues(alpha: 0.6),
-                colorBlendMode: BlendMode.darken,
-                errorWidget: (context, url, error) => CachedNetworkImage(
-                  imageUrl: widget.audiobook.coverImage,
-                  fit: BoxFit.cover,
-                  color: Colors.black.withValues(alpha: 0.6),
-                  colorBlendMode: BlendMode.darken,
-                ),
-              ),
+              child: _backgroundCover(),
             ),
             Positioned.fill(
               child: BackdropFilter(
@@ -340,22 +418,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(24),
-          child: widget.audiobook.thumbUrl.isEmpty
-              ? Container(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  child: const Center(
-                    child: Icon(Icons.menu_book_rounded,
-                        size: 120, color: Colors.white24),
-                  ),
-                )
-              : CachedNetworkImage(
-                  imageUrl: widget.audiobook.thumbUrl,
-                  fit: BoxFit.cover,
-                  errorWidget: (context, url, error) =>
-                      CachedNetworkImage(
-                          imageUrl: widget.audiobook.coverImage,
-                          fit: BoxFit.cover),
-                ),
+          child: _foregroundCover(),
         ),
       ),
     );

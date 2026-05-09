@@ -281,6 +281,12 @@ class TorrentStreamService {
     removeTorrent(magnetLink);
   }
 
+  /// Dispose a torrent opened elsewhere (e.g. magnet picker preview) that was
+  /// never registered in [_activeTorrents].
+  void disposeOrphanTorrent(int torrentId) {
+    _safeDisposeTorrent(torrentId);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Metadata polling
   // ─────────────────────────────────────────────────────────────────────────
