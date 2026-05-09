@@ -116,6 +116,7 @@ class AudiobookPlayerService {
     if (book.source == 'goldenaudiobook') artist = 'GoldenAudiobook';
     if (book.source == 'appaudiobooks') artist = 'AppAudiobooks';
     if (book.source == 'magnet') artist = 'Torrent';
+    if (book.source == 'audiobookbay') artist = 'Audiobook Bay';
 
     String art = book.thumbUrl.trim();
     if (art.isEmpty) art = book.coverImage.trim();
@@ -137,7 +138,7 @@ class AudiobookPlayerService {
       await p.setProperty('demuxer-max-bytes', '50000000'); // 50MB cache
       await p.setProperty('demuxer-max-back-bytes', '50000000');
       await p.setProperty('demuxer-readahead-secs', '30');
-      if (book.source == 'magnet') {
+      if (book.source == 'magnet' || book.source == 'audiobookbay') {
         await p.setProperty('force-seekable', 'yes');
       }
     }
@@ -176,10 +177,11 @@ class AudiobookPlayerService {
 
   Future<Media> _mediaForChapter(Audiobook book, AudiobookChapter ch) async {
     final magnet = book.magnetLink;
-    if (book.source != 'magnet' ||
-        magnet == null ||
-        magnet.isEmpty ||
-        ch.torrentFileIndex == null) {
+    final torrentBacked = (book.source == 'magnet' || book.source == 'audiobookbay') &&
+        magnet != null &&
+        magnet.isNotEmpty &&
+        ch.torrentFileIndex != null;
+    if (!torrentBacked) {
       final headers = ch.headers ?? const <String, String>{};
       return Media(ch.url, httpHeaders: headers);
     }

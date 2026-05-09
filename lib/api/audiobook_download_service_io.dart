@@ -32,6 +32,12 @@ class AudiobookDownloadService {
 
   final Set<String> _cancelledIds = {};
 
+  bool _torrentBackedAudiobook(Audiobook book) {
+    final m = book.magnetLink;
+    if (m == null || m.isEmpty) return false;
+    return book.source == 'magnet' || book.source == 'audiobookbay';
+  }
+
   /// Legacy location (app private) — still scanned so older downloads appear.
   Future<String> get _legacyAppDocAudiobooksDir async {
     final dir = await getApplicationDocumentsDirectory();
@@ -127,7 +133,7 @@ class AudiobookDownloadService {
   }
 
   String _coverOutputBasename(Audiobook book) {
-    if (book.source != 'magnet') return 'cover.jpg';
+    if (!_torrentBackedAudiobook(book)) return 'cover.jpg';
     if (book.magnetCoverFileIndex == null) return 'cover.jpg';
     final n = book.magnetCoverFileName?.toLowerCase() ?? '';
     if (n.endsWith('.png')) return 'cover.png';
@@ -137,7 +143,7 @@ class AudiobookDownloadService {
   }
 
   Future<void> _saveAudiobookCover(Audiobook book, String coverPath) async {
-    if (book.source == 'magnet') {
+    if (_torrentBackedAudiobook(book)) {
       if (book.magnetCoverFileIndex != null && book.magnetLink != null) {
         final torrent = TorrentStreamService();
         final started = await torrent.start();
@@ -162,8 +168,10 @@ class AudiobookDownloadService {
           }
         }
       }
-      await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
-      return;
+      if (book.source == 'magnet') {
+        await File(coverPath).writeAsBytes(_kAudiobookPlaceholderPng);
+        return;
+      }
     }
     await _downloadCover(book.thumbUrl, book.coverImage, coverPath);
   }
@@ -506,7 +514,7 @@ class AudiobookDownloadService {
   }
 
   String _getFileExtension(AudiobookChapter chapter, String? source) {
-    if (source == 'magnet') {
+    if (source == 'magnet' || source == 'audiobookbay') {
       final t = chapter.title.toLowerCase();
       if (t.endsWith('.mp3')) return '.mp3';
       if (t.endsWith('.m4a')) return '.m4a';
@@ -532,9 +540,7 @@ class AudiobookDownloadService {
 
   Future<Uint8List?> _downloadChapter(
       AudiobookChapter chapter, Audiobook book) async {
-    if (book.source == 'magnet' &&
-        book.magnetLink != null &&
-        chapter.torrentFileIndex != null) {
+    if (_torrentBackedAudiobook(book) && chapter.torrentFileIndex != null) {
       final torrent = TorrentStreamService();
       final started = await torrent.start();
       if (!started) return null;

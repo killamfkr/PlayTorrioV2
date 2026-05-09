@@ -150,8 +150,10 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       builder: (context) => const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
     );
 
-    final chapters = await _service.getChapters(book);
-    
+    final prepared = await _service.prepareAudiobookPlayback(book);
+    final playbackBook = prepared.book;
+    final chapters = prepared.chapters;
+
     if (mounted) {
       Navigator.pop(context); 
       final musicService = MusicPlayerService();
@@ -168,7 +170,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(24),
                   child: AudiobookPlayerScreen(
-                    audiobook: book,
+                    audiobook: playbackBook,
                     chapters: chapters,
                     initialChapterIndex: initialChapter,
                     initialPosition: initialPosition,
@@ -186,7 +188,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             context,
             MaterialPageRoute(
               builder: (context) => AudiobookPlayerScreen(
-                audiobook: book,
+                audiobook: playbackBook,
                 chapters: chapters,
                 initialChapterIndex: initialChapter,
                 initialPosition: initialPosition,

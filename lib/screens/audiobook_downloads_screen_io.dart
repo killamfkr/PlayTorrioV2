@@ -420,6 +420,10 @@ class _AudiobookDownloadsScreenState extends State<AudiobookDownloadsScreen> {
         return 'AppAudiobooks';
       case 'magnet':
         return 'Magnet';
+      case 'audiobookbay':
+        return 'Audiobook Bay';
+      case 'ezaudiobookforsoul':
+        return 'EzAudiobookForSoul';
       default:
         return source ?? 'Unknown';
     }

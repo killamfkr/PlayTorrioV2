@@ -12,7 +12,7 @@ class Audiobook {
   final String coverImage;
   final String? source;
   final String? pageUrl;
-  /// When [source] is `magnet`, full magnet URI for torrent-backed audiobooks.
+  /// When [source] is `magnet` or torrent-backed `audiobookbay`, full magnet URI for playback.
   final String? magnetLink;
   /// Serialized chapter list: `[{"title":"…","fileIndex":int}]`
   final List<Map<String, dynamic>>? magnetTracks;
@@ -43,6 +43,10 @@ class Audiobook {
       return c;
     }
     if (source == 'audiozaic' || source == 'goldenaudiobook' || source == 'appaudiobooks' || source == 'ezaudiobookforsoul') return coverImage;
+    if (source == 'audiobookbay') {
+      final c = coverImage.trim();
+      return c.isNotEmpty ? c : '';
+    }
     return 'https://tokybook.com/images/$audioBookId';
   }
 
@@ -61,7 +65,13 @@ class Audiobook {
       title: json['title'] ?? '',
       coverImage: json['coverImage'] ?? '',
       source: source,
-      pageUrl: json['pageUrl'] ?? ((source == 'audiozaic' || source == 'goldenaudiobook' || source == 'ezaudiobookforsoul') ? uuid : null),
+      pageUrl: json['pageUrl'] ??
+          ((source == 'audiozaic' ||
+                  source == 'goldenaudiobook' ||
+                  source == 'ezaudiobookforsoul' ||
+                  source == 'audiobookbay')
+              ? uuid
+              : null),
       magnetLink: json['magnetLink'] as String?,
       magnetTracks: magnetTracks,
       magnetCoverFileIndex: json['magnetCoverFileIndex'] is int
@@ -105,7 +115,31 @@ class AudiobookChapter {
 
 class AudiobookService {
   static const String _baseUrl = 'https://tokybook.com/api/v1';
-  
+  static const String _abbOrigin = 'https://audiobookbay.lu';
+  static const String _abbUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  static final RegExp _abbHashRe = RegExp(
+    r'Info Hash:</td>\s*<td[^>]*>\s*([a-fA-F0-9]{40})\s*</td>',
+    caseSensitive: false,
+  );
+  static final RegExp _abbAnnounceRe = RegExp(
+    r'Announce URL:</td>\s*<td[^>]*>\s*([^<]+?)\s*</td>',
+    caseSensitive: false,
+  );
+  static final RegExp _abbTrackerRe = RegExp(
+    r'Tracker:</td>\s*<td[^>]*>\s*([^<]+?)\s*</td>',
+    caseSensitive: false,
+  );
+  static final RegExp _abbColspan2Re = RegExp(
+    r"<td\s+colspan=['\"]2['\"][^>]*>\s*([^<]+?)\s*</td>",
+    caseSensitive: false,
+  );
+  static final RegExp _abbAudioFileRe = RegExp(
+    r'^(.+?\.(?:m4b|mp3|aac|flac|ogg|opus|wav|wma|m4a))\s+[\d.]+\s*(?:MB|GB)',
+    caseSensitive: false,
+  );
+
   // Standard user identity for API calls
   Map<String, dynamic> _getUserIdentity() {
     return {
@@ -188,6 +222,7 @@ class AudiobookService {
         _searchTokybook(query),
         _searchAudiozaic(query),
         _searchEzAudiobookForSoul(query),
+        _searchAudiobookBay(query),
       ]);
 
       final goldenResults = results[0];
@@ -195,6 +230,7 @@ class AudiobookService {
       final tokyResults = results[2];
       final audiozaicResults = results[3];
       final ezResults = results[4];
+      final abbResults = results[5];
       
       final Map<String, Audiobook> uniqueBooks = {};
       
@@ -236,6 +272,14 @@ class AudiobookService {
         }
       }
 
+      // 6. Add Audiobook Bay results
+      for (var book in abbResults) {
+        final key = _normalizeTitle(book.title);
+        if (key.isNotEmpty && !uniqueBooks.containsKey(key)) {
+          uniqueBooks[key] = book;
+        }
+      }
+
       // Sort by relevance to search query
       final queryNorm = query.toLowerCase().trim();
       final bookList = uniqueBooks.values.toList();
@@ -245,6 +289,16 @@ class AudiobookService {
       debugPrint('AudiobookService Error (searchAudiobooks): $e');
     }
     return [];
+  }
+
+  /// Loads chapters; for Audiobook Bay this fetches the detail page and attaches [Audiobook.magnetLink].
+  Future<({Audiobook book, List<AudiobookChapter> chapters})>
+      prepareAudiobookPlayback(Audiobook book) async {
+    if (book.source == 'audiobookbay') {
+      return _resolveAudiobookBay(book);
+    }
+    final chapters = await getChapters(book);
+    return (book: book, chapters: chapters);
   }
 
   Future<List<Audiobook>> _searchTokybook(String query) async {
@@ -827,6 +881,184 @@ class AudiobookService {
     } catch (e) {
       debugPrint(
           'AudiobookService Error (_getEzAudiobookForSoulChapters): $e');
+    }
+    return [];
+  }
+
+  Future<({Audiobook book, List<AudiobookChapter> chapters})> _resolveAudiobookBay(
+      Audiobook book) async {
+    try {
+      final url = (book.pageUrl ?? book.uuid).trim();
+      if (url.isEmpty) {
+        return (book: book, chapters: <AudiobookChapter>[]);
+      }
+      final fetchUrl =
+          url.startsWith('http://') || url.startsWith('https://') ? url : '$_abbOrigin$url';
+
+      final res = await http.get(Uri.parse(fetchUrl), headers: {
+        'User-Agent': _abbUserAgent,
+        'Accept': 'text/html,*/*',
+        'Referer': '$_abbOrigin/',
+      });
+      if (res.statusCode != 200) {
+        return (book: book, chapters: <AudiobookChapter>[]);
+      }
+
+      final parsed = _parseAbbDetailHtml(res.body, book.title);
+      if (parsed == null || parsed.magnet.isEmpty) {
+        return (book: book, chapters: <AudiobookChapter>[]);
+      }
+
+      final enriched = Audiobook(
+        uuid: book.uuid,
+        audioBookId: book.audioBookId,
+        dynamicSlugId: book.dynamicSlugId,
+        title: book.title,
+        coverImage: book.coverImage,
+        source: book.source,
+        pageUrl: book.pageUrl,
+        magnetLink: parsed.magnet,
+      );
+
+      return (book: enriched, chapters: parsed.chapters);
+    } catch (e) {
+      debugPrint('AudiobookService Error (_resolveAudiobookBay): $e');
+    }
+    return (book: book, chapters: <AudiobookChapter>[]);
+  }
+
+  ({String magnet, List<AudiobookChapter> chapters})? _parseAbbDetailHtml(
+      String html, String fallbackTitle) {
+    final hashMatch = _abbHashRe.firstMatch(html);
+    if (hashMatch == null) return null;
+    final hash = hashMatch.group(1)!.toLowerCase();
+
+    final trackers = <String>[];
+    final seenTr = <String>{};
+    void addTr(String? u) {
+      final t = u?.trim() ?? '';
+      if (t.isEmpty || !seenTr.add(t)) return;
+      trackers.add(t);
+    }
+
+    final ann = _abbAnnounceRe.firstMatch(html);
+    addTr(ann?.group(1));
+    for (final m in _abbTrackerRe.allMatches(html)) {
+      addTr(m.group(1));
+    }
+
+    final dn =
+        fallbackTitle.trim().isEmpty ? 'Audiobook' : fallbackTitle.trim();
+    final magnet = _abbBuildMagnet(hash, dn, trackers);
+
+    final chapters = <AudiobookChapter>[];
+    for (final m in _abbColspan2Re.allMatches(html)) {
+      final raw = m.group(1)?.trim() ?? '';
+      if (!_abbLooksLikeAbbFileRow(raw)) continue;
+      final fm = _abbAudioFileRe.firstMatch(raw);
+      if (fm == null) continue;
+      final name = fm.group(1)!.trim();
+      chapters.add(AudiobookChapter(
+        title: name,
+        url: '',
+        torrentFileIndex: chapters.length,
+      ));
+    }
+
+    if (chapters.isEmpty) {
+      chapters.add(AudiobookChapter(
+        title: dn,
+        url: '',
+        torrentFileIndex: 0,
+      ));
+    }
+
+    return (magnet: magnet, chapters: chapters);
+  }
+
+  bool _abbLooksLikeAbbFileRow(String text) {
+    if (text.contains('This is a Multifile Torrent')) return false;
+    return RegExp(r'\b(?:MB|GB)s?\b', caseSensitive: false).hasMatch(text);
+  }
+
+  static String _abbBuildMagnet(
+      String btihHex, String displayName, List<String> trackers) {
+    final dn = Uri.encodeComponent(displayName);
+    final buf = StringBuffer('magnet:?xt=urn:btih:$btihHex&dn=$dn');
+    final seen = <String>{};
+    for (final tr in trackers) {
+      final t = tr.trim();
+      if (t.isEmpty || !seen.add(t)) continue;
+      buf.write('&tr=${Uri.encodeComponent(t)}');
+    }
+    return buf.toString();
+  }
+
+  String _abbAbsUrl(String href) {
+    final h = href.trim();
+    if (h.isEmpty) return '';
+    if (h.startsWith('http://') || h.startsWith('https://')) return h;
+    if (h.startsWith('//')) return 'https:$h';
+    if (h.startsWith('/')) return '$_abbOrigin$h';
+    return '$_abbOrigin/$h';
+  }
+
+  Future<List<Audiobook>> _searchAudiobookBay(String query) async {
+    try {
+      final q = query.trim();
+      if (q.isEmpty) return [];
+
+      final uri = Uri.parse(_abbOrigin).replace(queryParameters: {'s': q});
+      final response = await http.get(uri, headers: {
+        'User-Agent': _abbUserAgent,
+        'Accept': 'text/html,*/*',
+        'Referer': '$_abbOrigin/',
+      });
+      if (response.statusCode != 200) return [];
+
+      final document = hp.parse(response.body);
+      final posts = document.querySelectorAll('div.post');
+
+      final results = <Audiobook>[];
+      final seenUrls = <String>{};
+
+      for (final post in posts) {
+        final titleEl = post.querySelector('div.postTitle h2 a');
+        if (titleEl == null) continue;
+        final href = titleEl.attributes['href'] ?? '';
+        if (href.isEmpty) continue;
+        final pageUrl = _abbAbsUrl(href);
+        if (pageUrl.isEmpty || !seenUrls.add(pageUrl)) continue;
+
+        var title = _cleanTitle(titleEl.text.trim());
+        if (title.isEmpty) continue;
+
+        final img = post.querySelector('div.postContent img') ??
+            post.querySelector('.postContent img');
+        var coverUrl =
+            img?.attributes['src'] ?? img?.attributes['data-src'] ?? '';
+        coverUrl = coverUrl.trim();
+        if (coverUrl.isNotEmpty) coverUrl = _abbAbsUrl(coverUrl);
+
+        final uriPage = Uri.tryParse(pageUrl);
+        final segments = uriPage?.pathSegments.where((s) => s.isNotEmpty).toList() ??
+            const <String>[];
+        final slug =
+            segments.isNotEmpty ? segments.last : pageUrl.hashCode.toString();
+
+        results.add(Audiobook(
+          uuid: pageUrl,
+          audioBookId: 'abb_$slug',
+          dynamicSlugId: pageUrl,
+          title: title,
+          coverImage: coverUrl,
+          source: 'audiobookbay',
+          pageUrl: pageUrl,
+        ));
+      }
+      return results;
+    } catch (e) {
+      debugPrint('AudiobookService Error (_searchAudiobookBay): $e');
     }
     return [];
   }

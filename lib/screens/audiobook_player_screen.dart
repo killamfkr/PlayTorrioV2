@@ -143,7 +143,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   Future<void> _bootstrapPlayback() async {
     final book = widget.audiobook;
     final magnet = book.magnetLink;
-    final needsMagnet = book.source == 'magnet' &&
+    final needsMagnet = (book.source == 'magnet' || book.source == 'audiobookbay') &&
         magnet != null &&
         magnet.isNotEmpty &&
         widget.chapters.any((c) => c.torrentFileIndex != null);
@@ -255,8 +255,10 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
 
   @override
   void dispose() {
-    if (widget.audiobook.source == 'magnet' &&
-        widget.audiobook.magnetLink != null) {
+    if (widget.audiobook.magnetLink != null &&
+        widget.audiobook.magnetLink!.isNotEmpty &&
+        (widget.audiobook.source == 'magnet' ||
+            widget.audiobook.source == 'audiobookbay')) {
       TorrentStreamService()
           .releaseAudiobookMagnet(widget.audiobook.magnetLink!);
     }
