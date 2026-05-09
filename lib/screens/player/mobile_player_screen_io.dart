@@ -37,6 +37,7 @@ import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
 import '../../api/tmdb_api.dart';
+import '../../api/local_server_service.dart';
 import '../../api/tmdb_service.dart';
 import '../../services/playtorrio_cast_service.dart';
 import '../../api/introdb_service.dart';
@@ -508,9 +509,18 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     final poster = widget.movie != null && widget.movie!.posterPath.isNotEmpty
         ? TmdbApi.getImageUrl(widget.movie!.posterPath)
         : null;
+    String castUrl = widget.mediaPath;
+    try {
+      await LocalServerService().start();
+      final lanUrl =
+          await LocalServerService().urlWithLanHostForCast(castUrl);
+      if (lanUrl != null && lanUrl.isNotEmpty) {
+        castUrl = lanUrl;
+      }
+    } catch (_) {}
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: widget.mediaPath,
+      streamUrl: castUrl,
       title: widget.title,
       subtitle: _mediaSessionSubtitle,
       posterUrl: poster,

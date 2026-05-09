@@ -34,15 +34,73 @@ class LocalServerService {
   /// to IPv6 ::1 while we bind IPv4-only, which breaks mpv talking to this proxy.
   String get baseUrl => 'http://127.0.0.1:$_port';
 
+  /// Shelf proxy origin to embed in rewritten playlists. Uses [request]'s Host so
+  /// Chromecast (requesting via LAN IP) gets child URLs it can reach; loopback
+  /// stays on 127.0.0.1 for on-device mpv.
+  String _proxyOriginFromRequest(Request request) {
+    final u = request.requestedUri;
+    if (u.host == '127.0.0.1' || u.host == 'localhost') {
+      return baseUrl;
+    }
+    return '${u.scheme}://${u.authority}';
+  }
+
+  /// IPv4 on Wi‑Fi / Ethernet for Chromecast on the same LAN (skips loopback / APIPA).
+  Future<String?> preferredLanIpv4() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+      );
+      const preferredHints = {'wlan', 'en', 'eth', 'wifi', 'radio'};
+      List<NetworkInterface> sorted = [...interfaces];
+      sorted.sort((a, b) {
+        final an = a.name.toLowerCase();
+        final bn = b.name.toLowerCase();
+        bool pref(String n) => preferredHints.any((h) => n.contains(h));
+        final ap = pref(an);
+        final bp = pref(bn);
+        if (ap != bp) return ap ? -1 : 1;
+        return an.compareTo(bn);
+      });
+      for (final iface in sorted) {
+        for (final addr in iface.addresses) {
+          if (addr.isLoopback) continue;
+          if (addr.type != InternetAddressType.IPv4) continue;
+          final ip = addr.address;
+          if (ip.startsWith('169.254.')) continue;
+          return ip;
+        }
+      }
+    } catch (e) {
+      debugPrint('[LocalServer] LAN IP detection: $e');
+    }
+    return null;
+  }
+
+  /// Rewrites our loopback proxy URLs so Cast targets can open them over the LAN.
+  Future<String?> urlWithLanHostForCast(String url) async {
+    if (_port <= 0) return null;
+    final trimmed = url.trim();
+    if (!trimmed.contains('127.0.0.1') && !trimmed.contains('localhost')) {
+      return null;
+    }
+    final lan = await preferredLanIpv4();
+    if (lan == null) return null;
+    var out = trimmed.replaceAll(baseUrl, 'http://$lan:$_port');
+    out = out.replaceAll('http://localhost:$_port', 'http://$lan:$_port');
+    return out;
+  }
+
   Future<void> start() async {
     if (_server != null) return;
 
     _setupRoutes();
 
     try {
-      _server = await io.serve(_router.call, InternetAddress.loopbackIPv4, 0);
+      _server = await io.serve(_router.call, InternetAddress.anyIPv4, 0);
       _port = _server!.port;
-      debugPrint('[LocalServer] Started on $baseUrl');
+      debugPrint('[LocalServer] Started on $baseUrl (LAN clients may use this host\'s IPv4)');
     } catch (e) {
       debugPrint('[LocalServer] Error starting server: $e');
     }
@@ -274,7 +332,7 @@ class LocalServerService {
                   final fullUri = uri.startsWith('http') ? uri
                       : uri.startsWith('/') ? '$serverBase$uri'
                       : '$basePath$uri';
-                  return 'URI="${getJellyfinProxyUrl(fullUri, authHeader)}"';
+                  return 'URI="${_jellyfinProxyUrlForRequest(request, fullUri, authHeader)}"';
                 },
               );
             }
@@ -284,7 +342,7 @@ class LocalServerService {
           final fullUrl = trimmed.startsWith('http') ? trimmed
               : trimmed.startsWith('/') ? '$serverBase$trimmed'
               : '$basePath$trimmed';
-          return getJellyfinProxyUrl(fullUrl, authHeader);
+          return _jellyfinProxyUrlForRequest(request, fullUrl, authHeader);
         }).toList();
 
         return Response.ok(
@@ -324,9 +382,20 @@ class LocalServerService {
     }
   }
 
-  /// Returns a local proxy URL for a Jellyfin stream.
+  /// Returns a local proxy URL for a Jellyfin stream (loopback — for on-device playback).
   String getJellyfinProxyUrl(String targetUrl, String authHeaderValue) {
     return '$baseUrl/jellyfin-stream'
+        '?url=${Uri.encodeComponent(targetUrl)}'
+        '&auth=${Uri.encodeComponent(authHeaderValue)}';
+  }
+
+  String _jellyfinProxyUrlForRequest(
+    Request request,
+    String targetUrl,
+    String authHeaderValue,
+  ) {
+    final origin = _proxyOriginFromRequest(request);
+    return '$origin/jellyfin-stream'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&auth=${Uri.encodeComponent(authHeaderValue)}';
   }
@@ -527,6 +596,8 @@ class LocalServerService {
                 ? null
                 : _registerHlsProxyHeaders(customHeaders));
 
+        final proxyOrigin = _proxyOriginFromRequest(request);
+
         final rewrittenLines = body.split('\n').map((line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty || trimmed.startsWith('#')) {
@@ -542,7 +613,7 @@ class LocalServerService {
                   if (hdrForRewrite == null) {
                     return 'URI="$fullUri"';
                   }
-                  return 'URI="${_hlsProxyUrlWithHdrToken(fullUri, hdrForRewrite)}"';
+                  return 'URI="${_hlsProxyUrlWithHdrToken(fullUri, hdrForRewrite, proxyOrigin)}"';
                 },
               );
             }
@@ -553,7 +624,7 @@ class LocalServerService {
               : trimmed.startsWith('/') ? '$serverBase$trimmed'
               : '$basePath$trimmed';
           if (hdrForRewrite == null) return fullUrl;
-          return _hlsProxyUrlWithHdrToken(fullUrl, hdrForRewrite);
+          return _hlsProxyUrlWithHdrToken(fullUrl, hdrForRewrite, proxyOrigin);
         }).toList();
 
         return Response.ok(
@@ -625,8 +696,13 @@ class LocalServerService {
   }
 
   /// Internal: rewritten playlist lines share one [hdr] token (tiny URLs).
-  String _hlsProxyUrlWithHdrToken(String targetUrl, String hdrToken) {
-    return '$baseUrl/hls-proxy'
+  String _hlsProxyUrlWithHdrToken(
+    String targetUrl,
+    String hdrToken, [
+    String? proxyOrigin,
+  ]) {
+    final origin = proxyOrigin ?? baseUrl;
+    return '$origin/hls-proxy'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&hdr=${Uri.encodeComponent(hdrToken)}';
   }

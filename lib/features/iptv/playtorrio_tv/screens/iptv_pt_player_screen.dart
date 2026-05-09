@@ -14,6 +14,7 @@ import '../../../../api/settings_service.dart';
 import '../../../../platform_flags.dart';
 import '../../../../services/built_in_video_media_session.dart';
 import '../../../../services/playtorrio_cast_service.dart';
+import '../../../../api/local_server_service.dart';
 import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 import '../../../../widgets/tv_interactive.dart';
@@ -617,10 +618,18 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   Future<void> _openPtCast() async {
-    final url = widget.sources[_sourceIdx].url;
+    var castUrl = widget.sources[_sourceIdx].url;
+    try {
+      await LocalServerService().start();
+      final lanUrl =
+          await LocalServerService().urlWithLanHostForCast(castUrl);
+      if (lanUrl != null && lanUrl.isNotEmpty) {
+        castUrl = lanUrl;
+      }
+    } catch (_) {}
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: url,
+      streamUrl: castUrl,
       title: widget.title,
       subtitle: widget.subtitle,
       posterUrl: widget.logoUrl,
