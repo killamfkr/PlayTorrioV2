@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -6,7 +8,10 @@ import 'services/player_pool_service.dart';
 import 'utils/webview_cleanup.dart';
 import 'utils/app_theme.dart';
 import 'utils/tv_guide_refresh.dart';
+import 'utils/device_profile.dart';
+import 'utils/tv_material_scroll_behavior.dart';
 import 'platform_flags.dart';
+import 'services/playtorrio_cast_service.dart';
 
 import 'play_torrio_splash.dart';
 import 'screens/playtorrio_profile_gate.dart';
@@ -26,6 +31,13 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
     if (platformIsDesktop) {
       windowManager.addListener(this);
       windowManager.setPreventClose(true);
+    }
+    if (platformIsAndroid || platformIsIOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 600), () {
+          unawaited(PlaytorrioCastService.instance.initialize());
+        });
+      });
     }
   }
 
@@ -69,6 +81,19 @@ class _PlayTorrioAppState extends State<PlayTorrioApp> with WidgetsBindingObserv
       title: 'PlayTorrio Native',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.themeData,
+      scrollBehavior: platformIsAndroid && DeviceProfile.isAndroidTv
+          ? const TvMaterialScrollBehavior()
+          : const MaterialScrollBehavior(),
+      builder: (context, child) {
+        Widget w = child ?? const SizedBox.shrink();
+        if (platformIsAndroid && DeviceProfile.isAndroidTv) {
+          w = FocusTraversalGroup(
+            policy: ReadingOrderTraversalPolicy(),
+            child: w,
+          );
+        }
+        return w;
+      },
       home: const PlaytorrioProfileGate(
         child: SplashScreen(),
       ),

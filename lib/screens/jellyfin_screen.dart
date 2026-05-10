@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shimmer/shimmer.dart';
 import '../services/jellyfin_service.dart';
 import '../utils/app_theme.dart';
+import '../utils/device_profile.dart';
+import '../widgets/tv_interactive.dart';
 import 'jellyfin_details_screen.dart';
 
 // ─── Jellyfin Palette ────────────────────────────────────────────────────────
@@ -28,6 +30,13 @@ class _HoverCardState extends State<_HoverCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (DeviceProfile.isAndroidTv) {
+      return FocusableControl(
+        onTap: widget.onTap,
+        borderRadius: 12,
+        child: widget.child,
+      );
+    }
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -1529,7 +1538,8 @@ class _JellyfinScreenState extends State<JellyfinScreen>
                       enabled: _libraryPage > 0,
                       onTap: () => _loadLibraryPage(_libraryPage - 1)),
                   const SizedBox(width: 12),
-                  GestureDetector(
+                  TvGestureTap(
+                    borderRadius: 20,
                     onTap: () => _showPageJumpDialog(_totalPages),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),

@@ -772,7 +772,7 @@ class PlaytorrioCloudSyncService {
     final pid = await _activeProfileId();
     final local = await _settings.getLocalProfileDisplayMeta();
     final row = local['$pid'] ?? {};
-    final name = row['name'] as String?;
+    final name = SettingsService.coerceProfileDisplayName(row['name']);
     final avatar = (row['avatar'] is int) ? row['avatar'] as int : 0;
     final res = await _withAccessRetry(
       (t) {
@@ -833,7 +833,7 @@ class PlaytorrioCloudSyncService {
       if (p < 1 || p > 4) continue;
       await _settings.setLocalProfileDisplayMeta(
         p,
-        name: raw['name']?.toString(),
+        name: SettingsService.coerceProfileDisplayName(raw['name']),
         avatarKey: (raw['avatar_key'] is int)
             ? raw['avatar_key'] as int
             : int.tryParse('${raw['avatar_key'] ?? 0}'),

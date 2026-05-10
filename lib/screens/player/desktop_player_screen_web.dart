@@ -24,7 +24,12 @@ class DesktopPlayerScreen extends StatefulWidget {
   final String? stremioId;
   final String? stremioAddonBaseUrl;
   final String stremioStreamType;
+  final bool liveBroadcast;
   final Map<String, dynamic>? providers;
+  final Future<void> Function(Duration position, Duration duration)?
+      onPlaybackProgress;
+  final bool hasCustomNextEpisode;
+  final VoidCallback? onCustomNextEpisode;
 
   const DesktopPlayerScreen({
     super.key,
@@ -44,7 +49,11 @@ class DesktopPlayerScreen extends StatefulWidget {
     this.stremioId,
     this.stremioAddonBaseUrl,
     this.stremioStreamType = 'series',
+    this.liveBroadcast = false,
     this.providers,
+    this.onPlaybackProgress,
+    this.hasCustomNextEpisode = false,
+    this.onCustomNextEpisode,
   });
 
   @override

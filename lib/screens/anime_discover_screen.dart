@@ -3,6 +3,7 @@ import '../api/anime_service.dart';
 import '../utils/app_theme.dart';
 import 'anime_screen.dart';
 import 'anime_details_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AnimeDiscoverScreen extends StatefulWidget {
   const AnimeDiscoverScreen({super.key});
@@ -270,7 +271,7 @@ class _AnimeDiscoverScreenState extends State<AnimeDiscoverScreen> {
               )),
               const SizedBox(width: 16),
               // Adult toggle
-              GestureDetector(
+              TvGestureTap(
                 onTap: () { setState(() => _isAdult = !_isAdult); _browse(); },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

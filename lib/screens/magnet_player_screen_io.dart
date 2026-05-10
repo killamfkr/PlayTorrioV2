@@ -1,11 +1,64 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'package:path/path.dart' as p;
+
 import '../api/torrent_stream_service.dart';
 import '../utils/app_theme.dart';
 import 'player_screen.dart';
+import '../widgets/tv_interactive.dart';
+
+String? _btihFromMagnet(String magnet) {
+  final m = RegExp(r'btih:([0-9a-fA-F]{40})').firstMatch(magnet);
+  return m?.group(1)?.toLowerCase();
+}
+
+bool _looksLikeTorrentBytes(Uint8List bytes) =>
+    bytes.isNotEmpty && bytes[0] == 0x64; // bencode dict 'd'
+
+Future<Uint8List?> _downloadTorrentFromMirrors(String hash40) async {
+  final urls = <String>[
+    'https://itorrents.org/torrent/$hash40.torrent',
+    'https://torrage.info/torrent/$hash40',
+  ];
+  final headers = <String, String>{
+    'User-Agent':
+        'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+    'Accept': 'application/x-bittorrent,*/*',
+  };
+  final client = http.Client();
+  try {
+    for (final url in urls) {
+      try {
+        final res = await client
+            .get(Uri.parse(url), headers: headers)
+            .timeout(const Duration(seconds: 18));
+        if (res.statusCode == 200 &&
+            res.bodyBytes.length > 64 &&
+            _looksLikeTorrentBytes(res.bodyBytes)) {
+          return res.bodyBytes;
+        }
+      } catch (_) {}
+    }
+  } finally {
+    client.close();
+  }
+  return null;
+}
+
+String _sanitizeFileBase(String raw) {
+  var s = raw.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '_').trim();
+  if (s.length > 120) s = s.substring(0, 120);
+  if (s.isEmpty) s = 'torrent';
+  return s;
+}
 
 class MagnetPlayerScreen extends StatefulWidget {
   const MagnetPlayerScreen({super.key});
@@ -23,6 +76,7 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
   int? _torrentId;
   List<FileInfo> _files = [];
   int? _streamingIndex;
+  bool _savingTorrent = false;
 
   @override
   void dispose() {
@@ -142,6 +196,97 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
           _error = e.toString().replaceFirst('Exception: ', '');
         });
       }
+    }
+  }
+
+  String _suggestedTorrentSaveName() {
+    FileInfo? pick;
+    for (final f in _files) {
+      if (!f.isStreamable) continue;
+      final lower = f.name.toLowerCase();
+      final video = lower.endsWith('.mkv') ||
+          lower.endsWith('.mp4') ||
+          lower.endsWith('.avi') ||
+          lower.endsWith('.webm') ||
+          lower.endsWith('.mov');
+      if (!video) continue;
+      if (pick == null || f.size > pick.size) pick = f;
+    }
+    pick ??= _files.isNotEmpty ? _files.first : null;
+    final base =
+        pick != null ? p.basenameWithoutExtension(pick.name) : 'torrent';
+    return '${_sanitizeFileBase(base)}.torrent';
+  }
+
+  Future<void> _saveTorrentFile() async {
+    final magnet = _magnetController.text.trim();
+    if (!magnet.startsWith('magnet:')) {
+      setState(() => _error = 'Enter a magnet link first');
+      return;
+    }
+    final hash = _btihFromMagnet(magnet);
+    if (hash == null) {
+      setState(() => _error = 'Magnet has no btih (info hash)');
+      return;
+    }
+    if (_files.isEmpty || _torrentId == null) {
+      setState(() => _error = 'Fetch torrent metadata before saving');
+      return;
+    }
+
+    final suggested = _suggestedTorrentSaveName();
+    final pickedPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save torrent file',
+      fileName: suggested,
+      type: FileType.any,
+    );
+    if (!mounted || pickedPath == null) return;
+
+    setState(() {
+      _savingTorrent = true;
+      _error = null;
+    });
+
+    try {
+      Uint8List? torrentBytes = await _downloadTorrentFromMirrors(hash);
+      final targetTorrent = File(pickedPath);
+      if (torrentBytes != null &&
+          torrentBytes.isNotEmpty &&
+          _looksLikeTorrentBytes(torrentBytes)) {
+        await targetTorrent.writeAsBytes(torrentBytes, flush: true);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved .torrent to ${p.basename(pickedPath)}'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        var magnetPath = pickedPath;
+        if (magnetPath.toLowerCase().endsWith('.torrent')) {
+          magnetPath =
+              '${magnetPath.substring(0, magnetPath.length - 8)}.magnet';
+        } else if (!magnetPath.toLowerCase().endsWith('.magnet')) {
+          magnetPath = '$magnetPath.magnet';
+        }
+        await File(magnetPath).writeAsString(magnet, flush: true);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Online .torrent cache unavailable — saved magnet link as ${p.basename(magnetPath)}',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() =>
+            _error = e.toString().replaceFirst('Exception: ', ''));
+      }
+    } finally {
+      if (mounted) setState(() => _savingTorrent = false);
     }
   }
 
@@ -305,6 +450,22 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
                     Text('${_files.length} files',
                         style: GoogleFonts.poppins(
                             color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
+                      onPressed: _savingTorrent ? null : _saveTorrentFile,
+                      icon: _savingTorrent
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_alt_rounded, size: 18),
+                      label: Text(_savingTorrent ? 'Saving…' : 'Save torrent…'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                      ),
+                    ),
                     const Spacer(),
                     Text(
                       'Total: ${_formatSize(_files.fold<int>(0, (sum, f) => sum + f.size))}',
@@ -326,7 +487,7 @@ class _MagnetPlayerScreenState extends State<MagnetPlayerScreen> {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Material(
                         color: Colors.transparent,
-                        child: InkWell(
+                        child: TvInkWell(
                           borderRadius: BorderRadius.circular(12),
                           onTap: isVideo && !isStreaming ? () => _playFile(file) : null,
                           child: Container(

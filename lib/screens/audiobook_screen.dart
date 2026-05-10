@@ -4,9 +4,14 @@ import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/music_player_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/audiobook_thumb.dart';
 import '../platform_flags.dart';
 import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
+import 'generate_audiobook_screen.dart';
+import '../widgets/tv_interactive.dart';
+import '../platform_flags.dart';
+import 'audiobook_magnet_screen.dart';
 
 class AudiobookScreen extends StatefulWidget {
   const AudiobookScreen({super.key});
@@ -69,6 +74,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       _showLiked = false;
     });
     final books = await _service.getAudiobooks(offset: _currentOffset, limit: _limit);
+    if (!mounted) return;
     setState(() {
       _books = books;
       _isLoading = false;
@@ -144,8 +150,10 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       builder: (context) => const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
     );
 
-    final chapters = await _service.getChapters(book);
-    
+    final prepared = await _service.prepareAudiobookPlayback(book);
+    final playbackBook = prepared.book;
+    final chapters = prepared.chapters;
+
     if (mounted) {
       Navigator.pop(context); 
       final musicService = MusicPlayerService();
@@ -162,7 +170,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(24),
                   child: AudiobookPlayerScreen(
-                    audiobook: book,
+                    audiobook: playbackBook,
                     chapters: chapters,
                     initialChapterIndex: initialChapter,
                     initialPosition: initialPosition,
@@ -180,7 +188,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             context,
             MaterialPageRoute(
               builder: (context) => AudiobookPlayerScreen(
-                audiobook: book,
+                audiobook: playbackBook,
                 chapters: chapters,
                 initialChapterIndex: initialChapter,
                 initialPosition: initialPosition,
@@ -247,6 +255,35 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              IconButton(
+                icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 24),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const GenerateAudiobookScreen()),
+                  ).then((_) => _loadHistory());
+                },
+                tooltip: 'Generate your own audiobook',
+              ),
+              if (!platformIsWeb)
+                IconButton(
+                  icon: const Icon(Icons.link_rounded, color: Colors.white, size: 24),
+                  tooltip: 'Add audiobook from magnet link',
+                  onPressed: () async {
+                    final book = await Navigator.push<Audiobook>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const AudiobookMagnetScreen()),
+                    );
+                    if (book != null && mounted) {
+                      setState(() {
+                        _books.removeWhere((b) => b.audioBookId == book.audioBookId);
+                        _books.insert(0, book);
+                      });
+                      _openAudiobook(book);
+                    }
+                  },
+                ),
               IconButton(
                 icon: const Icon(Icons.download_rounded, color: Colors.white, size: 26),
                 onPressed: () {
@@ -361,11 +398,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                           children: [
                             ClipRRect(
                               borderRadius: BorderRadius.circular(8),
-                              child: CachedNetworkImage(
-                                imageUrl: book.thumbUrl,
-                                width: 60, height: 60, fit: BoxFit.cover,
-                                errorWidget: (c, u, e) => const Icon(Icons.book),
-                              ),
+                              child: audiobookThumb(book.thumbUrl),
                             ),
                             const SizedBox(width: 16),
                             Expanded(
@@ -386,7 +419,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                     ),
                     Positioned(
                       top: 4, right: 4,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromHistory(book.audioBookId),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -457,18 +490,30 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: CachedNetworkImage(
-                    imageUrl: book.thumbUrl,
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    placeholder: (context, url) => Container(color: Colors.white10),
-                    errorWidget: (context, url, error) => CachedNetworkImage(
-                      imageUrl: book.coverImage,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      errorWidget: (c, u, e) => const Center(child: Icon(Icons.book, color: Colors.white24)),
-                    ),
-                  ),
+                  child: book.thumbUrl.startsWith('http://') ||
+                          book.thumbUrl.startsWith('https://')
+                      ? CachedNetworkImage(
+                          imageUrl: book.thumbUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          placeholder: (context, url) =>
+                              Container(color: Colors.white10),
+                          errorWidget: (context, url, error) =>
+                              CachedNetworkImage(
+                            imageUrl: book.coverImage,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            errorWidget: (c, u, e) => const Center(
+                                child:
+                                    Icon(Icons.book, color: Colors.white24)),
+                          ),
+                        )
+                      : FittedBox(
+                          fit: BoxFit.cover,
+                          clipBehavior: Clip.hardEdge,
+                          child: audiobookThumb(book.thumbUrl,
+                              width: 480, height: 720),
+                        ),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(12.0),
@@ -483,7 +528,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             ),
             Positioned(
               top: 8, right: 8,
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () async {
                   await _playerService.toggleLikeBook(book);
                   _loadLikedBooks();
