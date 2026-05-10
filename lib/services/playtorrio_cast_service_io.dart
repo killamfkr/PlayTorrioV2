@@ -275,14 +275,25 @@ class PlaytorrioCastService {
   }
 
   Future<void> _waitConnected() async {
-    final sw = Stopwatch()..start();
-    while (sw.elapsed < const Duration(seconds: 20)) {
-      if (GoogleCastSessionManager.instance.connectionState ==
-          GoogleCastConnectState.connected) {
+    // Give the native session a moment to transition out of "idle".
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final deadline = DateTime.now().add(const Duration(seconds: 45));
+    while (DateTime.now().isBefore(deadline)) {
+      final sm = GoogleCastSessionManager.instance;
+      if (sm.hasConnectedSession) return;
+      if (sm.connectionState == GoogleCastConnectState.connected) return;
+      final sess = sm.currentSession;
+      if (sess != null &&
+          sess.connectionState == GoogleCastConnectState.connected) {
         return;
       }
-      await Future.delayed(const Duration(milliseconds: 120));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
+    final sm = GoogleCastSessionManager.instance;
+    debugPrint(
+      '[Cast] waitConnected timeout: mgr=${sm.connectionState} '
+      'hasSession=${sm.hasConnectedSession} sess=${sm.currentSession?.connectionState}',
+    );
     throw StateError('Timed out connecting to the Cast device.');
   }
 
@@ -396,25 +407,25 @@ class PlaytorrioCastService {
 
     final rootContext = context;
 
-    await showModalBottomSheet<void>(
+    Future<({String url, Map<String, String>? receiverHeaders})>?
+        resolvedCastFuture;
+    Future<({String url, Map<String, String>? receiverHeaders})>
+        ensureResolvedCastUrl() async {
+      resolvedCastFuture ??= _resolveCastUrlForPlayback(
+        streamUrl: streamTrim,
+        headers: headers,
+        preferAndroidHwTranscode: preferAndroidHwTranscode,
+      );
+      return resolvedCastFuture!;
+    }
+
+    final picked = await showModalBottomSheet<GoogleCastDevice?>(
       context: context,
       backgroundColor: const Color(0xFF1A1025),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
-        Future<({String url, Map<String, String>? receiverHeaders})>?
-            resolvedCastFuture;
-        Future<({String url, Map<String, String>? receiverHeaders})>
-            ensureResolvedCastUrl() async {
-          resolvedCastFuture ??= _resolveCastUrlForPlayback(
-            streamUrl: streamTrim,
-            headers: headers,
-            preferAndroidHwTranscode: preferAndroidHwTranscode,
-          );
-          return resolvedCastFuture!;
-        }
-
         final willEmbedHeaders =
             _needsHeaderEmbeddingProxy(streamTrim, headers);
 
@@ -438,7 +449,7 @@ class PlaytorrioCastService {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => Navigator.pop(ctx),
+                    onPressed: () => Navigator.pop(ctx, null),
                     icon: const Icon(Icons.close_rounded, color: Colors.white54),
                   ),
                 ],
@@ -509,57 +520,7 @@ class PlaytorrioCastService {
                             d.modelName ?? '',
                             style: const TextStyle(color: Colors.white38),
                           ),
-                          onTap: () async {
-                            Navigator.pop(ctx);
-                            try {
-                              final resolved = await ensureResolvedCastUrl();
-                              final castUri =
-                                  Uri.tryParse(resolved.url.trim());
-                              if (castUri == null || !castUri.hasScheme) {
-                                throw StateError('Invalid resolved cast URL.');
-                              }
-                              final castBuffered =
-                                  resolved.url.contains('/cast-hw/');
-                              final effectiveLive =
-                                  liveStream && !castBuffered;
-                              final ok = await GoogleCastSessionManager.instance
-                                  .startSessionWithDevice(d);
-                              if (!ok) {
-                                throw StateError('Could not start Cast session.');
-                              }
-                              await _waitConnected();
-                              await GoogleCastRemoteMediaClient.instance.loadMedia(
-                                _mediaInfo(
-                                  uri: castUri,
-                                  title: title,
-                                  subtitle: subtitle,
-                                  poster: posterUri,
-                                  live: effectiveLive,
-                                  headers: resolved.receiverHeaders,
-                                ),
-                                autoPlay: true,
-                                playPosition: effectiveLive
-                                    ? Duration.zero
-                                    : startPosition,
-                              );
-                              onCastStarted?.call();
-                              if (rootContext.mounted) {
-                                ScaffoldMessenger.of(rootContext).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Playing on ${d.friendlyName}'),
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              await CastHwTranscodeCoordinator.instance
-                                  .disposeActive();
-                              if (rootContext.mounted) {
-                                ScaffoldMessenger.of(rootContext).showSnackBar(
-                                  SnackBar(content: Text('Cast failed: $e')),
-                                );
-                              }
-                            }
-                          },
+                          onTap: () => Navigator.pop(ctx, d),
                         );
                       },
                     );
@@ -570,10 +531,57 @@ class PlaytorrioCastService {
           ),
         );
       },
-    ).whenComplete(() async {
-      try {
-        await GoogleCastDiscoveryManager.instance.stopDiscovery();
-      } catch (_) {}
-    });
+    );
+
+    try {
+      await GoogleCastDiscoveryManager.instance.stopDiscovery();
+    } catch (_) {}
+
+    if (!rootContext.mounted) return;
+    if (picked == null) return;
+
+    try {
+      final resolved = await ensureResolvedCastUrl();
+      final castUri = Uri.tryParse(resolved.url.trim());
+      if (castUri == null || !castUri.hasScheme) {
+        throw StateError('Invalid resolved cast URL.');
+      }
+      final castBuffered = resolved.url.contains('/cast-hw/');
+      final effectiveLive = liveStream && !castBuffered;
+      final ok = await GoogleCastSessionManager.instance
+          .startSessionWithDevice(picked);
+      if (!ok) {
+        throw StateError('Could not start Cast session.');
+      }
+      await _waitConnected();
+      await GoogleCastRemoteMediaClient.instance.loadMedia(
+        _mediaInfo(
+          uri: castUri,
+          title: title,
+          subtitle: subtitle,
+          poster: posterUri,
+          live: effectiveLive,
+          headers: resolved.receiverHeaders,
+        ),
+        autoPlay: true,
+        playPosition:
+            effectiveLive ? Duration.zero : startPosition,
+      );
+      onCastStarted?.call();
+      if (rootContext.mounted) {
+        ScaffoldMessenger.of(rootContext).showSnackBar(
+          SnackBar(
+            content: Text('Playing on ${picked.friendlyName}'),
+          ),
+        );
+      }
+    } catch (e) {
+      await CastHwTranscodeCoordinator.instance.disposeActive();
+      if (rootContext.mounted) {
+        ScaffoldMessenger.of(rootContext).showSnackBar(
+          SnackBar(content: Text('Cast failed: $e')),
+        );
+      }
+    }
   }
 }
