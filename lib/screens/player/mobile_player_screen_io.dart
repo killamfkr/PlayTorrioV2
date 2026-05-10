@@ -509,24 +509,30 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     final poster = widget.movie != null && widget.movie!.posterPath.isNotEmpty
         ? TmdbApi.getImageUrl(widget.movie!.posterPath)
         : null;
-    String castUrl = widget.mediaPath;
-    try {
-      await LocalServerService().start();
-      final lanUrl =
-          await LocalServerService().urlWithLanHostForCast(castUrl);
-      if (lanUrl != null && lanUrl.isNotEmpty) {
-        castUrl = lanUrl;
-      }
-    } catch (_) {}
+    await PlaytorrioCastService.instance.initialize();
+    final hwPref =
+        Platform.isAndroid && await SettingsService().androidCastHwTranscodeEnabled();
+    var castStreamUrl = widget.mediaPath.trim();
+    // IPTV / live broadcast: Chromecast cannot set mpv's VLC UA; proxy adds it upstream.
+    if (widget.liveBroadcast) {
+      try {
+        await LocalServerService().start();
+        castStreamUrl = LocalServerService().getHlsProxyUrl(
+          castStreamUrl,
+          const {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'},
+        );
+      } catch (_) {}
+    }
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: castUrl,
+      streamUrl: castStreamUrl,
       title: widget.title,
       subtitle: _mediaSessionSubtitle,
       posterUrl: poster,
       liveStream: _castUsesLiveStream,
       startPosition: _player.state.position,
       headers: widget.headers,
+      preferAndroidHwTranscode: hwPref,
       onCastStarted: () {
         if (mounted) _player.pause();
       },
@@ -792,6 +798,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
 
     // ── Lifecycle Observer ───────────────────────────────────────────────
     WidgetsBinding.instance.addObserver(this);
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      unawaited(PlaytorrioCastService.instance.initialize());
+    }
 
     // ── System UI ────────────────────────────────────────────────────────
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);

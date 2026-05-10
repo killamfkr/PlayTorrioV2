@@ -213,7 +213,8 @@ class _PlaytorrioProfileGateState extends State<PlaytorrioProfileGate> {
   Future<void> _loadEdit(int p) async {
     final m = await _settings.getLocalProfileDisplayMeta();
     final row = m['$p'] ?? {};
-    _editName = (row['name'] as String?)?.trim() ?? 'Profile $p';
+    _editName =
+        SettingsService.coerceProfileDisplayName(row['name']) ?? 'Profile $p';
     _editAv = (row['avatar'] is int) ? row['avatar'] as int : 0;
     _editNameCtrl.text = _editName;
     if (mounted) setState(() {});
@@ -404,7 +405,10 @@ class _PlaytorrioProfileGateState extends State<PlaytorrioProfileGate> {
                         final av = (meta['$p']?['avatar'] is int)
                             ? meta['$p']!['avatar'] as int
                             : 0;
-                        final name = (meta['$p']?['name'] as String?);
+                        final name =
+                            SettingsService.coerceProfileDisplayName(
+                          meta['$p']?['name'],
+                        );
                         final label = (name != null && name.isNotEmpty)
                             ? name
                             : 'Profile $p';

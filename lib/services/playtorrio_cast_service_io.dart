@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_chrome_cast/flutter_chrome_cast.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../api/local_server_service.dart';
+import 'cast_hw_transcode_android.dart';
+
 /// Google Cast (Chromecast) sender — Android + iOS (including Android TV).
 class PlaytorrioCastService {
   PlaytorrioCastService._();
@@ -85,9 +88,23 @@ class PlaytorrioCastService {
   bool get isInitialized => _initialized;
 
   /// True while a Cast session is connected (receiver playing or ready).
-  Stream<bool> get isCastingActiveStream {
-    if (!_initialized) return Stream<bool>.value(false);
-    return GoogleCastSessionManager.instance.currentSessionStream.map(
+  ///
+  /// Waits for [initialize] on first listen — important because the player UI
+  /// often mounts before app-startup Cast init finishes; returning a completed
+  /// `Stream.value(false)` would never emit session updates afterward.
+  Stream<bool> get isCastingActiveStream => _isCastingActiveStreamImpl();
+
+  Stream<bool> _isCastingActiveStreamImpl() async* {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      yield false;
+      return;
+    }
+    await initialize();
+    if (!_initialized) {
+      yield false;
+      return;
+    }
+    yield* GoogleCastSessionManager.instance.currentSessionStream.map(
       (s) =>
           s != null &&
           s.connectionState == GoogleCastConnectState.connected,
@@ -105,18 +122,31 @@ class PlaytorrioCastService {
   }
 
   Future<void> stopCasting() async {
-    if (!_initialized) return;
     try {
-      await GoogleCastSessionManager.instance.endSessionAndStopCasting();
+      if (_initialized) {
+        await GoogleCastSessionManager.instance.endSessionAndStopCasting();
+      }
     } catch (e, st) {
       debugPrint('[Cast] stopCasting: $e\n$st');
     }
+    await CastHwTranscodeCoordinator.instance.disposeActive();
   }
 
   /// Rough hint for UI: Cast receiver appears to be playing or trying to play.
-  Stream<bool> get castRemoteIsPlayingStream {
-    if (!_initialized) return Stream<bool>.value(false);
-    return GoogleCastRemoteMediaClient.instance.mediaStatusStream.map((s) {
+  Stream<bool> get castRemoteIsPlayingStream =>
+      _castRemoteIsPlayingStreamImpl();
+
+  Stream<bool> _castRemoteIsPlayingStreamImpl() async* {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      yield false;
+      return;
+    }
+    await initialize();
+    if (!_initialized) {
+      yield false;
+      return;
+    }
+    yield* GoogleCastRemoteMediaClient.instance.mediaStatusStream.map((s) {
       final ps = s?.playerState;
       return ps == CastMediaPlayerState.playing ||
           ps == CastMediaPlayerState.buffering ||
@@ -186,6 +216,27 @@ class PlaytorrioCastService {
 
   String _guessContentType(Uri uri) {
     final p = uri.path.toLowerCase();
+    // Phone-local proxy: Cast uses [contentType] before loading; the path is always /hls-proxy.
+    if (p.contains('hls-proxy')) {
+      final nested = uri.queryParameters['url'];
+      if (nested != null && nested.isNotEmpty) {
+        try {
+          final d = Uri.decodeComponent(nested).toLowerCase();
+          if (d.contains('.m3u8') ||
+              d.contains('m3u8') ||
+              d.contains('/playlist') ||
+              d.contains('master.m3u')) {
+            return 'application/vnd.apple.mpegurl';
+          }
+          if (d.endsWith('.ts') ||
+              d.contains('.ts?') ||
+              d.contains('/live/')) {
+            return 'video/mp2t';
+          }
+        } catch (_) {}
+      }
+      return 'application/vnd.apple.mpegurl';
+    }
     if (p.contains('.m3u8')) return 'application/vnd.apple.mpegurl';
     if (p.contains('.mpd')) return 'application/dash+xml';
     if (p.endsWith('.mp4')) return 'video/mp4';
@@ -224,15 +275,72 @@ class PlaytorrioCastService {
   }
 
   Future<void> _waitConnected() async {
-    final sw = Stopwatch()..start();
-    while (sw.elapsed < const Duration(seconds: 20)) {
-      if (GoogleCastSessionManager.instance.connectionState ==
-          GoogleCastConnectState.connected) {
+    // Give the native session a moment to transition out of "idle".
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final deadline = DateTime.now().add(const Duration(seconds: 45));
+    while (DateTime.now().isBefore(deadline)) {
+      final sm = GoogleCastSessionManager.instance;
+      if (sm.hasConnectedSession) return;
+      if (sm.connectionState == GoogleCastConnectState.connected) return;
+      final sess = sm.currentSession;
+      if (sess != null &&
+          sess.connectionState == GoogleCastConnectState.connected) {
         return;
       }
-      await Future.delayed(const Duration(milliseconds: 120));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
+    final sm = GoogleCastSessionManager.instance;
+    debugPrint(
+      '[Cast] waitConnected timeout: mgr=${sm.connectionState} '
+      'hasSession=${sm.hasConnectedSession} sess=${sm.currentSession?.connectionState}',
+    );
     throw StateError('Timed out connecting to the Cast device.');
+  }
+
+  /// Default Chromecast CAF does not honor [customData.requestHeaders]. When the
+  /// upstream CDN needs Referer / Cookie / etc., route through [LocalServerService]
+  /// `hls-proxy` first so the phone applies headers (same pattern as Stremio IPTV).
+  bool _needsHeaderEmbeddingProxy(String streamUrl, Map<String, String>? headers) {
+    if (headers == null || headers.isEmpty) return false;
+    final u = streamUrl.trim().toLowerCase();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) return false;
+    if (u.contains('/hls-proxy')) return false;
+    return true;
+  }
+
+  Future<({String url, Map<String, String>? receiverHeaders})>
+      _resolveCastUrlForPlayback({
+    required String streamUrl,
+    Map<String, String>? headers,
+    required bool preferAndroidHwTranscode,
+  }) async {
+    await LocalServerService().start();
+    var castUrl = streamUrl.trim();
+    Map<String, String>? receiverHeaders = headers;
+
+    if (_needsHeaderEmbeddingProxy(castUrl, receiverHeaders)) {
+      castUrl =
+          LocalServerService().getHlsProxyUrl(castUrl, receiverHeaders!);
+      receiverHeaders = null;
+    }
+
+    if (preferAndroidHwTranscode && Platform.isAndroid) {
+      final hw = await androidHwTranscodeCastUrlIfEnabled(
+        inputUrl: castUrl,
+        headers: receiverHeaders,
+        enabled: true,
+      );
+      if (hw != null && hw.isNotEmpty) {
+        return (url: hw, receiverHeaders: null);
+      }
+    }
+
+    var outUrl = castUrl;
+    final lanUrl = await LocalServerService().urlWithLanHostForCast(outUrl);
+    if (lanUrl != null && lanUrl.isNotEmpty) {
+      outUrl = lanUrl;
+    }
+    return (url: outUrl, receiverHeaders: receiverHeaders);
   }
 
   Future<void> openCastSheet({
@@ -245,6 +353,7 @@ class PlaytorrioCastService {
     Duration startPosition = Duration.zero,
     Map<String, String>? headers,
     VoidCallback? onCastStarted,
+    bool preferAndroidHwTranscode = false,
   }) async {
     if (!_initialized) {
       for (var attempt = 0; attempt < 6 && !_initialized; attempt++) {
@@ -277,8 +386,8 @@ class PlaytorrioCastService {
       return;
     }
 
-    final uri = Uri.tryParse(streamUrl.trim());
-    if (uri == null || !uri.hasScheme) {
+    final streamTrim = streamUrl.trim();
+    if (Uri.tryParse(streamTrim)?.hasScheme != true) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Invalid stream URL for casting.')),
@@ -298,13 +407,28 @@ class PlaytorrioCastService {
 
     final rootContext = context;
 
-    await showModalBottomSheet<void>(
+    Future<({String url, Map<String, String>? receiverHeaders})>?
+        resolvedCastFuture;
+    Future<({String url, Map<String, String>? receiverHeaders})>
+        ensureResolvedCastUrl() async {
+      resolvedCastFuture ??= _resolveCastUrlForPlayback(
+        streamUrl: streamTrim,
+        headers: headers,
+        preferAndroidHwTranscode: preferAndroidHwTranscode,
+      );
+      return resolvedCastFuture!;
+    }
+
+    final picked = await showModalBottomSheet<GoogleCastDevice?>(
       context: context,
       backgroundColor: const Color(0xFF1A1025),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
+        final willEmbedHeaders =
+            _needsHeaderEmbeddingProxy(streamTrim, headers);
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           child: Column(
@@ -325,17 +449,38 @@ class PlaytorrioCastService {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => Navigator.pop(ctx),
+                    onPressed: () => Navigator.pop(ctx, null),
                     icon: const Icon(Icons.close_rounded, color: Colors.white54),
                   ),
                 ],
               ),
+              if (preferAndroidHwTranscode && Platform.isAndroid)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'Hardware transcoding on this phone is enabled for Chromecast. '
+                    'The first TV you pick may take a few seconds while HLS segments are generated.',
+                    style: TextStyle(
+                      color: Colors.cyanAccent.withValues(alpha: 0.82),
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
               if (headers != null && headers.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Text(
-                    'This stream uses custom headers. Chromecast often cannot play such URLs unless you use a custom receiver.',
-                    style: TextStyle(color: Colors.amber.shade200, fontSize: 12),
+                    willEmbedHeaders
+                        ? 'Referer and other headers are applied on your phone, then Chromecast loads the stream from this device (default receiver works).'
+                        : 'This stream uses custom headers. Chromecast often cannot play such URLs unless you use a custom receiver.',
+                    style: TextStyle(
+                      color: willEmbedHeaders
+                          ? Colors.cyanAccent.withValues(alpha: 0.85)
+                          : Colors.amber.shade200,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
                   ),
                 ),
               SizedBox(
@@ -375,45 +520,7 @@ class PlaytorrioCastService {
                             d.modelName ?? '',
                             style: const TextStyle(color: Colors.white38),
                           ),
-                          onTap: () async {
-                            Navigator.pop(ctx);
-                            try {
-                              final ok = await GoogleCastSessionManager.instance
-                                  .startSessionWithDevice(d);
-                              if (!ok) {
-                                throw StateError('Could not start Cast session.');
-                              }
-                              await _waitConnected();
-                              await GoogleCastRemoteMediaClient.instance.loadMedia(
-                                _mediaInfo(
-                                  uri: uri,
-                                  title: title,
-                                  subtitle: subtitle,
-                                  poster: posterUri,
-                                  live: liveStream,
-                                  headers: headers,
-                                ),
-                                autoPlay: true,
-                                // Live streams use infinite timeline; local player position is meaningless.
-                                playPosition:
-                                    liveStream ? Duration.zero : startPosition,
-                              );
-                              onCastStarted?.call();
-                              if (rootContext.mounted) {
-                                ScaffoldMessenger.of(rootContext).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Playing on ${d.friendlyName}'),
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (rootContext.mounted) {
-                                ScaffoldMessenger.of(rootContext).showSnackBar(
-                                  SnackBar(content: Text('Cast failed: $e')),
-                                );
-                              }
-                            }
-                          },
+                          onTap: () => Navigator.pop(ctx, d),
                         );
                       },
                     );
@@ -424,10 +531,57 @@ class PlaytorrioCastService {
           ),
         );
       },
-    ).whenComplete(() async {
-      try {
-        await GoogleCastDiscoveryManager.instance.stopDiscovery();
-      } catch (_) {}
-    });
+    );
+
+    try {
+      await GoogleCastDiscoveryManager.instance.stopDiscovery();
+    } catch (_) {}
+
+    if (!rootContext.mounted) return;
+    if (picked == null) return;
+
+    try {
+      final resolved = await ensureResolvedCastUrl();
+      final castUri = Uri.tryParse(resolved.url.trim());
+      if (castUri == null || !castUri.hasScheme) {
+        throw StateError('Invalid resolved cast URL.');
+      }
+      final castBuffered = resolved.url.contains('/cast-hw/');
+      final effectiveLive = liveStream && !castBuffered;
+      final ok = await GoogleCastSessionManager.instance
+          .startSessionWithDevice(picked);
+      if (!ok) {
+        throw StateError('Could not start Cast session.');
+      }
+      await _waitConnected();
+      await GoogleCastRemoteMediaClient.instance.loadMedia(
+        _mediaInfo(
+          uri: castUri,
+          title: title,
+          subtitle: subtitle,
+          poster: posterUri,
+          live: effectiveLive,
+          headers: resolved.receiverHeaders,
+        ),
+        autoPlay: true,
+        playPosition:
+            effectiveLive ? Duration.zero : startPosition,
+      );
+      onCastStarted?.call();
+      if (rootContext.mounted) {
+        ScaffoldMessenger.of(rootContext).showSnackBar(
+          SnackBar(
+            content: Text('Playing on ${picked.friendlyName}'),
+          ),
+        );
+      }
+    } catch (e) {
+      await CastHwTranscodeCoordinator.instance.disposeActive();
+      if (rootContext.mounted) {
+        ScaffoldMessenger.of(rootContext).showSnackBar(
+          SnackBar(content: Text('Cast failed: $e')),
+        );
+      }
+    }
   }
 }

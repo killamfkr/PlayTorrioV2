@@ -215,6 +215,8 @@ class SettingsService {
   static const String _showAndroidPipButtonKey = 'playback_show_android_pip_button';
   /// Android 12+: enter PiP automatically when user leaves the app while playing.
   static const String _autoEnterPipAndroidKey = 'playback_auto_pip_android';
+  /// Android only: remux/transcode on phone with hardware H.264 for Chromecast.
+  static const String _androidCastHwTranscodeKey = 'android_cast_hw_transcode';
   /// Built-in player: show embedded / external subtitles (Flutter overlay + mpv track).
   static const String _builtinPlayerSubtitlesEnabledKey =
       'playback_builtin_subtitles_enabled';
@@ -300,6 +302,26 @@ class SettingsService {
   Future<void> setPlaytorrioProfileGateEnabled(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_ptProfileGateKey, v);
+  }
+
+  /// Normalizes profile display [name] from stored JSON (handles String, List, etc.).
+  /// Avoids `as String?` crashes when prefs or merges contain unexpected shapes.
+  static String? coerceProfileDisplayName(dynamic v) {
+    if (v == null) return null;
+    if (v is String) {
+      final t = v.trim();
+      return t.isEmpty ? null : t;
+    }
+    if (v is List) {
+      final parts = v
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (parts.isEmpty) return null;
+      return parts.join(' ');
+    }
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
   }
 
   /// Local only: { "1": {"name": "....", "avatar": 0}, ... } for the picker UI.
@@ -518,6 +540,16 @@ class SettingsService {
   Future<void> setAutoEnterPipAndroid(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_autoEnterPipAndroidKey, value);
+  }
+
+  Future<bool> androidCastHwTranscodeEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_androidCastHwTranscodeKey) ?? false;
+  }
+
+  Future<void> setAndroidCastHwTranscodeEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_androidCastHwTranscodeKey, value);
   }
 
   Future<bool> getBuiltinPlayerSubtitlesEnabled() async {

@@ -35,5 +35,9 @@ class LocalServerService {
 
   Future<String?> urlWithLanHostForCast(String url) async => null;
 
+  void registerCastHwSession(String sessionId, String absoluteOutputDir) {}
+
+  void unregisterCastHwSession(String sessionId) {}
+
   Future<void> stop() async {}
 }
