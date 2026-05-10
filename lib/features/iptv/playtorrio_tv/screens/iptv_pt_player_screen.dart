@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:android_pip/android_pip.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -98,6 +99,10 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
 
   StreamSubscription? _posSub, _playingSub, _bufferingSub, _errorSub;
 
+  AndroidPIP? _androidPip;
+  bool _showAndroidPipButton = true;
+  bool _autoEnterPipAndroid = false;
+
   int _sourceIdx = 0;
   bool _playing = false;
   bool _buffering = false;
@@ -161,6 +166,61 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     }
     _openCurrent();
     _startWatchdog();
+    _scheduleHideControls();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _showAndroidPipButton = await _settings.showAndroidPipButton();
+      _autoEnterPipAndroid = await _settings.autoEnterPipAndroid();
+      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        _androidPip = AndroidPIP(
+          onPipEntered: () {
+            if (mounted) setState(() {});
+          },
+          onPipExited: () {
+            if (mounted) setState(() {});
+          },
+          onPipMaximised: () {
+            if (mounted) setState(() {});
+          },
+        );
+        try {
+          if (_autoEnterPipAndroid &&
+              await AndroidPIP.isAutoPipAvailable == true) {
+            await _androidPip!.setAutoPipMode(autoEnter: true);
+          }
+        } catch (e) {
+          debugPrint('[IPTV Player] setAutoPipMode: $e');
+        }
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<bool> _enterPipIfPossible() async {
+    if (_androidPip == null || !Platform.isAndroid) return false;
+    try {
+      final avail = await AndroidPIP.isPipAvailable;
+      if (avail != true) return false;
+      final entered = await _androidPip!.enterPipMode();
+      return entered == true;
+    } catch (e) {
+      debugPrint('[IPTV Player] enterPipMode: $e');
+      return false;
+    }
+  }
+
+  Future<void> _onPipButtonPressed() async {
+    if (_androidPip == null) return;
+    final ok = await _enterPipIfPossible();
+    if (mounted && !ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is not available on this device.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
     _scheduleHideControls();
   }
 
@@ -350,6 +410,9 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     _playingSub = _player.stream.playing.listen((p) {
       if (!mounted) return;
       setState(() => _playing = p);
+      if (Platform.isAndroid && _androidPip != null) {
+        unawaited(_androidPip!.setIsPlaying(p));
+      }
       if (p) {
         _readyNotPlayingSince = null;
         if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
@@ -835,6 +898,13 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     super.didChangeAppLifecycleState(state);
     if (!platformIsAndroid && !Platform.isIOS) return;
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      if (Platform.isAndroid &&
+          !DeviceProfile.isAndroidTv &&
+          _autoEnterPipAndroid &&
+          _playing &&
+          _androidPip != null) {
+        unawaited(_enterPipIfPossible());
+      }
       unawaited(_settings.continuePlaybackInBackground().then((allow) {
         if (!mounted) return;
         if (!allow && _playing) {
@@ -1027,6 +1097,18 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
                 _scheduleHideControls();
               },
               icon: const Icon(Icons.cast_rounded, color: Colors.white70),
+            ),
+          ],
+          if (Platform.isAndroid &&
+              !DeviceProfile.isAndroidTv &&
+              _showAndroidPipButton) ...[
+            IconButton(
+              tooltip: 'Picture-in-picture',
+              onPressed: _onPipButtonPressed,
+              icon: const Icon(
+                Icons.picture_in_picture_alt_outlined,
+                color: Colors.white70,
+              ),
             ),
           ],
         ],
