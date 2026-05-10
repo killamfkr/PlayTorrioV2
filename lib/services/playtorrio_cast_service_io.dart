@@ -260,28 +260,50 @@ class PlaytorrioCastService {
     throw StateError('Timed out connecting to the Cast device.');
   }
 
-  Future<String> _resolveCastUrlForPlayback({
+  /// Default Chromecast CAF does not honor [customData.requestHeaders]. When the
+  /// upstream CDN needs Referer / Cookie / etc., route through [LocalServerService]
+  /// `hls-proxy` first so the phone applies headers (same pattern as Stremio IPTV).
+  bool _needsHeaderEmbeddingProxy(String streamUrl, Map<String, String>? headers) {
+    if (headers == null || headers.isEmpty) return false;
+    final u = streamUrl.trim().toLowerCase();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) return false;
+    if (u.contains('/hls-proxy')) return false;
+    return true;
+  }
+
+  Future<({String url, Map<String, String>? receiverHeaders})>
+      _resolveCastUrlForPlayback({
     required String streamUrl,
     Map<String, String>? headers,
     required bool preferAndroidHwTranscode,
   }) async {
     await LocalServerService().start();
+    var castUrl = streamUrl.trim();
+    Map<String, String>? receiverHeaders = headers;
+
+    if (_needsHeaderEmbeddingProxy(castUrl, receiverHeaders)) {
+      castUrl =
+          LocalServerService().getHlsProxyUrl(castUrl, receiverHeaders!);
+      receiverHeaders = null;
+    }
+
     if (preferAndroidHwTranscode && Platform.isAndroid) {
       final hw = await androidHwTranscodeCastUrlIfEnabled(
-        inputUrl: streamUrl,
-        headers: headers,
+        inputUrl: castUrl,
+        headers: receiverHeaders,
         enabled: true,
       );
       if (hw != null && hw.isNotEmpty) {
-        return hw;
+        return (url: hw, receiverHeaders: null);
       }
     }
-    var castUrl = streamUrl.trim();
-    final lanUrl = await LocalServerService().urlWithLanHostForCast(castUrl);
+
+    var outUrl = castUrl;
+    final lanUrl = await LocalServerService().urlWithLanHostForCast(outUrl);
     if (lanUrl != null && lanUrl.isNotEmpty) {
-      castUrl = lanUrl;
+      outUrl = lanUrl;
     }
-    return castUrl;
+    return (url: outUrl, receiverHeaders: receiverHeaders);
   }
 
   Future<void> openCastSheet({
@@ -355,15 +377,20 @@ class PlaytorrioCastService {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
-        Future<String>? resolvedCastUrlFuture;
-        Future<String> ensureResolvedCastUrl() async {
-          resolvedCastUrlFuture ??= _resolveCastUrlForPlayback(
+        Future<({String url, Map<String, String>? receiverHeaders})>?
+            resolvedCastFuture;
+        Future<({String url, Map<String, String>? receiverHeaders})>
+            ensureResolvedCastUrl() async {
+          resolvedCastFuture ??= _resolveCastUrlForPlayback(
             streamUrl: streamTrim,
             headers: headers,
             preferAndroidHwTranscode: preferAndroidHwTranscode,
           );
-          return resolvedCastUrlFuture!;
+          return resolvedCastFuture!;
         }
+
+        final willEmbedHeaders =
+            _needsHeaderEmbeddingProxy(streamTrim, headers);
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -407,8 +434,16 @@ class PlaytorrioCastService {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Text(
-                    'This stream uses custom headers. Chromecast often cannot play such URLs unless you use a custom receiver.',
-                    style: TextStyle(color: Colors.amber.shade200, fontSize: 12),
+                    willEmbedHeaders
+                        ? 'Referer and other headers are applied on your phone, then Chromecast loads the stream from this device (default receiver works).'
+                        : 'This stream uses custom headers. Chromecast often cannot play such URLs unless you use a custom receiver.',
+                    style: TextStyle(
+                      color: willEmbedHeaders
+                          ? Colors.cyanAccent.withValues(alpha: 0.85)
+                          : Colors.amber.shade200,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
                   ),
                 ),
               SizedBox(
@@ -451,13 +486,14 @@ class PlaytorrioCastService {
                           onTap: () async {
                             Navigator.pop(ctx);
                             try {
-                              final resolvedUrl = await ensureResolvedCastUrl();
-                              final castUri = Uri.tryParse(resolvedUrl.trim());
+                              final resolved = await ensureResolvedCastUrl();
+                              final castUri =
+                                  Uri.tryParse(resolved.url.trim());
                               if (castUri == null || !castUri.hasScheme) {
                                 throw StateError('Invalid resolved cast URL.');
                               }
                               final castBuffered =
-                                  resolvedUrl.contains('/cast-hw/');
+                                  resolved.url.contains('/cast-hw/');
                               final effectiveLive =
                                   liveStream && !castBuffered;
                               final ok = await GoogleCastSessionManager.instance
@@ -473,8 +509,7 @@ class PlaytorrioCastService {
                                   subtitle: subtitle,
                                   poster: posterUri,
                                   live: effectiveLive,
-                                  headers:
-                                      castBuffered ? null : headers,
+                                  headers: resolved.receiverHeaders,
                                 ),
                                 autoPlay: true,
                                 playPosition: effectiveLive
