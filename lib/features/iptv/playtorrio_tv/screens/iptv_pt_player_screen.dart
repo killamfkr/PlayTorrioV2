@@ -14,6 +14,7 @@ import '../../../../api/settings_service.dart';
 import '../../../../platform_flags.dart';
 import '../../../../services/built_in_video_media_session.dart';
 import '../../../../services/playtorrio_cast_service.dart';
+import '../../../../api/local_server_service.dart';
 import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 import '../../../../widgets/tv_interactive.dart';
@@ -617,13 +618,16 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   Future<void> _openPtCast() async {
-    final url = widget.sources[_sourceIdx].url;
+    final raw = widget.sources[_sourceIdx].url.trim();
+    await LocalServerService().start();
+    final proxied =
+        LocalServerService().getHlsProxyUrl(raw, {'User-Agent': _ua});
     await PlaytorrioCastService.instance.initialize();
     final hwPref =
         Platform.isAndroid && await SettingsService().androidCastHwTranscodeEnabled();
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: url,
+      streamUrl: proxied,
       title: widget.title,
       subtitle: widget.subtitle,
       posterUrl: widget.logoUrl,

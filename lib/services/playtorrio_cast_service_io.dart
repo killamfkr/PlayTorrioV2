@@ -190,6 +190,27 @@ class PlaytorrioCastService {
 
   String _guessContentType(Uri uri) {
     final p = uri.path.toLowerCase();
+    // Phone-local proxy: Cast uses [contentType] before loading; the path is always /hls-proxy.
+    if (p.contains('hls-proxy')) {
+      final nested = uri.queryParameters['url'];
+      if (nested != null && nested.isNotEmpty) {
+        try {
+          final d = Uri.decodeComponent(nested).toLowerCase();
+          if (d.contains('.m3u8') ||
+              d.contains('m3u8') ||
+              d.contains('/playlist') ||
+              d.contains('master.m3u')) {
+            return 'application/vnd.apple.mpegurl';
+          }
+          if (d.endsWith('.ts') ||
+              d.contains('.ts?') ||
+              d.contains('/live/')) {
+            return 'video/mp2t';
+          }
+        } catch (_) {}
+      }
+      return 'application/vnd.apple.mpegurl';
+    }
     if (p.contains('.m3u8')) return 'application/vnd.apple.mpegurl';
     if (p.contains('.mpd')) return 'application/dash+xml';
     if (p.endsWith('.mp4')) return 'video/mp4';

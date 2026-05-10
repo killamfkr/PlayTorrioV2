@@ -37,6 +37,7 @@ import '../../api/debrid_api.dart';
 import '../../api/torrent_api.dart';
 import '../../api/torrent_filter.dart';
 import '../../api/tmdb_api.dart';
+import '../../api/local_server_service.dart';
 import '../../api/tmdb_service.dart';
 import '../../services/playtorrio_cast_service.dart';
 import '../../api/introdb_service.dart';
@@ -511,9 +512,20 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     await PlaytorrioCastService.instance.initialize();
     final hwPref =
         Platform.isAndroid && await SettingsService().androidCastHwTranscodeEnabled();
+    var castStreamUrl = widget.mediaPath.trim();
+    // IPTV / live broadcast: Chromecast cannot set mpv's VLC UA; proxy adds it upstream.
+    if (widget.liveBroadcast) {
+      try {
+        await LocalServerService().start();
+        castStreamUrl = LocalServerService().getHlsProxyUrl(
+          castStreamUrl,
+          const {'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20'},
+        );
+      } catch (_) {}
+    }
     await PlaytorrioCastService.instance.openCastSheet(
       context: context,
-      streamUrl: widget.mediaPath,
+      streamUrl: castStreamUrl,
       title: widget.title,
       subtitle: _mediaSessionSubtitle,
       posterUrl: poster,
