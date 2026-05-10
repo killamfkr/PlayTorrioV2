@@ -304,6 +304,26 @@ class SettingsService {
     await prefs.setBool(_ptProfileGateKey, v);
   }
 
+  /// Normalizes profile display [name] from stored JSON (handles String, List, etc.).
+  /// Avoids `as String?` crashes when prefs or merges contain unexpected shapes.
+  static String? coerceProfileDisplayName(dynamic v) {
+    if (v == null) return null;
+    if (v is String) {
+      final t = v.trim();
+      return t.isEmpty ? null : t;
+    }
+    if (v is List) {
+      final parts = v
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (parts.isEmpty) return null;
+      return parts.join(' ');
+    }
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
   /// Local only: { "1": {"name": "....", "avatar": 0}, ... } for the picker UI.
   Future<Map<String, Map<String, dynamic>>> getLocalProfileDisplayMeta() async {
     final prefs = await SharedPreferences.getInstance();
