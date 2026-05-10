@@ -88,9 +88,23 @@ class PlaytorrioCastService {
   bool get isInitialized => _initialized;
 
   /// True while a Cast session is connected (receiver playing or ready).
-  Stream<bool> get isCastingActiveStream {
-    if (!_initialized) return Stream<bool>.value(false);
-    return GoogleCastSessionManager.instance.currentSessionStream.map(
+  ///
+  /// Waits for [initialize] on first listen — important because the player UI
+  /// often mounts before app-startup Cast init finishes; returning a completed
+  /// `Stream.value(false)` would never emit session updates afterward.
+  Stream<bool> get isCastingActiveStream => _isCastingActiveStreamImpl();
+
+  Stream<bool> _isCastingActiveStreamImpl() async* {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      yield false;
+      return;
+    }
+    await initialize();
+    if (!_initialized) {
+      yield false;
+      return;
+    }
+    yield* GoogleCastSessionManager.instance.currentSessionStream.map(
       (s) =>
           s != null &&
           s.connectionState == GoogleCastConnectState.connected,
@@ -108,9 +122,10 @@ class PlaytorrioCastService {
   }
 
   Future<void> stopCasting() async {
-    if (!_initialized) return;
     try {
-      await GoogleCastSessionManager.instance.endSessionAndStopCasting();
+      if (_initialized) {
+        await GoogleCastSessionManager.instance.endSessionAndStopCasting();
+      }
     } catch (e, st) {
       debugPrint('[Cast] stopCasting: $e\n$st');
     }
@@ -118,9 +133,20 @@ class PlaytorrioCastService {
   }
 
   /// Rough hint for UI: Cast receiver appears to be playing or trying to play.
-  Stream<bool> get castRemoteIsPlayingStream {
-    if (!_initialized) return Stream<bool>.value(false);
-    return GoogleCastRemoteMediaClient.instance.mediaStatusStream.map((s) {
+  Stream<bool> get castRemoteIsPlayingStream =>
+      _castRemoteIsPlayingStreamImpl();
+
+  Stream<bool> _castRemoteIsPlayingStreamImpl() async* {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      yield false;
+      return;
+    }
+    await initialize();
+    if (!_initialized) {
+      yield false;
+      return;
+    }
+    yield* GoogleCastRemoteMediaClient.instance.mediaStatusStream.map((s) {
       final ps = s?.playerState;
       return ps == CastMediaPlayerState.playing ||
           ps == CastMediaPlayerState.buffering ||

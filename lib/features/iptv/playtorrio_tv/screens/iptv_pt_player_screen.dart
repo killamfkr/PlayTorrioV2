@@ -142,6 +142,9 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isAndroid || Platform.isIOS) {
+      unawaited(PlaytorrioCastService.instance.initialize());
+    }
     _initOrientationAndChrome();
     WakelockPlus.enable();
     _player = Player(

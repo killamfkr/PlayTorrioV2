@@ -799,6 +799,10 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
     // ── Lifecycle Observer ───────────────────────────────────────────────
     WidgetsBinding.instance.addObserver(this);
 
+    if (Platform.isAndroid || Platform.isIOS) {
+      unawaited(PlaytorrioCastService.instance.initialize());
+    }
+
     // ── System UI ────────────────────────────────────────────────────────
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     // Force landscape on open, then unlock so user can rotate freely
