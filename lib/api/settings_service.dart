@@ -1340,7 +1340,7 @@ class SettingsService {
   static const List<String> allNavIds = [
     'home', 'discover', 'live_matches', 'sports',
     'iptv', 'iptv_pt', 'iptv_pt_guide', 'audiobooks', 'books', 'music', 'comics', 'manga',
-    'jellyfin', 'anime', 'asian_drama', 'search', 'mylist', 'magnet',
+    'jellyfin', 'anime', 'asian_drama', 'media_downloader', 'search', 'mylist', 'magnet',
   ];
 
   static const List<String> _navTailIds = ['search', 'mylist', 'magnet'];

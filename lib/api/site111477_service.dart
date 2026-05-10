@@ -190,6 +190,11 @@ class Site111477Service {
     return '${v.toStringAsFixed(v >= 100 || i == 0 ? 0 : 1)} ${units[i]}';
   }
 
+  /// Public helpers for UI (e.g. Media Downloader cards).
+  static String qualityTagFor(String fileName) => _qualityTag(fileName);
+
+  static String humanSize(int bytes) => _humanSize(bytes);
+
   // ─────────────────────────────────────────────────────────────────────────
   //  INTERNALS
   // ─────────────────────────────────────────────────────────────────────────
