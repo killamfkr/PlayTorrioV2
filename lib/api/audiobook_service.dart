@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
+import 'package:html/dom.dart' as hdom;
 import 'package:html/parser.dart' as hp;
 import 'local_server_service.dart';
 
@@ -178,12 +179,15 @@ class AudiobookService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final List items = data['content'] ?? [];
-        return items.map((json) => Audiobook.fromJson(json)).toList();
+        final list = items.map((json) => Audiobook.fromJson(json)).toList();
+        if (list.isNotEmpty) return list;
       }
     } catch (e) {
       debugPrint('AudiobookService Error (getAudiobooks): $e');
     }
-    return [];
+    debugPrint(
+        'AudiobookService: Tokybook browse empty/unavailable — using Audiobook Bay.');
+    return _abbBrowseHomepage(offset: offset, limit: limit);
   }
 
   String _cleanTitle(String title) {
@@ -295,6 +299,45 @@ class AudiobookService {
   Future<({Audiobook book, List<AudiobookChapter> chapters})>
       prepareAudiobookPlayback(Audiobook book) async {
     if (book.source == 'audiobookbay') {
+      final magnet = book.magnetLink?.trim() ?? '';
+      final tracks = book.magnetTracks;
+      if (magnet.isNotEmpty &&
+          tracks != null &&
+          tracks.isNotEmpty) {
+        final chapters = <AudiobookChapter>[];
+        for (final raw in tracks) {
+          final title = raw['title']?.toString().trim().isNotEmpty == true
+              ? raw['title'].toString().trim()
+              : 'Chapter ${chapters.length + 1}';
+          final idxRaw = raw['fileIndex'];
+          final fi = idxRaw is int
+              ? idxRaw
+              : int.tryParse('$idxRaw') ?? chapters.length;
+          chapters.add(AudiobookChapter(
+            title: title,
+            url: '',
+            torrentFileIndex: fi,
+          ));
+        }
+        if (chapters.isNotEmpty) {
+          return (
+            book: Audiobook(
+              uuid: book.uuid,
+              audioBookId: book.audioBookId,
+              dynamicSlugId: book.dynamicSlugId,
+              title: book.title,
+              coverImage: book.coverImage,
+              source: book.source,
+              pageUrl: book.pageUrl,
+              magnetLink: magnet,
+              magnetTracks: tracks,
+              magnetCoverFileIndex: book.magnetCoverFileIndex,
+              magnetCoverFileName: book.magnetCoverFileName,
+            ),
+            chapters: chapters,
+          );
+        }
+      }
       return _resolveAudiobookBay(book);
     }
     final chapters = await getChapters(book);
@@ -909,6 +952,14 @@ class AudiobookService {
         return (book: book, chapters: <AudiobookChapter>[]);
       }
 
+      final trackMaps = <Map<String, dynamic>>[
+        for (final c in parsed.chapters)
+          {
+            'title': c.title,
+            'fileIndex': c.torrentFileIndex ?? 0,
+          },
+      ];
+
       final enriched = Audiobook(
         uuid: book.uuid,
         audioBookId: book.audioBookId,
@@ -918,6 +969,7 @@ class AudiobookService {
         source: book.source,
         pageUrl: book.pageUrl,
         magnetLink: parsed.magnet,
+        magnetTracks: trackMaps,
       );
 
       return (book: enriched, chapters: parsed.chapters);
@@ -1003,6 +1055,94 @@ class AudiobookService {
     return '$_abbOrigin/$h';
   }
 
+  bool _abbSkipPost(hdom.Element post) {
+    if (post.classes.contains('re-ab')) return true;
+    final style = post.attributes['style'] ?? '';
+    final s = style.toLowerCase().replaceAll(' ', '');
+    if (s.contains('display:none')) return true;
+    return false;
+  }
+
+  /// Parses listing pages (home, search, /page/N/) into [Audiobook] rows.
+  List<Audiobook> _abbParseIndexPosts(hdom.Document document, {int? maxItems}) {
+    final posts = document.querySelectorAll('div.post');
+    final results = <Audiobook>[];
+    final seenUrls = <String>{};
+
+    for (final post in posts) {
+      if (_abbSkipPost(post)) continue;
+      final titleEl = post.querySelector('div.postTitle h2 a');
+      if (titleEl == null) continue;
+      final href = titleEl.attributes['href'] ?? '';
+      if (href.isEmpty) continue;
+      final pageUrl = _abbAbsUrl(href);
+      if (pageUrl.isEmpty || !seenUrls.add(pageUrl)) continue;
+
+      var title = _cleanTitle(titleEl.text.trim());
+      if (title.isEmpty) continue;
+
+      final img = post.querySelector('div.postContent img') ??
+          post.querySelector('.postContent img');
+      var coverUrl =
+          img?.attributes['src'] ?? img?.attributes['data-src'] ?? '';
+      coverUrl = coverUrl.trim();
+      if (coverUrl.isNotEmpty) coverUrl = _abbAbsUrl(coverUrl);
+
+      final uriPage = Uri.tryParse(pageUrl);
+      final segments = uriPage?.pathSegments.where((s) => s.isNotEmpty).toList() ??
+          const <String>[];
+      final slug =
+          segments.isNotEmpty ? segments.last : pageUrl.hashCode.toString();
+
+      results.add(Audiobook(
+        uuid: pageUrl,
+        audioBookId: 'abb_$slug',
+        dynamicSlugId: pageUrl,
+        title: title,
+        coverImage: coverUrl,
+        source: 'audiobookbay',
+        pageUrl: pageUrl,
+      ));
+      if (maxItems != null && results.length >= maxItems) break;
+    }
+    return results;
+  }
+
+  Future<List<Audiobook>> _fetchAbbBooksFromPageUrl(String pageUrl,
+      {int? maxItems}) async {
+    try {
+      final response = await http.get(Uri.parse(pageUrl), headers: {
+        'User-Agent': _abbUserAgent,
+        'Accept': 'text/html,*/*',
+        'Referer': '$_abbOrigin/',
+      });
+      if (response.statusCode != 200) return [];
+      final document = hp.parse(response.body);
+      return _abbParseIndexPosts(document, maxItems: maxItems);
+    } catch (e) {
+      debugPrint('AudiobookService Error (_fetchAbbBooksFromPageUrl): $e');
+    }
+    return [];
+  }
+
+  /// Fallback browse when Tokybook fails — pulls recent posts from Audiobook Bay.
+  Future<List<Audiobook>> _abbBrowseHomepage(
+      {required int offset, required int limit}) async {
+    if (limit <= 0) return [];
+    final need = offset + limit;
+    final buffer = <Audiobook>[];
+    const maxPages = 20;
+    for (var page = 1; page <= maxPages && buffer.length < need; page++) {
+      final url =
+          page == 1 ? '$_abbOrigin/' : '$_abbOrigin/page/$page/';
+      final chunk = await _fetchAbbBooksFromPageUrl(url);
+      if (chunk.isEmpty) break;
+      buffer.addAll(chunk);
+    }
+    if (offset >= buffer.length) return [];
+    return buffer.skip(offset).take(limit).toList();
+  }
+
   Future<List<Audiobook>> _searchAudiobookBay(String query) async {
     try {
       final q = query.trim();
@@ -1017,46 +1157,7 @@ class AudiobookService {
       if (response.statusCode != 200) return [];
 
       final document = hp.parse(response.body);
-      final posts = document.querySelectorAll('div.post');
-
-      final results = <Audiobook>[];
-      final seenUrls = <String>{};
-
-      for (final post in posts) {
-        final titleEl = post.querySelector('div.postTitle h2 a');
-        if (titleEl == null) continue;
-        final href = titleEl.attributes['href'] ?? '';
-        if (href.isEmpty) continue;
-        final pageUrl = _abbAbsUrl(href);
-        if (pageUrl.isEmpty || !seenUrls.add(pageUrl)) continue;
-
-        var title = _cleanTitle(titleEl.text.trim());
-        if (title.isEmpty) continue;
-
-        final img = post.querySelector('div.postContent img') ??
-            post.querySelector('.postContent img');
-        var coverUrl =
-            img?.attributes['src'] ?? img?.attributes['data-src'] ?? '';
-        coverUrl = coverUrl.trim();
-        if (coverUrl.isNotEmpty) coverUrl = _abbAbsUrl(coverUrl);
-
-        final uriPage = Uri.tryParse(pageUrl);
-        final segments = uriPage?.pathSegments.where((s) => s.isNotEmpty).toList() ??
-            const <String>[];
-        final slug =
-            segments.isNotEmpty ? segments.last : pageUrl.hashCode.toString();
-
-        results.add(Audiobook(
-          uuid: pageUrl,
-          audioBookId: 'abb_$slug',
-          dynamicSlugId: pageUrl,
-          title: title,
-          coverImage: coverUrl,
-          source: 'audiobookbay',
-          pageUrl: pageUrl,
-        ));
-      }
-      return results;
+      return _abbParseIndexPosts(document);
     } catch (e) {
       debugPrint('AudiobookService Error (_searchAudiobookBay): $e');
     }

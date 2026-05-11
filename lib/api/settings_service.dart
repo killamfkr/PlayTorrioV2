@@ -1019,6 +1019,8 @@ class SettingsService {
         prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
     m[AudiobookPrefsKeys.liked] =
         prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
+    m[AudiobookPrefsKeys.bookmarks] =
+        prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
     m[IptvCloudBundle.prefsKey] = await IptvCloudBundle.exportAll();
 
     final myListRaw = prefs.getString(MyListService.prefsKey);
@@ -1047,6 +1049,7 @@ class SettingsService {
           k != 'prefsPlaylistsKey' &&
           k != AudiobookPrefsKeys.history &&
           k != AudiobookPrefsKeys.liked &&
+          k != AudiobookPrefsKeys.bookmarks &&
           k != IptvCloudBundle.prefsKey &&
           k != MyListService.prefsKey &&
           k != KissKhService.watchHistoryPrefsKey &&
@@ -1108,6 +1111,13 @@ class SettingsService {
       if (k == AudiobookPrefsKeys.liked && v is List) {
         await p.setStringList(
           AudiobookPrefsKeys.liked,
+          (v as List<dynamic>).map((x) => x.toString()).toList(),
+        );
+        continue;
+      }
+      if (k == AudiobookPrefsKeys.bookmarks && v is List) {
+        await p.setStringList(
+          AudiobookPrefsKeys.bookmarks,
           (v as List<dynamic>).map((x) => x.toString()).toList(),
         );
         continue;
@@ -1476,6 +1486,7 @@ class SettingsService {
       MusicStorageService.prefsPlaylistsKey,
       AudiobookPrefsKeys.history,
       AudiobookPrefsKeys.liked,
+      AudiobookPrefsKeys.bookmarks,
       KissKhService.watchHistoryPrefsKey,
       AnimeService.prefsLikedKey,
       AnimeService.prefsWatchHistoryKey,
@@ -1631,6 +1642,7 @@ class SettingsService {
       MusicStorageService.prefsPlaylistsKey,
       AudiobookPrefsKeys.history,
       AudiobookPrefsKeys.liked,
+      AudiobookPrefsKeys.bookmarks,
       KissKhService.watchHistoryPrefsKey,
       AnimeService.prefsLikedKey,
       AnimeService.prefsWatchHistoryKey,
