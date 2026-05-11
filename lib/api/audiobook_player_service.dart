@@ -37,6 +37,28 @@ class AudiobookPlayerService {
   List<AudiobookChapter> _currentChapters = [];
   final List<StreamSubscription> _subscriptions = [];
   bool _isResuming = false;
+  Timer? _progressSaveDebounce;
+  /// Ignore position-driven persistence briefly after resume/chapter opens — mpv often
+  /// emits 0 before the clock catches up and would overwrite real progress.
+  DateTime? _ignoreProgressPersistenceUntil;
+
+  bool get _mayPersistPlaybackProgress {
+    if (_isResuming) return false;
+    final until = _ignoreProgressPersistenceUntil;
+    if (until != null && DateTime.now().isBefore(until)) return false;
+    return currentBook.value != null;
+  }
+
+  void _scheduleDebouncedProgressSave() {
+    if (!_mayPersistPlaybackProgress) return;
+    _progressSaveDebounce?.cancel();
+    _progressSaveDebounce = Timer(const Duration(milliseconds: 900), () {
+      _progressSaveDebounce = null;
+      if (_mayPersistPlaybackProgress) {
+        unawaited(_saveProgress());
+      }
+    });
+  }
 
   void init(BaseAudioHandler handler) {
     _handler = handler as PlayTorrioAudioHandler;
@@ -44,10 +66,9 @@ class AudiobookPlayerService {
     _subscriptions.add(_player.stream.position.listen((p) {
       position.value = p;
       _updateSystemState();
-      // Only save if we are not currently in the middle of a resume seek
-      if (!_isResuming && p > Duration.zero) {
-        _saveProgress();
-      }
+      // Torrent / loopback streams may report 0 for extended periods; still persist
+      // chapter index (and position when available) on a debounced timer.
+      _scheduleDebouncedProgressSave();
     }));
     
     _subscriptions.add(_player.stream.duration.listen((d) {
@@ -56,8 +77,12 @@ class AudiobookPlayerService {
     }));
     
     _subscriptions.add(_player.stream.playing.listen((pl) {
+      final wasPlaying = isPlaying.value;
       isPlaying.value = pl;
       _updateSystemState();
+      if (wasPlaying && !pl && !_isResuming && currentBook.value != null) {
+        unawaited(_saveProgress(force: true));
+      }
     }));
     
     _subscriptions.add(_player.stream.buffering.listen((b) {
@@ -121,6 +146,11 @@ class AudiobookPlayerService {
     _currentChapters = chapters;
     currentChapterIndex.value = idx;
 
+    if (!_isResuming) {
+      _ignoreProgressPersistenceUntil =
+          DateTime.now().add(const Duration(seconds: 2));
+    }
+
     _handler?.setPlayerType(AudioPlayerType.audiobook, _player);
 
     String artist = 'Tokybook';
@@ -152,6 +182,9 @@ class AudiobookPlayerService {
       await p.setProperty('demuxer-readahead-secs', '30');
       if (book.source == 'magnet' || book.source == 'audiobookbay') {
         await p.setProperty('force-seekable', 'yes');
+        try {
+          await p.setProperty('demuxer-seekable-cache', 'yes');
+        } catch (_) {}
       }
     }
 
@@ -179,11 +212,11 @@ class AudiobookPlayerService {
         await Future.delayed(const Duration(milliseconds: 500));
         await _player.play();
         resumeAlreadyPlaying = true;
-        await Future.delayed(const Duration(milliseconds: 1800));
-        await _player.seek(resumePosition);
-        await Future.delayed(const Duration(milliseconds: 650));
-        await _player.seek(resumePosition);
-        await Future.delayed(const Duration(milliseconds: 400));
+        await Future.delayed(const Duration(milliseconds: 2000));
+        await _refineTorrentResumeSeek(resumePosition);
+        // Let the reported clock settle before we persist again.
+        _ignoreProgressPersistenceUntil =
+            DateTime.now().add(const Duration(seconds: 3));
       } else {
         // Wait for duration (direct URLs) before seeking.
         final ready = Completer<void>();
@@ -200,6 +233,8 @@ class AudiobookPlayerService {
 
         await _player.seek(resumePosition);
         await Future.delayed(const Duration(milliseconds: 800));
+        _ignoreProgressPersistenceUntil =
+            DateTime.now().add(const Duration(seconds: 2));
       }
       _isResuming = false;
     }
@@ -207,6 +242,27 @@ class AudiobookPlayerService {
     if (!resumeAlreadyPlaying) {
       await _player.play();
     }
+  }
+
+  /// Best-effort seek for libtorrent loopback streams (position/duration often late).
+  Future<void> _refineTorrentResumeSeek(Duration target) async {
+    for (var attempt = 0; attempt < 8; attempt++) {
+      await _player.seek(target);
+      await Future.delayed(Duration(milliseconds: 450 + attempt * 120));
+      final p = _player.state.position;
+      final delta = (p - target).abs();
+      if (delta < const Duration(seconds: 4)) {
+        debugPrint(
+          'AudiobookPlayerService: resume seek settled ~${p.inSeconds}s '
+          '(target ${target.inSeconds}s, attempt ${attempt + 1})',
+        );
+        return;
+      }
+    }
+    debugPrint(
+      'AudiobookPlayerService: resume seek may be inaccurate (target '
+      '${target.inSeconds}s, got ${_player.state.position.inSeconds}s)',
+    );
   }
 
   Future<Media> _mediaForChapter(Audiobook book, AudiobookChapter ch) async {
@@ -271,6 +327,8 @@ class AudiobookPlayerService {
     currentChapterIndex.value = index;
     final book = currentBook.value;
     if (book == null) return;
+    _ignoreProgressPersistenceUntil =
+        DateTime.now().add(const Duration(milliseconds: 1200));
     try {
       final media = await _mediaForChapter(book, _currentChapters[index]);
       await _player.open(media);
@@ -287,36 +345,80 @@ class AudiobookPlayerService {
   }
 
   /// Chapter index clamped to the loaded chapter list + live player clock (for bookmarks).
-  ({int chapterIndex, int positionMs}) captureBookmarkSnapshot() {
+  Future<({int chapterIndex, int positionMs})> captureBookmarkSnapshot() async {
     final n = _currentChapters.length;
     final idx = n == 0 ? 0 : currentChapterIndex.value.clamp(0, n - 1);
     var ms = _playbackPositionMs();
     if (ms < 0) ms = 0;
+
+    final bid = currentBook.value?.audioBookId;
+    if (bid != null && ms < 500) {
+      final hist = await getHistory();
+      for (final h in hist) {
+        final b = h['book'];
+        if (b is! Map || '${b['audioBookId']}' != bid) continue;
+        final pCh = (h['chapterIndex'] as num?)?.toInt() ?? 0;
+        final pMs = (h['positionMs'] as num?)?.toInt() ?? 0;
+        if (idx == pCh && pMs > 60_000) {
+          ms = pMs;
+        }
+        break;
+      }
+    }
     return (chapterIndex: idx, positionMs: ms);
   }
 
   // --- Persistence (History) ---
 
-  Future<void> _saveProgress() async {
-    if (currentBook.value == null || _isResuming) return;
+  Future<void> _saveProgress({bool force = false}) async {
+    if (currentBook.value == null) return;
+    if (!force) {
+      if (_isResuming) return;
+      final until = _ignoreProgressPersistenceUntil;
+      if (until != null && DateTime.now().isBefore(until)) return;
+    }
     final prefs = await SharedPreferences.getInstance();
-    
+
     List<String> historyStrings =
         prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
     List<Map<String, dynamic>> history = historyStrings
         .map((s) => json.decode(s) as Map<String, dynamic>)
         .toList();
 
+    final bid = currentBook.value!.audioBookId;
+    Map<String, dynamic>? prevSame;
+    for (final item in history) {
+      final b = item['book'];
+      if (b is Map && '${b['audioBookId']}' == bid) {
+        prevSame = item;
+        break;
+      }
+    }
+
+    int outCh = currentChapterIndex.value;
+    int outMs = _playbackPositionMs();
+    if (outMs < 0) outMs = 0;
+
+    // Torrent / loopback streams sometimes leave the clock at 0 even while audio
+    // is playing — carry forward the last saved offset for the same chapter.
+    if (prevSame != null) {
+      final pCh = (prevSame['chapterIndex'] as num?)?.toInt() ?? 0;
+      final pMs = (prevSame['positionMs'] as num?)?.toInt() ?? 0;
+      if (outCh == pCh && outMs < 500 && pMs > 60_000) {
+        outMs = pMs;
+      }
+    }
+
     final bookData = {
       'book': currentBook.value!.toJson(),
-      'chapterIndex': currentChapterIndex.value,
-      'positionMs': _playbackPositionMs(),
+      'chapterIndex': outCh,
+      'positionMs': outMs,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     };
 
-    history.removeWhere((item) => item['book']['audioBookId'] == currentBook.value!.audioBookId);
+    history.removeWhere((item) => item['book']['audioBookId'] == bid);
     history.insert(0, bookData);
-    
+
     if (history.length > 10) history = history.sublist(0, 10);
 
     await prefs.setStringList(
@@ -327,7 +429,7 @@ class AudiobookPlayerService {
   }
 
   Future<void> saveManualProgress() async {
-    await _saveProgress();
+    await _saveProgress(force: true);
   }
 
   Future<List<Map<String, dynamic>>> getHistory() async {
@@ -476,6 +578,7 @@ class AudiobookPlayerService {
   }
 
   void dispose() {
+    _progressSaveDebounce?.cancel();
     for (var s in _subscriptions) { s.cancel(); }
     _player.dispose();
   }
