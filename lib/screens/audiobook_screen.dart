@@ -162,14 +162,33 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
         Audiobook.fromJson(Map<String, dynamic>.from(rawBook as Map));
 
     final ciRaw = progress['chapterIndex'];
-    final chapterIndex = ciRaw is int
+    var chapterIndex = ciRaw is int
         ? ciRaw
         : (ciRaw is num ? ciRaw.toInt() : int.tryParse('$ciRaw') ?? 0);
 
     final pmRaw = progress['positionMs'];
-    final positionMs = pmRaw is int
+    var positionMs = pmRaw is int
         ? pmRaw
         : (pmRaw is num ? pmRaw.toInt() : int.tryParse('$pmRaw') ?? 0);
+
+    // Grid "title only" bookmarks merge Continue Listening when present.
+    if (progress['placeholderBookmark'] == true) {
+      final hist = await _playerService.getHistory();
+      for (final h in hist) {
+        final b = h['book'];
+        if (b is! Map) continue;
+        if ('${b['audioBookId']}' != book.audioBookId) continue;
+        final hciRaw = h['chapterIndex'];
+        final hpmRaw = h['positionMs'];
+        chapterIndex = hciRaw is int
+            ? hciRaw
+            : (hciRaw is num ? hciRaw.toInt() : int.tryParse('$hciRaw') ?? 0);
+        positionMs = hpmRaw is int
+            ? hpmRaw
+            : (hpmRaw is num ? hpmRaw.toInt() : int.tryParse('$hpmRaw') ?? 0);
+        break;
+      }
+    }
 
     _openAudiobook(
       book,

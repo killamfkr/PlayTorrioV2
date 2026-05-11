@@ -406,11 +406,12 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                       : 'Save place (syncs when logged in)',
                   onPressed: () async {
                     final wasBookmarked = _bookmarked;
+                    final snap = _service.captureBookmarkSnapshot();
                     final book = _service.currentBook.value ?? widget.audiobook;
                     await _service.upsertBookmarkWithProgress(
                       book,
-                      chapterIndex: _service.currentChapterIndex.value,
-                      positionMs: _service.position.value.inMilliseconds,
+                      chapterIndex: snap.chapterIndex,
+                      positionMs: snap.positionMs,
                     );
                     if (!mounted) return;
                     setState(() => _bookmarked = true);
