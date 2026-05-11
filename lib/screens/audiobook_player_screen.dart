@@ -41,6 +41,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   final _downloadService = AudiobookDownloadService();
   double _playbackSpeed = 1.0;
   bool _isDownloaded = false;
+  bool _bookmarked = false;
 
   List<AudiobookChapter>? _playableChapters;
   bool _magnetResolving = false;
@@ -137,7 +138,13 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(_refreshBookmarkFlag());
     _bootstrapPlayback();
+  }
+
+  Future<void> _refreshBookmarkFlag() async {
+    final b = await _service.isBookmarked(widget.audiobook.audioBookId);
+    if (mounted) setState(() => _bookmarked = b);
   }
 
   Future<void> _bootstrapPlayback() async {
@@ -241,6 +248,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         setState(() => _magnetResolving = false);
       }
     }
+    unawaited(_refreshBookmarkFlag());
   }
 
   Future<void> _refreshDownloadState(int chapterCount) async {
@@ -373,6 +381,52 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              GestureDetector(
+                onLongPress: _bookmarked
+                    ? () async {
+                        await _service.removeBookmark(widget.audiobook.audioBookId);
+                        if (!mounted) return;
+                        setState(() => _bookmarked = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Bookmark removed'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    : null,
+                child: IconButton(
+                  icon: Icon(
+                    _bookmarked ? Icons.bookmark : Icons.bookmark_border,
+                    color: _bookmarked ? Colors.amberAccent : Colors.white,
+                    size: 26,
+                  ),
+                  tooltip: _bookmarked
+                      ? 'Update saved place · long-press to remove'
+                      : 'Save place (syncs when logged in)',
+                  onPressed: () async {
+                    final wasBookmarked = _bookmarked;
+                    final book = _service.currentBook.value ?? widget.audiobook;
+                    await _service.upsertBookmarkWithProgress(
+                      book,
+                      chapterIndex: _service.currentChapterIndex.value,
+                      positionMs: _service.position.value.inMilliseconds,
+                    );
+                    if (!mounted) return;
+                    setState(() => _bookmarked = true);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          wasBookmarked
+                              ? 'Bookmark updated'
+                              : 'Saved to bookmarks',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ),
               _buildDownloadButton(),
               const SizedBox(width: 4),
               _buildSpeedMenu(),

@@ -10,8 +10,9 @@ import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
 import 'generate_audiobook_screen.dart';
 import '../widgets/tv_interactive.dart';
-import '../platform_flags.dart';
 import 'audiobook_magnet_screen.dart';
+
+enum _AudiobookShelf { browse, liked, bookmarks }
 
 class AudiobookScreen extends StatefulWidget {
   const AudiobookScreen({super.key});
@@ -32,7 +33,9 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   int _currentOffset = 0;
   final int _limit = 12;
   bool _isSearching = false;
-  bool _showLiked = false;
+  _AudiobookShelf _shelf = _AudiobookShelf.browse;
+  List<Map<String, dynamic>> _bookmarks = [];
+  Set<String> _bookmarkIds = {};
 
   @override
   void initState() {
@@ -41,6 +44,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     _loadBooks();
     _loadHistory();
     _loadLikedBooks();
+    _loadBookmarkIds();
+    _loadBookmarks();
   }
 
   @override
@@ -68,10 +73,20 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     }
   }
 
+  Future<void> _loadBookmarkIds() async {
+    final ids = await _playerService.getBookmarkedAudioBookIds();
+    if (mounted) setState(() => _bookmarkIds = ids);
+  }
+
+  Future<void> _loadBookmarks() async {
+    final list = await _playerService.getBookmarks();
+    if (mounted) setState(() => _bookmarks = list);
+  }
+
   Future<void> _loadBooks() async {
     setState(() {
       _isLoading = true;
-      _showLiked = false;
+      _shelf = _AudiobookShelf.browse;
     });
     final books = await _service.getAudiobooks(offset: _currentOffset, limit: _limit);
     if (!mounted) return;
@@ -91,7 +106,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     setState(() {
       _isLoading = true;
       _isSearching = true;
-      _showLiked = false;
+      _shelf = _AudiobookShelf.browse;
     });
     final results = await _service.searchAudiobooks(query);
     setState(() {
@@ -100,16 +115,28 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     });
   }
 
-  void _toggleLikedView() {
+  void _toggleLikedShelf() {
     setState(() {
-      _showLiked = !_showLiked;
-      if (_showLiked) {
+      if (_shelf == _AudiobookShelf.liked) {
+        _shelf = _AudiobookShelf.browse;
+      } else {
+        _shelf = _AudiobookShelf.liked;
         _isSearching = false;
       }
     });
-    if (_showLiked) {
-      _loadLikedBooks();
-    }
+    if (_shelf == _AudiobookShelf.liked) _loadLikedBooks();
+  }
+
+  void _toggleBookmarkShelf() {
+    setState(() {
+      if (_shelf == _AudiobookShelf.bookmarks) {
+        _shelf = _AudiobookShelf.browse;
+      } else {
+        _shelf = _AudiobookShelf.bookmarks;
+        _isSearching = false;
+      }
+    });
+    if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
   }
 
   void _nextPage() {
@@ -195,6 +222,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           ).then((_) {
             musicService.isFullScreenVisible.value = false;
             _loadHistory();
+            _loadBookmarkIds();
+            if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
           });
         } else {
           musicService.isFullScreenVisible.value = true;
@@ -211,6 +240,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           ).then((_) {
             musicService.isFullScreenVisible.value = false;
             _loadHistory();
+            _loadBookmarkIds();
+            if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
           }); 
         }
       } else {
@@ -236,6 +267,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 onRefresh: () async {
                   await _loadBooks();
                   await _loadHistory();
+                  await _loadBookmarkIds();
+                  await _loadBookmarks();
                 },
                 color: AppTheme.primaryColor,
                 child: SingleChildScrollView(
@@ -249,7 +282,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 ),
               ),
             ),
-            if (!_isSearching) _buildPagination(),
+            if (!_isSearching && _shelf == _AudiobookShelf.browse) _buildPagination(),
           ],
         ),
       ),
@@ -310,12 +343,25 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ),
               IconButton(
                 icon: Icon(
-                  _showLiked ? Icons.favorite : Icons.favorite_border,
-                  color: _showLiked ? Colors.redAccent : Colors.white,
+                  _shelf == _AudiobookShelf.liked ? Icons.favorite : Icons.favorite_border,
+                  color: _shelf == _AudiobookShelf.liked ? Colors.redAccent : Colors.white,
                   size: 28,
                 ),
-                onPressed: _toggleLikedView,
-                tooltip: 'Liked Audiobooks',
+                onPressed: _toggleLikedShelf,
+                tooltip: 'Liked audiobooks',
+              ),
+              IconButton(
+                icon: Icon(
+                  _shelf == _AudiobookShelf.bookmarks
+                      ? Icons.bookmark
+                      : Icons.bookmark_border,
+                  color: _shelf == _AudiobookShelf.bookmarks
+                      ? Colors.amberAccent
+                      : Colors.white,
+                  size: 28,
+                ),
+                onPressed: _toggleBookmarkShelf,
+                tooltip: 'Bookmarked (syncs with account)',
               ),
             ],
           ),
@@ -453,10 +499,70 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   Widget _buildBody() {
-    final displayBooks = _showLiked ? _likedBooks : _books;
-    
-    if (_isLoading && !_showLiked) return const Padding(padding: EdgeInsets.only(top: 100), child: Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)));
-    if (displayBooks.isEmpty) return Padding(padding: const EdgeInsets.only(top: 100), child: Center(child: Text(_showLiked ? 'No liked audiobooks' : 'No audiobooks found', style: const TextStyle(color: Colors.white54))));
+    if (_shelf == _AudiobookShelf.bookmarks) {
+      if (_bookmarks.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 100),
+          child: Center(
+            child: Text(
+              'No bookmarks yet\nOpen a title and tap the bookmark icon to save your place (syncs when logged in).',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white54, height: 1.35),
+            ),
+          ),
+        );
+      }
+      final screenWidth = MediaQuery.of(context).size.width;
+      int crossAxisCount = 2;
+      if (screenWidth > 1200) {
+        crossAxisCount = 6;
+      } else if (screenWidth > 900) {
+        crossAxisCount = 4;
+      } else if (screenWidth > 600) {
+        crossAxisCount = 3;
+      }
+      return GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 150),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          childAspectRatio: 0.7,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+        ),
+        itemCount: _bookmarks.length,
+        itemBuilder: (context, index) {
+          final entry = _bookmarks[index];
+          final rawBook = entry['book'];
+          if (rawBook is! Map) return const SizedBox.shrink();
+          final book =
+              Audiobook.fromJson(Map<String, dynamic>.from(rawBook));
+          return _buildBookCard(book, bookmarkResume: entry);
+        },
+      );
+    }
+
+    final displayBooks =
+        _shelf == _AudiobookShelf.liked ? _likedBooks : _books;
+
+    if (_isLoading && _shelf == _AudiobookShelf.browse) {
+      return const Padding(
+          padding: EdgeInsets.only(top: 100),
+          child: Center(
+              child:
+                  CircularProgressIndicator(color: AppTheme.primaryColor)));
+    }
+    if (displayBooks.isEmpty) {
+      final msg = _shelf == _AudiobookShelf.liked
+          ? 'No liked audiobooks'
+          : 'No audiobooks found';
+      return Padding(
+          padding: const EdgeInsets.only(top: 100),
+          child: Center(
+              child: Text(msg,
+                  style: const TextStyle(color: Colors.white54))));
+    }
 
     final screenWidth = MediaQuery.of(context).size.width;
     int crossAxisCount = 2;
@@ -486,11 +592,13 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildBookCard(Audiobook book) {
+  Widget _buildBookCard(Audiobook book, {Map<String, dynamic>? bookmarkResume}) {
     final isLiked = _likedBooks.any((b) => b.audioBookId == book.audioBookId);
 
     return FocusableControl(
-      onTap: () => _openAudiobook(book),
+      onTap: bookmarkResume != null
+          ? () => _resumeAudiobook(bookmarkResume!)
+          : () => _openAudiobook(book),
       borderRadius: 16,
       child: Container(
         decoration: BoxDecoration(
@@ -541,25 +649,78 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ],
             ),
             Positioned(
-              top: 8, right: 8,
-              child: TvGestureTap(
-                onTap: () async {
-                  await _playerService.toggleLikeBook(book);
-                  _loadLikedBooks();
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: const BoxDecoration(
-                    color: Colors.black45,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isLiked ? Icons.favorite : Icons.favorite_border,
-                    color: isLiked ? Colors.redAccent : Colors.white70,
-                    size: 18,
-                  ),
-                ),
-              ),
+              top: 8,
+              right: 8,
+              child: bookmarkResume == null
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TvGestureTap(
+                          onTap: () async {
+                            await _playerService.toggleBookmarkGrid(book);
+                            await _loadBookmarkIds();
+                            if (_shelf == _AudiobookShelf.bookmarks) {
+                              await _loadBookmarks();
+                            }
+                            if (mounted) setState(() {});
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(
+                              color: Colors.black45,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _bookmarkIds.contains(book.audioBookId)
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border,
+                              color: _bookmarkIds.contains(book.audioBookId)
+                                  ? Colors.amberAccent
+                                  : Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        TvGestureTap(
+                          onTap: () async {
+                            await _playerService.toggleLikeBook(book);
+                            _loadLikedBooks();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(
+                              color: Colors.black45,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              isLiked ? Icons.favorite : Icons.favorite_border,
+                              color:
+                                  isLiked ? Colors.redAccent : Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : TvGestureTap(
+                      onTap: () async {
+                        await _playerService.removeBookmark(book.audioBookId);
+                        await _loadBookmarks();
+                        await _loadBookmarkIds();
+                        if (mounted) setState(() {});
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.black45,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close,
+                            color: Colors.white70, size: 18),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -568,7 +729,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   Widget _buildPagination() {
-    if (_showLiked) return const SizedBox.shrink();
+    if (_shelf != _AudiobookShelf.browse) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
       child: Row(
