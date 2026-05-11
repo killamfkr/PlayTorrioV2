@@ -129,12 +129,26 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   void _resumeAudiobook(Map<String, dynamic> progress) async {
-    final book = Audiobook.fromJson(progress['book']);
-    
+    final rawBook = progress['book'];
+    if (rawBook is! Map) return;
+    final book =
+        Audiobook.fromJson(Map<String, dynamic>.from(rawBook as Map));
+
+    final ciRaw = progress['chapterIndex'];
+    final chapterIndex = ciRaw is int
+        ? ciRaw
+        : (ciRaw is num ? ciRaw.toInt() : int.tryParse('$ciRaw') ?? 0);
+
+    final pmRaw = progress['positionMs'];
+    final positionMs = pmRaw is int
+        ? pmRaw
+        : (pmRaw is num ? pmRaw.toInt() : int.tryParse('$pmRaw') ?? 0);
+
     _openAudiobook(
-      book, 
-      initialChapter: progress['chapterIndex'], 
-      initialPosition: Duration(milliseconds: progress['positionMs']),
+      book,
+      initialChapter: chapterIndex,
+      initialPosition:
+          positionMs > 0 ? Duration(milliseconds: positionMs) : null,
     );
   }
 

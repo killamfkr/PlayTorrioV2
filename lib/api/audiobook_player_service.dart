@@ -150,28 +150,42 @@ class AudiobookPlayerService {
     
     if (_isResuming) {
       debugPrint('AudiobookPlayerService: Resuming at $resumePosition');
-      
-      // Wait for duration to be valid (stream meta loaded)
-      Completer<void> ready = Completer();
-      late StreamSubscription durSub;
-      durSub = _player.stream.duration.listen((d) {
-        if (d > Duration.zero && !ready.isCompleted) {
-          ready.complete();
-        }
-      });
 
-      // Timeout after 8s
-      await ready.future.timeout(const Duration(seconds: 8), onTimeout: () {});
-      await durSub.cancel();
+      final initialCh = chapters[initialChapter];
+      final torrentResume = (book.source == 'magnet' ||
+              book.source == 'audiobookbay') &&
+          book.magnetLink != null &&
+          book.magnetLink!.trim().isNotEmpty &&
+          initialCh.torrentFileIndex != null;
 
-      // Perform the seek
-      await _player.seek(resumePosition!);
-      
-      // Small buffer delay before allowing saves and starting playback
-      await Future.delayed(const Duration(milliseconds: 800));
+      if (torrentResume) {
+        // Torrent-backed HTTP streams often report duration=0 until buffered;
+        // waiting on duration causes seeks to be skipped after the short timeout.
+        await Future.delayed(const Duration(milliseconds: 2800));
+        await _player.seek(resumePosition!);
+        await Future.delayed(const Duration(milliseconds: 700));
+        await _player.seek(resumePosition!);
+        await Future.delayed(const Duration(milliseconds: 700));
+      } else {
+        // Wait for duration (direct URLs) before seeking.
+        final ready = Completer<void>();
+        late StreamSubscription<Duration> durSub;
+        durSub = _player.stream.duration.listen((d) {
+          if (d > Duration.zero && !ready.isCompleted) {
+            ready.complete();
+          }
+        });
+
+        await ready.future.timeout(const Duration(seconds: 12),
+            onTimeout: () {});
+        await durSub.cancel();
+
+        await _player.seek(resumePosition!);
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
       _isResuming = false;
     }
-    
+
     _player.play();
   }
 
