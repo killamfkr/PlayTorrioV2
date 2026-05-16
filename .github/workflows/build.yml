@@ -56,26 +56,8 @@ jobs:
 
       - run: flutter pub get
 
-      # services.gradle.org redirects to GitHub releases; GitHub occasionally returns 502.
-      # Cache + repeated attempts make release builds much more reliable on CI.
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: android
-
-      - name: Prefetch Gradle wrapper (retries)
-        working-directory: android
-        env:
-          GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.internal.http.connectionTimeout=180000 -Dorg.gradle.internal.http.socketTimeout=180000'
-        run: |
-          chmod +x gradlew || true
-          for attempt in 1 2 3 4 5 6 7 8; do
-            echo "=== ./gradlew --version (attempt $attempt) ==="
-            if ./gradlew --version --no-daemon; then
-              exit 0
-            fi
-            sleep $((attempt * 6))
-          done
-          exit 1
+      # This repo does not ship android/gradlew; Flutter invokes Gradle internally.
+      # Gradle dist downloads (via services.gradle.org → GitHub) can 502 — retry the build.
 
       # Optional: add repo secrets ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore),
       # PLAYTORRIO_KEYSTORE_PASSWORD, PLAYTORRIO_KEY_PASSWORD, and optionally PLAYTORRIO_KEY_ALIAS.
@@ -102,6 +84,8 @@ jobs:
           } >> gradle.properties
 
       - name: Build release APK (signed when keystore secrets are set)
+        env:
+          GRADLE_OPTS: '-Dorg.gradle.internal.http.connectionTimeout=180000 -Dorg.gradle.internal.http.socketTimeout=180000'
         run: |
           DART_DEFINES=(
             "--dart-define=TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}"
@@ -109,11 +93,16 @@ jobs:
             "--dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}"
             "--dart-define=SIMKL_CLIENT_SECRET=${{ secrets.SIMKL_CLIENT_SECRET }}"
           )
-          if [ "${{ matrix.apk_kind }}" = "split" ]; then
-            flutter build apk --release --split-per-abi "${DART_DEFINES[@]}"
-          else
-            flutter build apk --release "${DART_DEFINES[@]}"
-          fi
+          for attempt in 1 2 3 4 5 6; do
+            echo "=== flutter build apk (attempt $attempt) ==="
+            if [ "${{ matrix.apk_kind }}" = "split" ]; then
+              flutter build apk --release --split-per-abi "${DART_DEFINES[@]}" && exit 0
+            else
+              flutter build apk --release "${DART_DEFINES[@]}" && exit 0
+            fi
+            sleep $((attempt * 25))
+          done
+          exit 1
 
       # Same binary as universal APK; distinct filename for Android TV / leanback installs.
       - name: Label Android TV universal copy
