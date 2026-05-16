@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
@@ -26,16 +25,23 @@ class PtTvHdhomerunServer {
 
   HttpServer? _server;
   int _boundPort = 0;
-  http.Client? _httpClient;
 
-  /// Higher limit so many LAN clients can proxy the same portal host in parallel.
-  http.Client get _client {
-    _httpClient ??= IOClient(
-      HttpClient()
-        ..maxConnectionsPerHost = 64
-        ..connectionTimeout = const Duration(seconds: 45),
-    );
-    return _httpClient!;
+  /// Raw client so we can read [HttpClientResponse.uri] after redirects (HLS base URL).
+  HttpClient? _upstreamHttp;
+
+  static const _ptclipTokenTtl = Duration(hours: 4);
+  static const _ptclipTokenMaxEntries = 600;
+  /// Long `u=` query strings hit reverse-proxy / server limits (Plex → ffmpeg → us).
+  static const _ptclipMaxEncodedQueryLen = 2000;
+
+  final Map<String, ({String url, DateTime expires, DateTime insertedAt})>
+      _ptclipTokenToUrl = {};
+
+  HttpClient get _upstreamRaw {
+    _upstreamHttp ??= HttpClient()
+      ..connectionTimeout = const Duration(seconds: 45)
+      ..maxConnectionsPerHost = 64;
+    return _upstreamHttp!;
   }
 
   /// Advertised to clients (Plex, etc.); each slot accepts concurrent streams — we
@@ -48,9 +54,16 @@ class PtTvHdhomerunServer {
   /// Built together with [_virtToUrl] so lineup.json does not re-fetch Xtream per row.
   List<({TvGuideSlot slot, String url})> _lineupRows = [];
 
-  static final _autoPath = RegExp(r'^/auto/v(\d+)$');
-  static final _tunerVirtPath = RegExp(r'^/tuner(\d+)/v(\d+)$');
-  static final _tunerAutoVirtPath = RegExp(r'^/tuner(\d+)/auto/v(\d+)$');
+  /// ATSC-style virtual channel (e.g. `4.1`); major index maps to our 1-based lineup slot.
+  static final _autoPath = RegExp(r'^/auto/v([\d.]+)$');
+  static final _tunerVirtPath = RegExp(r'^/tuner(\d+)/v([\d.]+)$');
+  static final _tunerAutoVirtPath = RegExp(r'^/tuner(\d+)/auto/v([\d.]+)$');
+
+  static int? _virtMajorFromPath(String virt) {
+    final dot = virt.indexOf('.');
+    final head = dot < 0 ? virt : virt.substring(0, dot);
+    return int.tryParse(head);
+  }
 
   bool get isRunning => _server != null;
   int get boundPort => _boundPort;
@@ -91,9 +104,10 @@ class PtTvHdhomerunServer {
       }
     }
     try {
-      _httpClient?.close();
+      _upstreamHttp?.close(force: true);
     } catch (_) {}
-    _httpClient = null;
+    _upstreamHttp = null;
+    _ptclipTokenToUrl.clear();
   }
 
   Future<void> _ensureStarted(int preferredPort) async {
@@ -205,7 +219,7 @@ class PtTvHdhomerunServer {
   }
 
   Future<Response> _handleAutoTune(Request request, String virtStr) async {
-    final n = int.tryParse(virtStr);
+    final n = _virtMajorFromPath(virtStr);
     if (n == null || n < 1) {
       return Response.notFound('Bad channel');
     }
@@ -221,15 +235,24 @@ class PtTvHdhomerunServer {
   }
 
   Future<Response> _handlePtClip(Request request) async {
-    final raw = request.url.queryParameters['u'];
-    if (raw == null || raw.isEmpty) {
-      return Response(400, body: 'Missing u');
-    }
     String target;
-    try {
-      target = Uri.decodeComponent(raw);
-    } catch (_) {
-      target = raw;
+    final token = request.url.queryParameters['t'];
+    if (token != null && token.isNotEmpty) {
+      final ent = _ptclipTokenToUrl[token];
+      if (ent == null || ent.expires.isBefore(DateTime.now())) {
+        return Response(404, body: 'Unknown or expired clip token');
+      }
+      target = ent.url;
+    } else {
+      final raw = request.url.queryParameters['u'];
+      if (raw == null || raw.isEmpty) {
+        return Response(400, body: 'Missing u or t');
+      }
+      try {
+        target = Uri.decodeComponent(raw);
+      } catch (_) {
+        target = raw;
+      }
     }
     if (!target.startsWith('http://') && !target.startsWith('https://')) {
       return Response(400, body: 'Invalid URL');
@@ -290,11 +313,12 @@ class PtTvHdhomerunServer {
     for (var i = 0; i < _lineupRows.length; i++) {
       final k = i + 1;
       final row = _lineupRows[i];
+      // Plex/SiliconDust expect ATSC-style major.minor; URL path must match GuideNumber.
       list.add({
-        'GuideNumber': '$k',
+        'GuideNumber': '$k.1',
         'GuideName': row.slot.stream.name,
         'HD': 1,
-        'URL': '$origin/auto/v$k',
+        'URL': '$origin/auto/v$k.1',
         'LogoURL': row.slot.stream.icon,
         'Favorite': 0,
       });
@@ -418,73 +442,142 @@ class PtTvHdhomerunServer {
     return slots;
   }
 
+  void _prunePtclipTokens() {
+    final now = DateTime.now();
+    _ptclipTokenToUrl.removeWhere((_, v) => v.expires.isBefore(now));
+    while (_ptclipTokenToUrl.length > _ptclipTokenMaxEntries) {
+      String? oldestKey;
+      DateTime? oldestAt;
+      for (final e in _ptclipTokenToUrl.entries) {
+        if (oldestAt == null || e.value.insertedAt.isBefore(oldestAt)) {
+          oldestAt = e.value.insertedAt;
+          oldestKey = e.key;
+        }
+      }
+      if (oldestKey == null) break;
+      _ptclipTokenToUrl.remove(oldestKey);
+    }
+  }
+
+  String _newClipToken() {
+    final r = Random.secure();
+    final bytes = List<int>.generate(18, (_) => r.nextInt(256));
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  String _clip(String origin, String u) {
+    final enc = Uri.encodeComponent(u);
+    if (enc.length <= _ptclipMaxEncodedQueryLen) {
+      return '$origin/ptclip?u=$enc';
+    }
+    _prunePtclipTokens();
+    String token;
+    do {
+      token = _newClipToken();
+    } while (_ptclipTokenToUrl.containsKey(token));
+    final now = DateTime.now();
+    _ptclipTokenToUrl[token] = (
+      url: u,
+      expires: now.add(_ptclipTokenTtl),
+      insertedAt: now,
+    );
+    return '$origin/ptclip?t=$token';
+  }
+
+  String _resolveHlsUriRef(String uri, String upstreamOrigin, String basePath) {
+    if (uri.startsWith('http')) return uri;
+    if (uri.startsWith('/')) return '$upstreamOrigin$uri';
+    return '$basePath$uri';
+  }
+
+  String _rewriteHlsTagLine(
+    String line,
+    String selfOrigin,
+    String upstreamOrigin,
+    String basePath,
+  ) {
+    if (!line.contains('URI=')) return line;
+    var out = line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (m) {
+      final uri = m.group(1)!;
+      final full = _resolveHlsUriRef(uri, upstreamOrigin, basePath);
+      return 'URI="${_clip(selfOrigin, full)}"';
+    });
+    out = out.replaceAllMapped(RegExp(r"URI='([^']+)'"), (m) {
+      final uri = m.group(1)!;
+      final full = _resolveHlsUriRef(uri, upstreamOrigin, basePath);
+      return 'URI="${_clip(selfOrigin, full)}"';
+    });
+    return out;
+  }
+
   Future<Response> _proxyMedia(
     Request request,
     String targetUrl,
     String selfOrigin,
   ) async {
-    final targetUri = Uri.parse(targetUrl);
-    final upstreamOrigin = '${targetUri.scheme}://${targetUri.host}'
-        '${targetUri.hasPort ? ':${targetUri.port}' : ''}';
+    final uri = Uri.parse(targetUrl);
+    final initialOrigin =
+        '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
 
-    // Browser-shaped headers: many Xtream panels reject VLC-only UAs (Plex uses ffmpeg).
     final hdr = <String, String>{
       'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': '$upstreamOrigin/',
-      'Origin': upstreamOrigin,
+      'Referer': '$initialOrigin/',
+      'Origin': initialOrigin,
       'Accept': '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'identity',
-      'Connection': 'keep-alive',
     };
 
-    final rq = http.Request(request.method, targetUri);
-    rq.headers.addAll(hdr);
-    final range = request.headers['range'];
-    if (range != null) rq.headers['Range'] = range;
-
-    http.StreamedResponse upstream;
+    HttpClientRequest ioReq;
     try {
-      upstream = await _client.send(rq);
+      ioReq = await _upstreamRaw.openUrl(request.method, uri);
+    } catch (e) {
+      return Response.internalServerError(body: 'Upstream: $e');
+    }
+    hdr.forEach(ioReq.headers.set);
+    final range = request.headers['range'];
+    if (range != null) {
+      ioReq.headers.set('range', range);
+    }
+
+    late HttpClientResponse ioRes;
+    try {
+      ioRes = await ioReq.close();
     } catch (e) {
       return Response.internalServerError(body: 'Upstream: $e');
     }
 
-    if (upstream.statusCode >= 400 && kDebugMode) {
+    if (ioRes.statusCode >= 400 && kDebugMode) {
       debugPrint(
-        '[PtTvHdhr] upstream HTTP ${upstream.statusCode} for $targetUrl',
+        '[PtTvHdhr] upstream HTTP ${ioRes.statusCode} for $targetUrl',
       );
     }
 
-    final ct = upstream.headers['content-type'] ?? '';
-    final lowerUrl = targetUrl.toLowerCase();
-    final looksLikeHls = ct.contains('mpegurl') ||
-        ct.contains('x-mpegurl') ||
+    final finalUri = ioRes.uri;
+    final effectiveTarget = finalUri.toString();
+    final upstreamOrigin =
+        '${finalUri.scheme}://${finalUri.host}${finalUri.hasPort ? ':${finalUri.port}' : ''}';
+    final slash = effectiveTarget.lastIndexOf('/');
+    final basePath =
+        slash >= 0 ? effectiveTarget.substring(0, slash + 1) : '$effectiveTarget/';
+
+    final ctFull = ioRes.headers.value('content-type') ?? '';
+    final ctLower = ctFull.toLowerCase();
+    final lowerUrl = effectiveTarget.toLowerCase();
+    final looksLikeHls = ctLower.contains('mpegurl') ||
+        ctLower.contains('x-mpegurl') ||
         lowerUrl.contains('.m3u8');
 
     if (looksLikeHls && request.method == 'GET') {
-      final text = await upstream.stream.bytesToString();
-      if (upstream.statusCode >= 400) {
-        return Response(upstream.statusCode, body: text);
+      final text = await ioRes.transform(utf8.decoder).join();
+      if (ioRes.statusCode >= 400) {
+        return Response(ioRes.statusCode, body: text);
       }
-      final basePath =
-          targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
       final out = text.split('\n').map((rawLine) {
         final line = rawLine.trim();
         if (line.isEmpty || line.startsWith('#')) {
-          if (line.contains('URI="')) {
-            return line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (m) {
-              final uri = m.group(1)!;
-              final full = uri.startsWith('http')
-                  ? uri
-                  : uri.startsWith('/')
-                      ? '$upstreamOrigin$uri'
-                      : '$basePath$uri';
-              return 'URI="${_clip(selfOrigin, full)}"';
-            });
-          }
-          return line;
+          return _rewriteHlsTagLine(line, selfOrigin, upstreamOrigin, basePath);
         }
         final full = line.startsWith('http')
             ? line
@@ -505,24 +598,23 @@ class PtTvHdhomerunServer {
     final outHeaders = <String, String>{
       'Access-Control-Allow-Origin': '*',
       'Accept-Ranges': 'bytes',
-      'Content-Type': ct.isEmpty ? 'application/octet-stream' : ct,
+      'Content-Type': ctFull.isEmpty ? 'application/octet-stream' : ctFull,
     };
     for (final k in const [
       'content-length',
       'content-range',
       'accept-ranges',
     ]) {
-      final v = upstream.headers[k];
-      if (v != null) outHeaders[k] = v;
+      final v = ioRes.headers.value(k);
+      if (v != null) {
+        outHeaders[k] = v;
+      }
     }
 
     return Response(
-      upstream.statusCode,
-      body: upstream.stream,
+      ioRes.statusCode,
+      body: ioRes,
       headers: outHeaders,
     );
   }
-
-  String _clip(String origin, String u) =>
-      '$origin/ptclip?u=${Uri.encodeComponent(u)}';
 }
