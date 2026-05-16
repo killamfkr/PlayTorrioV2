@@ -56,6 +56,27 @@ jobs:
 
       - run: flutter pub get
 
+      # services.gradle.org redirects to GitHub releases; GitHub occasionally returns 502.
+      # Cache + repeated attempts make release builds much more reliable on CI.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: android
+
+      - name: Prefetch Gradle wrapper (retries)
+        working-directory: android
+        env:
+          GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.internal.http.connectionTimeout=180000 -Dorg.gradle.internal.http.socketTimeout=180000'
+        run: |
+          chmod +x gradlew || true
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "=== ./gradlew --version (attempt $attempt) ==="
+            if ./gradlew --version --no-daemon; then
+              exit 0
+            fi
+            sleep $((attempt * 6))
+          done
+          exit 1
+
       # Optional: add repo secrets ANDROID_KEYSTORE_BASE64 (base64 of .jks/.keystore),
       # PLAYTORRIO_KEYSTORE_PASSWORD, PLAYTORRIO_KEY_PASSWORD, and optionally PLAYTORRIO_KEY_ALIAS.
       # (Cannot use secrets.* in step `if:` — GitHub rejects it at parse time; use shell guard.)

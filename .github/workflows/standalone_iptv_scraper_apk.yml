@@ -49,6 +49,21 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Prefetch Gradle wrapper (retries; GitHub dist CDN 502)
+        working-directory: standalone_iptv_scraper/android
+        env:
+          GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.internal.http.connectionTimeout=180000 -Dorg.gradle.internal.http.socketTimeout=180000'
+        run: |
+          chmod +x gradlew || true
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "=== ./gradlew --version (attempt $attempt) ==="
+            if ./gradlew --version --no-daemon; then
+              exit 0
+            fi
+            sleep $((attempt * 6))
+          done
+          exit 1
+
       - name: Build release APK
         run: flutter build apk --release
 
