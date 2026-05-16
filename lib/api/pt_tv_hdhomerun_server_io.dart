@@ -470,11 +470,11 @@ class PtTvHdhomerunServer {
       }
       final basePath =
           targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
-      final out = text.split('\n').map((line) {
-        final t = line.trimRight();
-        if (t.isEmpty || t.startsWith('#')) {
-          if (t.contains('URI="')) {
-            return t.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (m) {
+      final out = text.split('\n').map((rawLine) {
+        final line = rawLine.trim();
+        if (line.isEmpty || line.startsWith('#')) {
+          if (line.contains('URI="')) {
+            return line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (m) {
               final uri = m.group(1)!;
               final full = uri.startsWith('http')
                   ? uri
@@ -486,11 +486,11 @@ class PtTvHdhomerunServer {
           }
           return line;
         }
-        final full = t.startsWith('http')
-            ? t
-            : t.startsWith('/')
-                ? '$upstreamOrigin$t'
-                : '$basePath$t';
+        final full = line.startsWith('http')
+            ? line
+            : line.startsWith('/')
+                ? '$upstreamOrigin$line'
+                : '$basePath$line';
         return _clip(selfOrigin, full);
       }).join('\n');
       return Response.ok(
