@@ -26,7 +26,7 @@ class PtTvHdhomerunServer {
   HttpServer? _server;
   int _boundPort = 0;
 
-  /// Raw client so we can read [HttpClientResponse.uri] after redirects (HLS base URL).
+  /// Raw client for upstream IPTV; redirects followed manually for a reliable final URL.
   HttpClient? _upstreamHttp;
 
   static const _ptclipTokenTtl = Duration(hours: 4);
@@ -318,6 +318,7 @@ class PtTvHdhomerunServer {
         'GuideNumber': '$k.1',
         'GuideName': row.slot.stream.name,
         'HD': 1,
+        'DRM': 0,
         'URL': '$origin/auto/v$k.1',
         'LogoURL': row.slot.stream.icon,
         'Favorite': 0,
@@ -373,6 +374,7 @@ class PtTvHdhomerunServer {
       200,
       headers: {
         'Content-Type': ct,
+        'Content-Length': '0',
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
       },
@@ -510,40 +512,62 @@ class PtTvHdhomerunServer {
     return out;
   }
 
+  void _applyUpstreamBrowserHeaders(HttpClientRequest req, Uri forUri) {
+    final o =
+        '${forUri.scheme}://${forUri.host}${forUri.hasPort ? ':${forUri.port}' : ''}';
+    req.headers.set(
+      HttpHeaders.userAgentHeader,
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    );
+    req.headers.set(HttpHeaders.refererHeader, '$o/');
+    req.headers.set('origin', o);
+    req.headers.set(HttpHeaders.acceptHeader, '*/*');
+    req.headers.set(HttpHeaders.acceptLanguageHeader, 'en-US,en;q=0.9');
+    req.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+  }
+
+  /// Follow redirects manually so the final playlist URL is always known (HLS
+  /// relative URLs). Also refreshes Referer/Origin per hop for picky CDNs.
+  Future<({Uri finalUri, HttpClientResponse ioRes})> _upstreamOpenFollowed(
+    String method,
+    Uri initial,
+  ) async {
+    var current = initial;
+    HttpClientResponse? res;
+    for (var hop = 0; hop < 16; hop++) {
+      final ioReq = await _upstreamRaw.openUrl(method, current);
+      ioReq.followRedirects = false;
+      _applyUpstreamBrowserHeaders(ioReq, current);
+      res = await ioReq.close();
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        final loc = res.headers.value(HttpHeaders.locationHeader);
+        try {
+          await res.drain();
+        } catch (_) {}
+        if (loc == null) {
+          return (finalUri: current, ioRes: res);
+        }
+        current = current.resolve(Uri.parse(loc));
+        continue;
+      }
+      return (finalUri: current, ioRes: res);
+    }
+    return (finalUri: current, ioRes: res!);
+  }
+
   Future<Response> _proxyMedia(
     Request request,
     String targetUrl,
     String selfOrigin,
   ) async {
     final uri = Uri.parse(targetUrl);
-    final initialOrigin =
-        '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
 
-    final hdr = <String, String>{
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': '$initialOrigin/',
-      'Origin': initialOrigin,
-      'Accept': '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'identity',
-    };
-
-    HttpClientRequest ioReq;
+    late final Uri finalUri;
+    late final HttpClientResponse ioRes;
     try {
-      ioReq = await _upstreamRaw.openUrl(request.method, uri);
-    } catch (e) {
-      return Response.internalServerError(body: 'Upstream: $e');
-    }
-    hdr.forEach(ioReq.headers.set);
-    final range = request.headers['range'];
-    if (range != null) {
-      ioReq.headers.set('range', range);
-    }
-
-    late HttpClientResponse ioRes;
-    try {
-      ioRes = await ioReq.close();
+      final opened = await _upstreamOpenFollowed(request.method, uri);
+      finalUri = opened.finalUri;
+      ioRes = opened.ioRes;
     } catch (e) {
       return Response.internalServerError(body: 'Upstream: $e');
     }
@@ -554,11 +578,6 @@ class PtTvHdhomerunServer {
       );
     }
 
-    // Effective resource URL after redirects. `HttpClientResponse.uri` exists only
-    // on newer Dart SDKs; `redirects` is populated when the client followed 3xx.
-    final Uri finalUri = ioRes.redirects.isNotEmpty
-        ? ioRes.redirects.last.location
-        : uri;
     final effectiveTarget = finalUri.toString();
     final upstreamOrigin =
         '${finalUri.scheme}://${finalUri.host}${finalUri.hasPort ? ':${finalUri.port}' : ''}';
