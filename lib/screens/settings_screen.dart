@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
 import '../api/pt_tv_hdhomerun_server.dart';
+import '../utils/ipv4_literal.dart';
 import '../services/external_player_service.dart';
 import '../api/debrid_api.dart';
 import '../api/trakt_service.dart';
@@ -149,6 +150,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _iptvPtHdhrBroadcast = false;
   String? _iptvPtHdhrUrlHint;
   int _iptvPtHdhrPort = SettingsService.iptvPtHdhomerunLanPortDefault;
+  final TextEditingController _iptvPtHdhrLanIpController =
+      TextEditingController();
 
   @override
   void initState() {
@@ -254,6 +257,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final iptvHdhr = await _settings.getIptvPtHdhomerunLanBroadcastEnabled();
     final iptvHdhrPort = await _settings.getIptvPtHdhomerunLanPort();
+    final iptvHdhrIpOverride =
+        await _settings.getIptvPtHdhomerunLanIpv4Override() ?? '';
     String? iptvHdhrHint;
     if (!kIsWeb) {
       iptvHdhrHint = await PtTvHdhomerunServer().describeLanBaseUrl();
@@ -347,6 +352,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptActiveProfileId = ptProf;
         _iptvPtHdhrBroadcast = iptvHdhr;
         _iptvPtHdhrPort = iptvHdhrPort;
+        _iptvPtHdhrLanIpController.text = iptvHdhrIpOverride;
         _iptvPtHdhrUrlHint = iptvHdhrHint;
       });
     }
@@ -445,6 +451,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _rdApiKeyController.dispose();
     _ptCloudEmailController.dispose();
     _ptCloudPasswordController.dispose();
+    _iptvPtHdhrLanIpController.dispose();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
     _jackett.dispose();
@@ -1654,11 +1661,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'When enabled, this device serves discover.json and lineup.json on port '
-            '$_iptvPtHdhrPort (HTTP). Channels are the same as PT TV Guide: Live streams '
-            'you starred in PT IPTV. Point Plex, Channels, or other HDHomeRun-compatible '
-            'software at the URL below (manual tuner / M3U source).',
+            'When enabled, this device serves discover.json, lineup.json, lineup_status.json, '
+            'and tune URLs on port $_iptvPtHdhrPort (HTTP). Channels match PT TV Guide (starred Live in PT IPTV).\n\n'
+            'Plex: add this URL on the **Plex Media Server** machine (same subnet): '
+            'http://YOUR_DEVICE_IP:$_iptvPtHdhrPort — Plex must reach that address (Settings shows a guess below). '
+            'If the IP is wrong because of a VPN, set the manual IPv4 field.',
             style: const TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _iptvPtHdhrLanIpController,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: 'LAN IPv4 (optional override)',
+              hintText: 'e.g. 192.168.0.190',
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _saveIptvHdhrLanIpOverride,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.primaryColor,
+                    side: BorderSide(
+                        color: AppTheme.primaryColor.withValues(alpha: 0.5)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Save LAN IP'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () async {
+                    _iptvPtHdhrLanIpController.clear();
+                    await _settings.setIptvPtHdhomerunLanIpv4Override(null);
+                    final h = await PtTvHdhomerunServer().describeLanBaseUrl();
+                    if (mounted) {
+                      setState(() => _iptvPtHdhrUrlHint = h);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('LAN IP override cleared')),
+                      );
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white54,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Clear IP'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           _buildFocusableToggle(
@@ -1699,6 +1767,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _saveIptvHdhrLanIpOverride() async {
+    final raw = _iptvPtHdhrLanIpController.text.trim();
+    if (raw.isNotEmpty && !isIpv4Literal(raw)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter a valid IPv4 address (four numbers 0–255).'),
+          ),
+        );
+      }
+      return;
+    }
+    await _settings.setIptvPtHdhomerunLanIpv4Override(raw.isEmpty ? null : raw);
+    final h = await PtTvHdhomerunServer().describeLanBaseUrl();
+    if (mounted) {
+      setState(() => _iptvPtHdhrUrlHint = h);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            raw.isEmpty ? 'LAN IP override cleared' : 'LAN IP override saved',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _saveXmltvEpgUrl() async {

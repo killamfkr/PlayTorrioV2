@@ -10,6 +10,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import '../features/iptv/playtorrio_tv/data/iptv_network.dart';
 import '../features/iptv/playtorrio_tv/data/models.dart';
 import '../features/iptv/playtorrio_tv/data/storage.dart';
+import '../utils/lan_ipv4_picker_io.dart';
 import 'settings_service.dart';
 
 /// Serves a minimal SiliconDust-style HTTP surface on the LAN so apps that
@@ -37,7 +38,8 @@ class PtTvHdhomerunServer {
   Future<String?> describeLanBaseUrl() async {
     final settings = SettingsService();
     final port = isRunning ? _boundPort : await settings.getIptvPtHdhomerunLanPort();
-    final ip = await _guessLanIpv4();
+    final override = await settings.getIptvPtHdhomerunLanIpv4Override();
+    final ip = await resolvePreferredLanIpv4(override);
     if (ip == null) return null;
     return 'http://$ip:$port';
   }
@@ -131,8 +133,15 @@ class PtTvHdhomerunServer {
     if (path == '/lineup.json' && request.method == 'GET') {
       return _handleLineup(request);
     }
-    if (path == '/lineup.post') {
-      return Response(405, body: 'Use GET /lineup.json');
+    if (path == '/lineup_status.json' && request.method == 'GET') {
+      return _handleLineupStatus();
+    }
+    if (path == '/lineup.m3u' && request.method == 'GET') {
+      return _handleLineupM3u(request);
+    }
+    if (path == '/lineup.post' &&
+        (request.method == 'GET' || request.method == 'POST')) {
+      return _handleLineupPost(request);
     }
     if (path == '/ptclip' &&
         (request.method == 'GET' || request.method == 'HEAD')) {
@@ -177,12 +186,13 @@ class PtTvHdhomerunServer {
 
   Future<Response> _handleDiscover(Request request) async {
     final origin = request.requestedUri.origin;
+    // Plex and other clients expect SiliconDust-shaped metadata.
     final body = json.encode({
       'FriendlyName': 'PlayTorrio PT TV Guide',
-      'ModelNumber': 'PTTV-HDHR',
-      'FirmwareName': 'playtorrio_pttv',
-      'FirmwareVersion': '1',
-      'DeviceID': '50545456',
+      'ModelNumber': 'HDHR4-2US',
+      'FirmwareName': 'hdhomerun4_atsc',
+      'FirmwareVersion': '20240101',
+      'DeviceID': '42545456',
       'DeviceAuth': '',
       'BaseURL': origin,
       'LineupURL': '$origin/lineup.json',
@@ -191,7 +201,25 @@ class PtTvHdhomerunServer {
     return Response.ok(body, headers: {'Content-Type': 'application/json'});
   }
 
-  Future<Response> _handleLineup(Request request) async {
+  Response _handleLineupStatus() {
+    final body = json.encode({
+      'ScanInProgress': 0,
+      'ScanPossible': 1,
+      'Source': 'Cable',
+      'SourceList': ['Antenna', 'Cable'],
+    });
+    return Response.ok(body, headers: {'Content-Type': 'application/json'});
+  }
+
+  Future<Response> _handleLineupPost(Request request) async {
+    final scan = request.url.queryParameters['scan'];
+    if (scan == 'start' || scan == 'abort') {
+      await _rebuildLineupMap();
+    }
+    return Response.ok('OK', headers: {'Content-Type': 'text/plain'});
+  }
+
+  Future<List<Map<String, dynamic>>> _buildLineupList(Request request) async {
     await _rebuildLineupMap();
     final origin = request.requestedUri.origin;
     final list = <Map<String, dynamic>>[];
@@ -203,15 +231,49 @@ class PtTvHdhomerunServer {
       list.add({
         'GuideNumber': '$k',
         'GuideName': slot?.$1 ?? 'Channel $k',
+        'HD': 1,
         'URL': '$origin/auto/v$k',
         'LogoURL': slot?.$2 ?? '',
+        'Favorite': 0,
       });
     }
+    return list;
+  }
+
+  Future<Response> _handleLineup(Request request) async {
+    final list = await _buildLineupList(request);
     return Response.ok(
       json.encode(list),
       headers: {'Content-Type': 'application/json'},
     );
   }
+
+  Future<Response> _handleLineupM3u(Request request) async {
+    final list = await _buildLineupList(request);
+    final buf = StringBuffer('#EXTM3U\n');
+    for (final row in list) {
+      final name = row['GuideName'] as String? ?? 'TV';
+      final url = row['URL'] as String? ?? '';
+      final logo = row['LogoURL'] as String? ?? '';
+      final gn = row['GuideNumber'] as String? ?? '';
+      if (url.isEmpty) continue;
+      final logoAttr =
+          logo.isNotEmpty ? ' tvg-logo="${_escapeM3uAttr(logo)}"' : '';
+      buf.write(
+        '#EXTINF:-1 tvg-id="$gn" tvg-name="${_escapeM3uAttr(name)}"$logoAttr'
+        ',${_escapeM3uName(name)}\n$url\n',
+      );
+    }
+    return Response.ok(
+      buf.toString(),
+      headers: {'Content-Type': 'audio/x-mpegurl'},
+    );
+  }
+
+  String _escapeM3uAttr(String s) =>
+      s.replaceAll('\\', r'\\').replaceAll('"', r'\"');
+
+  String _escapeM3uName(String s) => s.replaceAll(',', ' ');
 
   Future<(String, String)?> _slotForVirt(int virt) async {
     final slots = await _loadTvGuideSlots();
@@ -378,19 +440,4 @@ class PtTvHdhomerunServer {
 
   String _clip(String origin, String u) =>
       '$origin/ptclip?u=${Uri.encodeComponent(u)}';
-}
-
-Future<String?> _guessLanIpv4() async {
-  try {
-    for (final iface in await NetworkInterface.list()) {
-      for (final addr in iface.addresses) {
-        if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-          return addr.address;
-        }
-      }
-    }
-  } catch (e) {
-    debugPrint('[PtTvHdhr] LAN IP: $e');
-  }
-  return null;
 }

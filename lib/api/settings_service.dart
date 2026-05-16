@@ -190,6 +190,9 @@ class SettingsService {
   static const String _iptvPtHdhomerunLanBroadcastKey =
       'iptv_pt_hdhomerun_lan_broadcast';
   static const String _iptvPtHdhomerunLanPortKey = 'iptv_pt_hdhomerun_lan_port';
+  /// Optional manual IPv4 for the PT TV HDHomeRun hint (Wi‑Fi IP when VPN is first).
+  static const String _iptvPtHdhomerunLanIpv4OverrideKey =
+      'iptv_pt_hdhomerun_lan_ipv4_override';
   static const int iptvPtHdhomerunLanPortDefault = 49200;
 
   Future<bool> getIptvPtHdhomerunLanBroadcastEnabled() async {
@@ -215,6 +218,27 @@ class SettingsService {
       _iptvPtHdhomerunLanPortKey,
       port.clamp(1024, 65535),
     );
+  }
+
+  /// When set (e.g. `192.168.0.190`), [PtTvHdhomerunServer.describeLanBaseUrl] uses this
+  /// instead of auto-detected IPv4 (VPN overlays often win otherwise).
+  Future<String?> getIptvPtHdhomerunLanIpv4Override() async {
+    final prefs = await SharedPreferences.getInstance();
+    final s = prefs.getString(_iptvPtHdhomerunLanIpv4OverrideKey);
+    if (s == null || s.trim().isEmpty) return null;
+    return s.trim();
+  }
+
+  Future<void> setIptvPtHdhomerunLanIpv4Override(String? ipv4) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (ipv4 == null || ipv4.trim().isEmpty) {
+      await prefs.remove(_iptvPtHdhomerunLanIpv4OverrideKey);
+    } else {
+      await prefs.setString(
+        _iptvPtHdhomerunLanIpv4OverrideKey,
+        ipv4.trim(),
+      );
+    }
   }
 
   /// XMLTV `<programme channel="...">` id → match a live Stremio channel (same addon baseUrl + meta id).
@@ -1192,6 +1216,7 @@ class SettingsService {
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
+      _iptvPtHdhomerunLanIpv4OverrideKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
@@ -1298,6 +1323,7 @@ class SettingsService {
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
+      _iptvPtHdhomerunLanIpv4OverrideKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
