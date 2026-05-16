@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
@@ -25,12 +26,28 @@ class PtTvHdhomerunServer {
 
   HttpServer? _server;
   int _boundPort = 0;
-  final http.Client _client = http.Client();
+  http.Client? _httpClient;
+
+  /// Higher limit so many LAN clients can proxy the same portal host in parallel.
+  http.Client get _client {
+    _httpClient ??= IOClient(
+      HttpClient()
+        ..maxConnectionsPerHost = 64
+        ..connectionTimeout = const Duration(seconds: 45),
+    );
+    return _httpClient!;
+  }
+
+  /// Advertised to clients (Plex, etc.); each slot accepts concurrent streams — we
+  /// do not serialize tuners like real hardware.
+  static const int advertisedTunerCount = 8;
 
   /// 1-based virtual channel index → Xtream stream URL for the current lineup.
   Map<int, String> _virtToUrl = {};
 
   static final _autoPath = RegExp(r'^/auto/v(\d+)$');
+  static final _tunerVirtPath = RegExp(r'^/tuner(\d+)/v(\d+)$');
+  static final _tunerAutoVirtPath = RegExp(r'^/tuner(\d+)/auto/v(\d+)$');
 
   bool get isRunning => _server != null;
   int get boundPort => _boundPort;
@@ -69,6 +86,10 @@ class PtTvHdhomerunServer {
         debugPrint('[PtTvHdhr] stop: $e');
       }
     }
+    try {
+      _httpClient?.close();
+    } catch (_) {}
+    _httpClient = null;
   }
 
   Future<void> _ensureStarted(int preferredPort) async {
@@ -147,6 +168,16 @@ class PtTvHdhomerunServer {
         (request.method == 'GET' || request.method == 'HEAD')) {
       return _handlePtClip(request);
     }
+    final tunerAuto = _tunerAutoVirtPath.firstMatch(path);
+    if (tunerAuto != null &&
+        (request.method == 'GET' || request.method == 'HEAD')) {
+      return _handleAutoTune(request, tunerAuto.group(2)!);
+    }
+    final tunerVirt = _tunerVirtPath.firstMatch(path);
+    if (tunerVirt != null &&
+        (request.method == 'GET' || request.method == 'HEAD')) {
+      return _handleAutoTune(request, tunerVirt.group(2)!);
+    }
     final m = _autoPath.firstMatch(path);
     if (m != null &&
         (request.method == 'GET' || request.method == 'HEAD')) {
@@ -196,7 +227,7 @@ class PtTvHdhomerunServer {
       'DeviceAuth': '',
       'BaseURL': origin,
       'LineupURL': '$origin/lineup.json',
-      'TunerCount': 1,
+      'TunerCount': advertisedTunerCount,
     });
     return Response.ok(body, headers: {'Content-Type': 'application/json'});
   }

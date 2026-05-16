@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 
 /// Web: no LAN HTTP server.
 class PtTvHdhomerunServer {
+  static const int advertisedTunerCount = 8;
+
   static final PtTvHdhomerunServer _instance = PtTvHdhomerunServer._internal();
   factory PtTvHdhomerunServer() => _instance;
   PtTvHdhomerunServer._internal();
