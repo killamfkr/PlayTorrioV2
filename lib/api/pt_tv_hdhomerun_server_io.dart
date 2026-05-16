@@ -547,7 +547,7 @@ class PtTvHdhomerunServer {
         if (loc == null) {
           return (finalUri: current, ioRes: res);
         }
-        current = current.resolve(Uri.parse(loc));
+        current = current.resolve(loc.trim());
         continue;
       }
       return (finalUri: current, ioRes: res);
