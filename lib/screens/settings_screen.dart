@@ -1689,10 +1689,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ] else if (_iptvPtHdhrBroadcast) ...[
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Could not detect a LAN IPv4 address. The server may still be running; '
               'open http://THIS_DEVICE_IP:$_iptvPtHdhrPort/discover.json from another machine.',
-              style: TextStyle(fontSize: 12, color: Colors.white38, height: 1.35),
+              style: const TextStyle(
+                  fontSize: 12, color: Colors.white38, height: 1.35),
             ),
           ],
         ],
