@@ -1667,7 +1667,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'may use several streams at once; each connection is proxied independently.\n\n'
             'Plex: add this URL on the **Plex Media Server** machine (same subnet): '
             'http://YOUR_DEVICE_IP:$_iptvPtHdhrPort — Plex must reach that address (Settings shows a guess below). '
-            'If the IP is wrong because of a VPN, set the manual IPv4 field.',
+            'If the IP is wrong because of a VPN, set the manual IPv4 field. '
+            'This source reports no over-the-air scan (IPTV lineup only); Plex should load channels from lineup.json without a long scan.',
             style: const TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
           ),
           const SizedBox(height: 12),

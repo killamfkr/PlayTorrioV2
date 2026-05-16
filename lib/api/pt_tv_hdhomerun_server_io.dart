@@ -45,6 +45,9 @@ class PtTvHdhomerunServer {
   /// 1-based virtual channel index → Xtream stream URL for the current lineup.
   Map<int, String> _virtToUrl = {};
 
+  /// Built together with [_virtToUrl] so lineup.json does not re-fetch Xtream per row.
+  List<({TvGuideSlot slot, String url})> _lineupRows = [];
+
   static final _autoPath = RegExp(r'^/auto/v(\d+)$');
   static final _tunerVirtPath = RegExp(r'^/tuner(\d+)/v(\d+)$');
   static final _tunerAutoVirtPath = RegExp(r'^/tuner(\d+)/auto/v(\d+)$');
@@ -79,6 +82,7 @@ class PtTvHdhomerunServer {
     _server = null;
     _boundPort = 0;
     _virtToUrl = {};
+    _lineupRows = [];
     if (s != null) {
       try {
         await s.close(force: true);
@@ -131,7 +135,7 @@ class PtTvHdhomerunServer {
   Middleware get _corsMiddleware {
     const headers = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
       'Access-Control-Allow-Headers': '*',
     };
     return (Handler inner) {
@@ -146,10 +150,24 @@ class PtTvHdhomerunServer {
     };
   }
 
+  String _normPath(Request request) {
+    var p = request.requestedUri.path;
+    if (p.length > 1 && p.endsWith('/')) {
+      p = p.substring(0, p.length - 1);
+    }
+    return p;
+  }
+
   Future<Response> _dispatch(Request request) async {
-    final path = request.requestedUri.path;
+    final path = _normPath(request);
     if (path == '/discover.json' && request.method == 'GET') {
       return _handleDiscover(request);
+    }
+    if ((path == '/' || path.isEmpty) && request.method == 'GET') {
+      return Response(
+        302,
+        headers: {'Location': '${request.requestedUri.origin}/discover.json'},
+      );
     }
     if (path == '/lineup.json' && request.method == 'GET') {
       return _handleLineup(request);
@@ -233,19 +251,27 @@ class PtTvHdhomerunServer {
   }
 
   Response _handleLineupStatus() {
+    // ScanPossible 0: Plex must not run an OTA-style scan (we have no RF scan).
+    // ScanPossible 1 caused Plex to POST lineup.post and wait on a long rebuild.
     final body = json.encode({
       'ScanInProgress': 0,
-      'ScanPossible': 1,
+      'ScanPossible': 0,
       'Source': 'Cable',
-      'SourceList': ['Antenna', 'Cable'],
+      'SourceList': ['Cable'],
     });
     return Response.ok(body, headers: {'Content-Type': 'application/json'});
   }
 
   Future<Response> _handleLineupPost(Request request) async {
+    if (kDebugMode) {
+      debugPrint(
+        '[PtTvHdhr] lineup.post ${request.method} q=${request.requestedUri.query}',
+      );
+    }
+    // Answer immediately; refresh lineup in the background so Plex never blocks.
     final scan = request.url.queryParameters['scan'];
     if (scan == 'start' || scan == 'abort') {
-      await _rebuildLineupMap();
+      unawaited(_rebuildLineupMap());
     }
     return Response.ok('OK', headers: {'Content-Type': 'text/plain'});
   }
@@ -254,17 +280,15 @@ class PtTvHdhomerunServer {
     await _rebuildLineupMap();
     final origin = request.requestedUri.origin;
     final list = <Map<String, dynamic>>[];
-    final keys = _virtToUrl.keys.toList()..sort();
-    for (final k in keys) {
-      final u = _virtToUrl[k];
-      if (u == null) continue;
-      final slot = await _slotForVirt(k);
+    for (var i = 0; i < _lineupRows.length; i++) {
+      final k = i + 1;
+      final row = _lineupRows[i];
       list.add({
         'GuideNumber': '$k',
-        'GuideName': slot?.$1 ?? 'Channel $k',
+        'GuideName': row.slot.stream.name,
         'HD': 1,
         'URL': '$origin/auto/v$k',
-        'LogoURL': slot?.$2 ?? '',
+        'LogoURL': row.slot.stream.icon,
         'Favorite': 0,
       });
     }
@@ -306,24 +330,19 @@ class PtTvHdhomerunServer {
 
   String _escapeM3uName(String s) => s.replaceAll(',', ' ');
 
-  Future<(String, String)?> _slotForVirt(int virt) async {
-    final slots = await _loadTvGuideSlots();
-    final i = virt - 1;
-    if (i < 0 || i >= slots.length) return null;
-    final s = slots[i];
-    return (s.stream.name, s.stream.icon);
-  }
-
   Future<void> _rebuildLineupMap() async {
     final slots = await _loadTvGuideSlots();
-    final m = <int, String>{};
-    for (var i = 0; i < slots.length; i++) {
-      final u = IptvClient.streamUrl(slots[i].portal.portal, slots[i].stream);
+    final rows = <({TvGuideSlot slot, String url})>[];
+    for (final slot in slots) {
+      final u = IptvClient.streamUrl(slot.portal.portal, slot.stream);
       if (u.isNotEmpty) {
-        m[i + 1] = u;
+        rows.add((slot: slot, url: u));
       }
     }
-    _virtToUrl = m;
+    _lineupRows = rows;
+    _virtToUrl = {
+      for (var i = 0; i < rows.length; i++) i + 1: rows[i].url,
+    };
   }
 
   Future<List<TvGuideSlot>> _loadTvGuideSlots() async {
