@@ -213,6 +213,10 @@ class PtTvHdhomerunServer {
     if (url == null || url.isEmpty) {
       return Response.notFound('Channel not in lineup (open PT TV Guide in app)');
     }
+    // Plex/ffmpeg probe with HEAD; many Xtream/CDN URLs reject HEAD → "could not tune".
+    if (request.method == 'HEAD') {
+      return _syntheticStreamHead(url);
+    }
     return _proxyMedia(request, url, request.requestedUri.origin);
   }
 
@@ -229,6 +233,9 @@ class PtTvHdhomerunServer {
     }
     if (!target.startsWith('http://') && !target.startsWith('https://')) {
       return Response(400, body: 'Invalid URL');
+    }
+    if (request.method == 'HEAD') {
+      return _syntheticStreamHead(target);
     }
     return _proxyMedia(request, target, request.requestedUri.origin);
   }
@@ -330,6 +337,24 @@ class PtTvHdhomerunServer {
 
   String _escapeM3uName(String s) => s.replaceAll(',', ' ');
 
+  /// HEAD probe for Plex/ffmpeg — do not forward HEAD upstream (often 403/405 on IPTV).
+  Response _syntheticStreamHead(String targetUrl) {
+    final lower = targetUrl.toLowerCase();
+    final isHls =
+        lower.contains('.m3u8') || lower.contains('.m3u');
+    final ct = isHls
+        ? 'application/vnd.apple.mpegurl'
+        : 'video/mp2t';
+    return Response(
+      200,
+      headers: {
+        'Content-Type': ct,
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+      },
+    );
+  }
+
   Future<void> _rebuildLineupMap() async {
     final slots = await _loadTvGuideSlots();
     final rows = <({TvGuideSlot slot, String url})>[];
@@ -402,10 +427,14 @@ class PtTvHdhomerunServer {
     final upstreamOrigin = '${targetUri.scheme}://${targetUri.host}'
         '${targetUri.hasPort ? ':${targetUri.port}' : ''}';
 
+    // Browser-shaped headers: many Xtream panels reject VLC-only UAs (Plex uses ffmpeg).
     final hdr = <String, String>{
-      'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Referer': '$upstreamOrigin/',
+      'Origin': upstreamOrigin,
       'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'identity',
       'Connection': 'keep-alive',
     };
@@ -420,6 +449,12 @@ class PtTvHdhomerunServer {
       upstream = await _client.send(rq);
     } catch (e) {
       return Response.internalServerError(body: 'Upstream: $e');
+    }
+
+    if (upstream.statusCode >= 400 && kDebugMode) {
+      debugPrint(
+        '[PtTvHdhr] upstream HTTP ${upstream.statusCode} for $targetUrl',
+      );
     }
 
     final ct = upstream.headers['content-type'] ?? '';
