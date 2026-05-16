@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
+import '../api/pt_tv_hdhomerun_server.dart';
 import '../services/external_player_service.dart';
 import '../api/debrid_api.dart';
 import '../api/trakt_service.dart';
@@ -144,6 +145,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _ptProfileGateOnStart = true;
   int _ptActiveProfileId = 1;
 
+  /// PT TV Guide → HDHomeRun-style LAN HTTP (mobile / desktop / TV; not web).
+  bool _iptvPtHdhrBroadcast = false;
+  String? _iptvPtHdhrUrlHint;
+  int _iptvPtHdhrPort = SettingsService.iptvPtHdhomerunLanPortDefault;
+
   @override
   void initState() {
     super.initState();
@@ -246,6 +252,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ptGate = await _settings.getPlaytorrioProfileGateEnabled();
     final ptProf = await _settings.getPlaytorrioProfileId();
 
+    final iptvHdhr = await _settings.getIptvPtHdhomerunLanBroadcastEnabled();
+    final iptvHdhrPort = await _settings.getIptvPtHdhomerunLanPort();
+    String? iptvHdhrHint;
+    if (!kIsWeb) {
+      iptvHdhrHint = await PtTvHdhomerunServer().describeLanBaseUrl();
+    }
+
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
     // Full order: visible items first, then hidden items
@@ -332,6 +345,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudConfigured = ptCfg;
         _ptProfileGateOnStart = ptGate;
         _ptActiveProfileId = ptProf;
+        _iptvPtHdhrBroadcast = iptvHdhr;
+        _iptvPtHdhrPort = iptvHdhrPort;
+        _iptvPtHdhrUrlHint = iptvHdhrHint;
       });
     }
   }
@@ -792,6 +808,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildDefaultStremioStreamSource(),
                     const SizedBox(height: 24),
                     _buildXmltvEpgSection(),
+                    if (!kIsWeb) ...[
+                      const SizedBox(height: 32),
+                      _buildSectionHeader('PT TV Guide on your network'),
+                      _buildPtTvHdhomerunSection(),
+                    ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -1615,6 +1636,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPtTvHdhomerunSection() {
+    final hint = _iptvPtHdhrUrlHint;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'HDHomeRun-style tuner (LAN)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'When enabled, this device serves discover.json and lineup.json on port '
+            '$_iptvPtHdhrPort (HTTP). Channels are the same as PT TV Guide: Live streams '
+            'you starred in PT IPTV. Point Plex, Channels, or other HDHomeRun-compatible '
+            'software at the URL below (manual tuner / M3U source).',
+            style: const TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          _buildFocusableToggle(
+            'Broadcast PT TV Guide on this network',
+            'Off: nothing is exposed on the LAN. On: HTTP on 0.0.0.0:$_iptvPtHdhrPort.',
+            _iptvPtHdhrBroadcast,
+            (val) {
+              Future(() async {
+                await _settings.setIptvPtHdhomerunLanBroadcastEnabled(val);
+                await PtTvHdhomerunServer().applyFromSettings();
+                final port = await _settings.getIptvPtHdhomerunLanPort();
+                final h = await PtTvHdhomerunServer().describeLanBaseUrl();
+                if (mounted) {
+                  setState(() {
+                    _iptvPtHdhrBroadcast = val;
+                    _iptvPtHdhrPort = port;
+                    _iptvPtHdhrUrlHint = h;
+                  });
+                }
+              });
+            },
+          ),
+          if (hint != null && hint.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SelectableText(
+              hint,
+              style: const TextStyle(fontSize: 12, color: Colors.white38),
+            ),
+          ] else if (_iptvPtHdhrBroadcast) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Could not detect a LAN IPv4 address. The server may still be running; '
+              'open http://THIS_DEVICE_IP:$_iptvPtHdhrPort/discover.json from another machine.',
+              style: TextStyle(fontSize: 12, color: Colors.white38, height: 1.35),
+            ),
+          ],
         ],
       ),
     );

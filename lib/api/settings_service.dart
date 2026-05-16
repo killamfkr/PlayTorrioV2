@@ -185,6 +185,38 @@ class SettingsService {
     }
   }
 
+  /// When true, exposes PT TV Guide (starred IPTV channels) as an HDHomeRun-style
+  /// HTTP device on the LAN (`discover.json`, `lineup.json`, `/auto/v…`).
+  static const String _iptvPtHdhomerunLanBroadcastKey =
+      'iptv_pt_hdhomerun_lan_broadcast';
+  static const String _iptvPtHdhomerunLanPortKey = 'iptv_pt_hdhomerun_lan_port';
+  static const int iptvPtHdhomerunLanPortDefault = 49200;
+
+  Future<bool> getIptvPtHdhomerunLanBroadcastEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_iptvPtHdhomerunLanBroadcastKey) ?? false;
+  }
+
+  Future<void> setIptvPtHdhomerunLanBroadcastEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_iptvPtHdhomerunLanBroadcastKey, v);
+  }
+
+  Future<int> getIptvPtHdhomerunLanPort() async {
+    final prefs = await SharedPreferences.getInstance();
+    final p = prefs.getInt(_iptvPtHdhomerunLanPortKey);
+    if (p == null) return iptvPtHdhomerunLanPortDefault;
+    return p.clamp(1024, 65535);
+  }
+
+  Future<void> setIptvPtHdhomerunLanPort(int port) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _iptvPtHdhomerunLanPortKey,
+      port.clamp(1024, 65535),
+    );
+  }
+
   /// XMLTV `<programme channel="...">` id → match a live Stremio channel (same addon baseUrl + meta id).
   static const String _xmltvChannelMapKey = 'xmltv_epg_channel_map_json';
 
@@ -1140,6 +1172,7 @@ class SettingsService {
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
       _stremioAutoPlayEnabledKey,
+      _iptvPtHdhomerunLanBroadcastKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -1174,6 +1207,7 @@ class SettingsService {
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
       _ptProfileIdKey,
+      _iptvPtHdhomerunLanPortKey,
     ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
@@ -1241,6 +1275,7 @@ class SettingsService {
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
       _stremioAutoPlayEnabledKey,
+      _iptvPtHdhomerunLanBroadcastKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -1279,6 +1314,7 @@ class SettingsService {
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
       _ptProfileIdKey,
+      _iptvPtHdhomerunLanPortKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());

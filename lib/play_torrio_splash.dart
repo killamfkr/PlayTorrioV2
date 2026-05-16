@@ -5,6 +5,7 @@ import 'api/music_player_service.dart';
 import 'api/tmdb_api.dart';
 import 'api/torrent_stream_service.dart';
 import 'api/local_server_service.dart';
+import 'api/pt_tv_hdhomerun_server.dart';
 import 'models/movie.dart';
 import 'utils/app_theme.dart';
 import 'utils/device_profile.dart';
@@ -94,6 +95,9 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       LocalServerService().start().catchError((e) {
         debugPrint('[Boot] ✗ LocalServer error: $e');
       }),
+      PtTvHdhomerunServer().applyFromSettings().catchError((e) {
+        debugPrint('[Boot] ✗ PT TV HDHomeRun LAN: $e');
+      }),
       MusicPlayerService().init().catchError((e) {
         debugPrint('[Boot] ✗ MusicPlayer error: $e');
       }),
@@ -121,10 +125,10 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     debugPrint('[Boot]   LocalServer: ✓ READY');
     debugPrint('[Boot]   MusicPlayer: ✓ READY');
 
-    final trendingList = results[3] as List;
-    final popularList = results[4] as List;
-    final topRatedList = results[5] as List;
-    final nowPlayingList = results[6] as List;
+    final trendingList = results[4] as List;
+    final popularList = results[5] as List;
+    final topRatedList = results[6] as List;
+    final nowPlayingList = results[7] as List;
 
     debugPrint('[Boot]   TMDB Trending: ${trendingList.isNotEmpty ? "✓ ${trendingList.length} items" : "✗ Empty"}');
     debugPrint('[Boot]   TMDB Popular: ${popularList.isNotEmpty ? "✓ ${popularList.length} items" : "✗ Empty"}');
