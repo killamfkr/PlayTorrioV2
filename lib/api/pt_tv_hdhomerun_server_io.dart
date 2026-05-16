@@ -554,7 +554,11 @@ class PtTvHdhomerunServer {
       );
     }
 
-    final finalUri = ioRes.uri;
+    // Effective resource URL after redirects. `HttpClientResponse.uri` exists only
+    // on newer Dart SDKs; `redirects` is populated when the client followed 3xx.
+    final Uri finalUri = ioRes.redirects.isNotEmpty
+        ? ioRes.redirects.last.location
+        : uri;
     final effectiveTarget = finalUri.toString();
     final upstreamOrigin =
         '${finalUri.scheme}://${finalUri.host}${finalUri.hasPort ? ':${finalUri.port}' : ''}';
