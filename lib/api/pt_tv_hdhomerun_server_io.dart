@@ -127,6 +127,9 @@ class PtTvHdhomerunServer {
       final p = preferredPort + i;
       if (p > 65535) break;
       try {
+        // Build lineup before accepting TCP so early /lineup.json or tune
+        // requests never see an empty _virtToUrl (Plex "could not tune").
+        await _rebuildLineupMap();
         _server = await shelf_io.serve(
           handler,
           InternetAddress.anyIPv4,
@@ -138,7 +141,6 @@ class PtTvHdhomerunServer {
           await SettingsService().setIptvPtHdhomerunLanPort(p);
         }
         debugPrint('[PtTvHdhr] Listening on 0.0.0.0:$_boundPort');
-        await _rebuildLineupMap();
         return;
       } catch (e) {
         debugPrint('[PtTvHdhr] bind :$p failed: $e');
@@ -275,13 +277,15 @@ class PtTvHdhomerunServer {
   Future<Response> _handleDiscover(Request request) async {
     final origin = request.requestedUri.origin;
     // Plex and other clients expect SiliconDust-shaped metadata.
+    // SiliconDust-style fields; non-empty DeviceAuth avoids picky clients
+    // (Plex EPG / tuner glue) that treat empty auth as invalid.
     final body = json.encode({
       'FriendlyName': 'PlayTorrio PT TV Guide',
       'ModelNumber': 'HDHR4-2US',
       'FirmwareName': 'hdhomerun4_atsc',
       'FirmwareVersion': '20240101',
-      'DeviceID': '42545456',
-      'DeviceAuth': '',
+      'DeviceID': '10439EFD',
+      'DeviceAuth': 'AAAAAAAAAAAAAAAAAAAAAAAA',
       'BaseURL': origin,
       'LineupURL': '$origin/lineup.json',
       'TunerCount': advertisedTunerCount,
@@ -374,12 +378,12 @@ class PtTvHdhomerunServer {
   /// HEAD probe for Plex/ffmpeg — do not forward HEAD upstream (often 403/405 on IPTV).
   /// GET is served as **MPEG-TS** (Dispatcharr-style remux) when FFmpeg is available.
   Response _syntheticStreamHead(String _) {
+    // Match an endless TS GET (no Content-Length). Do not claim Accept-Ranges:
+    // Plex may send Range on GET while our remux/proxy does not honor ranges.
     return Response(
       200,
       headers: {
         'Content-Type': 'video/mp2t',
-        'Content-Length': '0',
-        'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
       },
     );

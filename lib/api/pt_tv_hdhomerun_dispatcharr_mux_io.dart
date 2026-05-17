@@ -14,13 +14,14 @@ import 'settings_service.dart';
 /// When this is `true`, [tryPtTvDispatcharrMpegTsRemux] remuxes the IPTV URL
 /// through bundled FFmpeg to MPEG-TS (stream copy or Plex-oriented AC3 audio;
 /// see [SettingsService] `getIptvPtHdhomerunFfmpegPlexProfile`). True on
-/// Android, iOS, macOS, and Windows (not web).
+/// Android, iOS, macOS, Windows, and Linux desktop (not web).
 bool get ptTvDispatcharrMpegTsRemuxSupported =>
     !kIsWeb &&
     (Platform.isAndroid ||
         Platform.isIOS ||
         Platform.isMacOS ||
-        Platform.isWindows);
+        Platform.isWindows ||
+        Platform.isLinux);
 
 /// Dispatcharr-style MPEG-TS byte stream for a single HTTP GET, or `null` to
 /// fall back to the legacy HTTP proxy path.
@@ -47,6 +48,8 @@ Future<Response?> tryPtTvDispatcharrMpegTsRemux({
     final hdr = 'User-Agent: $ua\r\nReferer: $o/\r\nOrigin: $o\r\n';
 
     final profile = await SettingsService().getIptvPtHdhomerunFfmpegPlexProfile();
+    final httpsInput =
+        Uri.parse(inputUrl).scheme.toLowerCase() == 'https';
     final tail = profile == SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3
         ? <String>[
             '-map',
@@ -88,10 +91,13 @@ Future<Response?> tryPtTvDispatcharrMpegTsRemux({
       '-hide_banner',
       '-loglevel', 'error',
       '-nostdin',
-      '-rw_timeout', '20000000',
+      '-rw_timeout', '60000000',
       '-reconnect', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5',
+      '-fflags',
+      '+discardcorrupt+genpts',
+      if (httpsInput) ...['-tls_verify', '0'],
       '-headers',
       hdr,
       '-i',
@@ -124,7 +130,6 @@ Future<Response?> tryPtTvDispatcharrMpegTsRemux({
         'Content-Type': 'video/mp2t',
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-store',
-        'Connection': 'close',
       },
     );
   } catch (e, st) {

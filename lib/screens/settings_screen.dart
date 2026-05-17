@@ -1683,7 +1683,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'When enabled, this device serves discover.json, lineup.json, lineup_status.json, '
             'and tune URLs on port $_iptvPtHdhrPort (HTTP). Channels match PT TV Guide (starred Live in PT IPTV). '
             'Up to ${PtTvHdhomerunServer.advertisedTunerCount} tuner slots are advertised so Plex and similar apps '
-            'may use several streams at once. On Android, iOS, macOS, and Windows, each tune is remuxed to **MPEG-TS** (Dispatcharr-style) via bundled FFmpeg so Plex can play HLS and TS panels; use the remux profile below if Plex still fails on some channels (AAC-in-TS). Other platforms fall back to HTTP proxy.\n\n'
+            'may use several streams at once. On Android, iOS, macOS, Windows, and Linux, each tune is remuxed to **MPEG-TS** (Dispatcharr-style) via bundled FFmpeg so Plex can play HLS and TS panels; use the remux profile below if Plex still fails on some channels (AAC-in-TS). Other platforms fall back to HTTP proxy.\n\n'
             'Plex: add this URL on the **Plex Media Server** machine (same subnet): '
             'http://YOUR_DEVICE_IP:$_iptvPtHdhrPort — Plex must reach that address (Settings shows a guess below). '
             'If the IP is wrong because of a VPN, set the manual IPv4 field. '
