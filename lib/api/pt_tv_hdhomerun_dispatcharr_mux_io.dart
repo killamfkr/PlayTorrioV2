@@ -12,10 +12,14 @@ import 'settings_service.dart';
 ///
 /// When this is `true`, [tryPtTvDispatcharrMpegTsRemux] remuxes the IPTV URL
 /// through bundled FFmpeg to MPEG-TS (stream copy or Plex-oriented AC3 audio;
-/// see [SettingsService] `getIptvPtHdhomerunFfmpegPlexProfile`).
+/// see [SettingsService] `getIptvPtHdhomerunFfmpegPlexProfile`). True on
+/// Android, iOS, macOS, and Windows (not web).
 bool get ptTvDispatcharrMpegTsRemuxSupported =>
     !kIsWeb &&
-    (Platform.isAndroid || Platform.isIOS || Platform.isMacOS);
+    (Platform.isAndroid ||
+        Platform.isIOS ||
+        Platform.isMacOS ||
+        Platform.isWindows);
 
 /// Dispatcharr-style MPEG-TS byte stream for a single HTTP GET, or `null` to
 /// fall back to the legacy HTTP proxy path.
