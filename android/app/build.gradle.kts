@@ -1,3 +1,5 @@
+import kotlin.math.max
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -26,7 +28,8 @@ android {
         applicationId = "com.example.play_torrio_native"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // ffmpeg_kit_flutter_new_https documents Android API 24+.
+        minSdk = max(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
