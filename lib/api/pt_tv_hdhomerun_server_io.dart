@@ -11,6 +11,7 @@ import '../features/iptv/playtorrio_tv/data/iptv_network.dart';
 import '../features/iptv/playtorrio_tv/data/models.dart';
 import '../features/iptv/playtorrio_tv/data/storage.dart';
 import '../utils/lan_ipv4_picker_io.dart';
+import 'pt_tv_hdhomerun_dispatcharr_mux_io.dart';
 import 'settings_service.dart';
 
 /// Serves a minimal SiliconDust-style HTTP surface on the LAN so apps that
@@ -231,6 +232,9 @@ class PtTvHdhomerunServer {
     if (request.method == 'HEAD') {
       return _syntheticStreamHead(url);
     }
+    final remux =
+        await tryPtTvDispatcharrMpegTsRemux(request: request, inputUrl: url);
+    if (remux != null) return remux;
     return _proxyMedia(request, url, request.requestedUri.origin);
   }
 
@@ -260,6 +264,11 @@ class PtTvHdhomerunServer {
     if (request.method == 'HEAD') {
       return _syntheticStreamHead(target);
     }
+    final remux = await tryPtTvDispatcharrMpegTsRemux(
+      request: request,
+      inputUrl: target,
+    );
+    if (remux != null) return remux;
     return _proxyMedia(request, target, request.requestedUri.origin);
   }
 
@@ -363,17 +372,12 @@ class PtTvHdhomerunServer {
   String _escapeM3uName(String s) => s.replaceAll(',', ' ');
 
   /// HEAD probe for Plex/ffmpeg — do not forward HEAD upstream (often 403/405 on IPTV).
-  Response _syntheticStreamHead(String targetUrl) {
-    final lower = targetUrl.toLowerCase();
-    final isHls =
-        lower.contains('.m3u8') || lower.contains('.m3u');
-    final ct = isHls
-        ? 'application/vnd.apple.mpegurl'
-        : 'video/mp2t';
+  /// GET is served as **MPEG-TS** (Dispatcharr-style remux) when FFmpeg is available.
+  Response _syntheticStreamHead(String _) {
     return Response(
       200,
       headers: {
-        'Content-Type': ct,
+        'Content-Type': 'video/mp2t',
         'Content-Length': '0',
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',

@@ -56,6 +56,8 @@ dependencies:
   palette_generator: ^0.3.3+4
   pointycastle: ^3.9.1
   crypto: ^3.0.5
+  # Plex HDHomeRun DVR expects MPEG-TS on tune URLs (Dispatcharr-style remux).
+  ffmpeg_kit_flutter_new_https: ^2.1.0
 
 dev_dependencies:
   flutter_test:

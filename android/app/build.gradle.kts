@@ -60,6 +60,14 @@ android {
             keyPassword = project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
         }
     }
+
+    packaging {
+        jniLibs {
+            pickFirsts += listOf(
+                "**/libc++_shared.so",
+            )
+        }
+    }
 }
 
 flutter {
