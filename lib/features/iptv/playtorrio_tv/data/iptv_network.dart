@@ -120,7 +120,12 @@ class IptvClient {
       return arr.map((e) {
         final o = e as Map<String, dynamic>;
         final ext = switch (kind) {
-          IptvSection.live => 'ts',
+          // Live panels often ship HLS (.m3u8); forcing .ts breaks playback in-app.
+          IptvSection.live => () {
+              final v = o['container_extension']?.toString().trim() ?? '';
+              final raw = v.isEmpty ? 'ts' : v.replaceFirst(RegExp(r'^\.'), '');
+              return raw;
+            }(),
           IptvSection.vod => () {
               final v = o['container_extension']?.toString() ?? '';
               return v.isEmpty ? 'mp4' : v;

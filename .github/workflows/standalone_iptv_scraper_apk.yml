@@ -49,8 +49,18 @@ jobs:
 
       - run: flutter pub get
 
+      # Retry: Gradle distribution download (GitHub CDN) can return transient 502.
+
       - name: Build release APK
-        run: flutter build apk --release
+        env:
+          GRADLE_OPTS: '-Dorg.gradle.internal.http.connectionTimeout=180000 -Dorg.gradle.internal.http.socketTimeout=180000'
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            echo "=== flutter build apk (attempt $attempt) ==="
+            flutter build apk --release && exit 0
+            sleep $((attempt * 25))
+          done
+          exit 1
 
       - uses: actions/upload-artifact@v4
         with:

@@ -19,7 +19,7 @@ class MainActivity : AudioServiceActivity() {
 
     private val pipCallbackHelper = PipCallbackHelper()
 
-    /** First non-loopback IPv4 (skips typical link-local), for phone → TV settings QR. */
+    /** Best non-loopback IPv4 for LAN URLs (Wi‑Fi / Ethernet over VPN / tailscale). */
     private fun preferredLanIpv4(): String? {
         val candidates = mutableListOf<Pair<Int, String>>()
         try {
@@ -27,28 +27,50 @@ class MainActivity : AudioServiceActivity() {
             while (ifaces.hasMoreElements()) {
                 val ni = ifaces.nextElement() ?: continue
                 if (!ni.isUp || ni.isLoopback) continue
+                val ifaceMod = lanIfaceModifier(ni.name)
                 val addrs = ni.inetAddresses ?: continue
                 while (addrs.hasMoreElements()) {
                     val addr = addrs.nextElement() ?: continue
                     val host = addr.hostAddress ?: continue
                     if (!host.contains('.') || host.contains(':')) continue // IPv4 only
                     if (host.startsWith("169.254.")) continue
-                    val score = when {
-                        host.startsWith("192.168.") -> 300
-                        host.startsWith("10.") -> 200
+                    val ipScore = when {
+                        host.startsWith("192.168.") -> 5000
                         host.startsWith("172.") -> {
                             val p = host.substringAfter("172.").substringBefore('.').toIntOrNull()
-                            if (p != null && p in 16..31) 250 else 50
+                            if (p != null && p in 16..31) 4500 else 600
                         }
-                        else -> 100
+                        host.startsWith("10.") -> 2000
+                        host.startsWith("100.") -> {
+                            val p = host.substringAfter("100.").substringBefore('.').toIntOrNull()
+                            if (p != null && p in 64..127) 500 else 800
+                        }
+                        else -> 800
                     }
-                    candidates.add(score to host)
+                    candidates.add((ipScore + ifaceMod) to host)
                 }
             }
         } catch (_: Exception) {
             return null
         }
         return candidates.maxByOrNull { it.first }?.second
+    }
+
+    private fun lanIfaceModifier(name: String): Int {
+        val n = name.lowercase()
+        val vpnish = listOf(
+            "tailscale", "tun", "tap", "wg", "ppp", "nordlynx", "nordtap",
+            "vpn", "veth", "docker", "br-", "virbr", "zt", "hamachi",
+            "outline", "warp", "rndis", "ipsec", "l2tp", "pptp",
+        )
+        for (b in vpnish) {
+            if (n.contains(b)) return -8000
+        }
+        if (n.contains("wlan") || n.contains("wifi") || n.contains("wlp") || n.contains("wl")) {
+            return 80
+        }
+        if (n.contains("en") || n.contains("eth")) return 60
+        return 0
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
