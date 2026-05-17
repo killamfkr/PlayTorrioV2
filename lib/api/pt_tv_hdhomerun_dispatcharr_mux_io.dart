@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:ffmpeg_kit_flutter_new_https/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_https/ffmpeg_kit_config.dart';
+import 'package:ffmpeg_kit_flutter_new_https/ffmpeg_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shelf/shelf.dart';
 
