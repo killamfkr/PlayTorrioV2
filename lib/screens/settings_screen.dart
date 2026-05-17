@@ -150,6 +150,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _iptvPtHdhrBroadcast = false;
   String? _iptvPtHdhrUrlHint;
   int _iptvPtHdhrPort = SettingsService.iptvPtHdhomerunLanPortDefault;
+  String _iptvPtHdhrFfmpegPlexProfile =
+      SettingsService.iptvPtHdhomerunFfmpegPlexProfileCopy;
   final TextEditingController _iptvPtHdhrLanIpController =
       TextEditingController();
 
@@ -257,6 +259,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final iptvHdhr = await _settings.getIptvPtHdhomerunLanBroadcastEnabled();
     final iptvHdhrPort = await _settings.getIptvPtHdhomerunLanPort();
+    final iptvHdhrFfmpegPlex =
+        await _settings.getIptvPtHdhomerunFfmpegPlexProfile();
     final iptvHdhrIpOverride =
         await _settings.getIptvPtHdhomerunLanIpv4Override() ?? '';
     String? iptvHdhrHint;
@@ -352,6 +356,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptActiveProfileId = ptProf;
         _iptvPtHdhrBroadcast = iptvHdhr;
         _iptvPtHdhrPort = iptvHdhrPort;
+        _iptvPtHdhrFfmpegPlexProfile = iptvHdhrFfmpegPlex;
         _iptvPtHdhrLanIpController.text = iptvHdhrIpOverride;
         _iptvPtHdhrUrlHint = iptvHdhrHint;
       });
@@ -1648,6 +1653,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  String _iptvPtHdhrFfmpegPlexProfileLabel(String key) {
+    if (key == SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3) {
+      return 'Plex-friendly (AC3 audio)';
+    }
+    return 'Stream copy (default)';
+  }
+
+  String _iptvPtHdhrFfmpegPlexProfileFromLabel(String label) {
+    if (label == 'Plex-friendly (AC3 audio)') {
+      return SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3;
+    }
+    return SettingsService.iptvPtHdhomerunFfmpegPlexProfileCopy;
+  }
+
   Widget _buildPtTvHdhomerunSection() {
     final hint = _iptvPtHdhrUrlHint;
     return Padding(
@@ -1664,7 +1683,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'When enabled, this device serves discover.json, lineup.json, lineup_status.json, '
             'and tune URLs on port $_iptvPtHdhrPort (HTTP). Channels match PT TV Guide (starred Live in PT IPTV). '
             'Up to ${PtTvHdhomerunServer.advertisedTunerCount} tuner slots are advertised so Plex and similar apps '
-            'may use several streams at once. On Android / iOS / macOS, each tune is remuxed to **MPEG-TS** (Dispatcharr-style) via bundled FFmpeg so Plex can play HLS and TS panels; other platforms fall back to HTTP proxy.\n\n'
+            'may use several streams at once. On Android / iOS / macOS, each tune is remuxed to **MPEG-TS** (Dispatcharr-style) via bundled FFmpeg so Plex can play HLS and TS panels; use the remux profile below if Plex still fails on some channels (AAC-in-TS). Other platforms fall back to HTTP proxy.\n\n'
             'Plex: add this URL on the **Plex Media Server** machine (same subnet): '
             'http://YOUR_DEVICE_IP:$_iptvPtHdhrPort — Plex must reach that address (Settings shows a guess below). '
             'If the IP is wrong because of a VPN, set the manual IPv4 field. '
@@ -1730,6 +1749,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          _buildFocusableDropdown(
+            'LAN tune FFmpeg profile',
+            'Stream copy is fastest. Plex-friendly (AC3) re-encodes audio to Dolby Digital (stereo) — try when Plex/ffmpeg rejects AAC in MPEG-TS.',
+            _iptvPtHdhrFfmpegPlexProfileLabel(_iptvPtHdhrFfmpegPlexProfile),
+            const [
+              'Stream copy (default)',
+              'Plex-friendly (AC3 audio)',
+            ],
+            (val) async {
+              if (val == null) return;
+              final key = _iptvPtHdhrFfmpegPlexProfileFromLabel(val);
+              await _settings.setIptvPtHdhomerunFfmpegPlexProfile(key);
+              PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+              if (mounted) {
+                setState(() => _iptvPtHdhrFfmpegPlexProfile = key);
+              }
+            },
           ),
           const SizedBox(height: 12),
           _buildFocusableToggle(

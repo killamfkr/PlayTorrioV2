@@ -195,6 +195,30 @@ class SettingsService {
       'iptv_pt_hdhomerun_lan_ipv4_override';
   static const int iptvPtHdhomerunLanPortDefault = 49200;
 
+  /// FFmpeg remux for LAN HDHR tune: full stream copy (default).
+  static const String iptvPtHdhomerunFfmpegPlexProfileCopy = 'copy';
+  /// Re-encode audio to AC3 (Dispatcharr / Plex forum pattern for bad AAC-in-TS).
+  static const String iptvPtHdhomerunFfmpegPlexProfilePlexAc3 = 'plex_ac3';
+  static const String _iptvPtHdhomerunFfmpegPlexProfileKey =
+      'iptv_pt_hdhomerun_ffmpeg_plex_profile';
+
+  Future<String> getIptvPtHdhomerunFfmpegPlexProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final s = prefs.getString(_iptvPtHdhomerunFfmpegPlexProfileKey);
+    if (s == iptvPtHdhomerunFfmpegPlexProfilePlexAc3) {
+      return iptvPtHdhomerunFfmpegPlexProfilePlexAc3;
+    }
+    return iptvPtHdhomerunFfmpegPlexProfileCopy;
+  }
+
+  Future<void> setIptvPtHdhomerunFfmpegPlexProfile(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = value == iptvPtHdhomerunFfmpegPlexProfilePlexAc3
+        ? iptvPtHdhomerunFfmpegPlexProfilePlexAc3
+        : iptvPtHdhomerunFfmpegPlexProfileCopy;
+    await prefs.setString(_iptvPtHdhomerunFfmpegPlexProfileKey, v);
+  }
+
   Future<bool> getIptvPtHdhomerunLanBroadcastEnabled() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_iptvPtHdhomerunLanBroadcastKey) ?? false;
@@ -1217,6 +1241,7 @@ class SettingsService {
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
       _iptvPtHdhomerunLanIpv4OverrideKey,
+      _iptvPtHdhomerunFfmpegPlexProfileKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
@@ -1324,6 +1349,7 @@ class SettingsService {
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
       _iptvPtHdhomerunLanIpv4OverrideKey,
+      _iptvPtHdhomerunFfmpegPlexProfileKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,

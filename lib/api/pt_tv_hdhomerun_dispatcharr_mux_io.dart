@@ -5,11 +5,14 @@ import 'package:ffmpeg_kit_flutter_new_https/ffmpeg_kit_config.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shelf/shelf.dart';
 
+import 'settings_service.dart';
+
 /// Plex HDHomeRun DVR expects **MPEG-TS** on the tune URL (see Dispatcharr,
 /// plex-dvr-hls, etc.). Plain HLS/proxy playlists often fail to tune/play.
 ///
 /// When this is `true`, [tryPtTvDispatcharrMpegTsRemux] remuxes the IPTV URL
-/// through bundled FFmpeg (`-c copy -f mpegts`) to match that model.
+/// through bundled FFmpeg to MPEG-TS (stream copy or Plex-oriented AC3 audio;
+/// see [SettingsService] `getIptvPtHdhomerunFfmpegPlexProfile`).
 bool get ptTvDispatcharrMpegTsRemuxSupported =>
     !kIsWeb &&
     (Platform.isAndroid || Platform.isIOS || Platform.isMacOS);
@@ -38,6 +41,44 @@ Future<Response?> tryPtTvDispatcharrMpegTsRemux({
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
     final hdr = 'User-Agent: $ua\r\nReferer: $o/\r\nOrigin: $o\r\n';
 
+    final profile = await SettingsService().getIptvPtHdhomerunFfmpegPlexProfile();
+    final tail = profile == SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3
+        ? <String>[
+            '-map',
+            '0',
+            '-c:v',
+            'copy',
+            '-sn',
+            '-c:a',
+            'ac3',
+            '-b:a',
+            '192k',
+            '-ac',
+            '2',
+            '-ar',
+            '48000',
+            '-f',
+            'mpegts',
+            '-muxdelay',
+            '0',
+            '-flush_packets',
+            '1',
+            pipe,
+          ]
+        : <String>[
+            '-map',
+            '0',
+            '-c',
+            'copy',
+            '-f',
+            'mpegts',
+            '-muxdelay',
+            '0',
+            '-flush_packets',
+            '1',
+            pipe,
+          ];
+
     final args = <String>[
       '-hide_banner',
       '-loglevel', 'error',
@@ -50,17 +91,7 @@ Future<Response?> tryPtTvDispatcharrMpegTsRemux({
       hdr,
       '-i',
       inputUrl,
-      '-map',
-      '0',
-      '-c',
-      'copy',
-      '-f',
-      'mpegts',
-      '-muxdelay',
-      '0',
-      '-flush_packets',
-      '1',
-      pipe,
+      ...tail,
     ];
 
     session = await FFmpegKit.executeWithArgumentsAsync(args);
