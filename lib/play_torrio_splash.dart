@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
@@ -7,7 +5,6 @@ import 'api/music_player_service.dart';
 import 'api/tmdb_api.dart';
 import 'api/torrent_stream_service.dart';
 import 'api/local_server_service.dart';
-import 'api/pt_tv_hdhomerun_server.dart';
 import 'models/movie.dart';
 import 'utils/app_theme.dart';
 import 'utils/device_profile.dart';
@@ -70,20 +67,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const MainScreen()),
         );
-        unawaited(
-          TorrentStreamService()
-              .start()
-              .timeout(
-                const Duration(seconds: 30),
-                onTimeout: () {
-                  debugPrint('[Boot] ⚠ TorrentStream (offline bg) timed out');
-                  return false;
-                },
-              )
-              .catchError((e, st) {
-                debugPrint('[Boot] ✗ TorrentStream (offline bg): $e\n$st');
-              }),
-        );
       }
       return;
     }
@@ -91,18 +74,25 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     debugPrint('[Boot] Step 2: Initializing services in parallel...');
     final api = TmdbApi();
 
+    debugPrint('[Boot]   - Starting TorrentStream engine...');
     debugPrint('[Boot]   - Starting LocalServer...');
-    debugPrint('[Boot]   - Starting PT TV HDHomeRun LAN (if enabled)...');
     debugPrint('[Boot]   - Initializing MusicPlayer...');
     debugPrint('[Boot]   - Fetching TMDB data (trending, popular, top rated, now playing)...');
-    debugPrint('[Boot]   - TorrentStream: deferred until after first screen (native init)');
 
     final results = await Future.wait([
+      TorrentStreamService().start().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('[Boot] ⚠ TorrentStream startup timed out after 10s');
+          return false;
+        },
+      ).catchError((e, st) {
+        debugPrint('[Boot] ✗ TorrentStream error: $e');
+        debugPrint('[Boot] Stack trace: $st');
+        return false;
+      }),
       LocalServerService().start().catchError((e) {
         debugPrint('[Boot] ✗ LocalServer error: $e');
-      }),
-      PtTvHdhomerunServer().applyFromSettings().catchError((e) {
-        debugPrint('[Boot] ✗ PT TV HDHomeRun LAN: $e');
       }),
       MusicPlayerService().init().catchError((e) {
         debugPrint('[Boot] ✗ MusicPlayer error: $e');
@@ -126,7 +116,8 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     ]);
 
     debugPrint('[Boot] Step 3: Service initialization results:');
-    debugPrint('[Boot]   TorrentStream: deferred (starts in background after UI)');
+    final torrentEngineReady = (results[0] as bool?) == true;
+    debugPrint('[Boot]   TorrentStream: ${torrentEngineReady ? "✓ READY" : "✗ FAILED"}');
     debugPrint('[Boot]   LocalServer: ✓ READY');
     debugPrint('[Boot]   MusicPlayer: ✓ READY');
 
@@ -157,26 +148,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           },
           transitionDuration: const Duration(milliseconds: 800),
         ),
-      );
-      unawaited(
-        TorrentStreamService()
-            .start()
-            .timeout(
-              const Duration(seconds: 30),
-              onTimeout: () {
-                debugPrint('[Boot] ⚠ TorrentStream startup timed out after 30s');
-                return false;
-              },
-            )
-            .then((ok) {
-              debugPrint(
-                '[Boot] TorrentStream (background): ${ok == true ? "READY" : "FAILED"}',
-              );
-            })
-            .catchError((e, st) {
-              debugPrint('[Boot] ✗ TorrentStream (background): $e');
-              debugPrint('[Boot] Stack trace: $st');
-            }),
       );
       debugPrint('═══════════════════════════════════════════════════════════');
       debugPrint('[Boot] ✓✓✓ ENGINE INITIALIZATION COMPLETE ✓✓✓');

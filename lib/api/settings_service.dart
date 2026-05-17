@@ -185,86 +185,6 @@ class SettingsService {
     }
   }
 
-  /// When true, exposes PT TV Guide (starred IPTV channels) as an HDHomeRun-style
-  /// HTTP device on the LAN (`discover.json`, `lineup.json`, `/auto/v…`).
-  static const String _iptvPtHdhomerunLanBroadcastKey =
-      'iptv_pt_hdhomerun_lan_broadcast';
-  static const String _iptvPtHdhomerunLanPortKey = 'iptv_pt_hdhomerun_lan_port';
-  /// Optional manual IPv4 for the PT TV HDHomeRun hint (Wi‑Fi IP when VPN is first).
-  static const String _iptvPtHdhomerunLanIpv4OverrideKey =
-      'iptv_pt_hdhomerun_lan_ipv4_override';
-  static const int iptvPtHdhomerunLanPortDefault = 49200;
-
-  /// FFmpeg remux for LAN HDHR tune: full stream copy (default).
-  static const String iptvPtHdhomerunFfmpegPlexProfileCopy = 'copy';
-  /// Re-encode audio to AC3 (Dispatcharr / Plex forum pattern for bad AAC-in-TS).
-  static const String iptvPtHdhomerunFfmpegPlexProfilePlexAc3 = 'plex_ac3';
-  static const String _iptvPtHdhomerunFfmpegPlexProfileKey =
-      'iptv_pt_hdhomerun_ffmpeg_plex_profile';
-
-  Future<String> getIptvPtHdhomerunFfmpegPlexProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    final s = prefs.getString(_iptvPtHdhomerunFfmpegPlexProfileKey);
-    if (s == iptvPtHdhomerunFfmpegPlexProfilePlexAc3) {
-      return iptvPtHdhomerunFfmpegPlexProfilePlexAc3;
-    }
-    return iptvPtHdhomerunFfmpegPlexProfileCopy;
-  }
-
-  Future<void> setIptvPtHdhomerunFfmpegPlexProfile(String value) async {
-    final prefs = await SharedPreferences.getInstance();
-    final v = value == iptvPtHdhomerunFfmpegPlexProfilePlexAc3
-        ? iptvPtHdhomerunFfmpegPlexProfilePlexAc3
-        : iptvPtHdhomerunFfmpegPlexProfileCopy;
-    await prefs.setString(_iptvPtHdhomerunFfmpegPlexProfileKey, v);
-  }
-
-  Future<bool> getIptvPtHdhomerunLanBroadcastEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_iptvPtHdhomerunLanBroadcastKey) ?? false;
-  }
-
-  Future<void> setIptvPtHdhomerunLanBroadcastEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_iptvPtHdhomerunLanBroadcastKey, v);
-  }
-
-  Future<int> getIptvPtHdhomerunLanPort() async {
-    final prefs = await SharedPreferences.getInstance();
-    final p = prefs.getInt(_iptvPtHdhomerunLanPortKey);
-    if (p == null) return iptvPtHdhomerunLanPortDefault;
-    return p.clamp(1024, 65535);
-  }
-
-  Future<void> setIptvPtHdhomerunLanPort(int port) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-      _iptvPtHdhomerunLanPortKey,
-      port.clamp(1024, 65535),
-    );
-  }
-
-  /// When set (e.g. `192.168.0.190`), [PtTvHdhomerunServer.describeLanBaseUrl] uses this
-  /// instead of auto-detected IPv4 (VPN overlays often win otherwise).
-  Future<String?> getIptvPtHdhomerunLanIpv4Override() async {
-    final prefs = await SharedPreferences.getInstance();
-    final s = prefs.getString(_iptvPtHdhomerunLanIpv4OverrideKey);
-    if (s == null || s.trim().isEmpty) return null;
-    return s.trim();
-  }
-
-  Future<void> setIptvPtHdhomerunLanIpv4Override(String? ipv4) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (ipv4 == null || ipv4.trim().isEmpty) {
-      await prefs.remove(_iptvPtHdhomerunLanIpv4OverrideKey);
-    } else {
-      await prefs.setString(
-        _iptvPtHdhomerunLanIpv4OverrideKey,
-        ipv4.trim(),
-      );
-    }
-  }
-
   /// XMLTV `<programme channel="...">` id → match a live Stremio channel (same addon baseUrl + meta id).
   static const String _xmltvChannelMapKey = 'xmltv_epg_channel_map_json';
 
@@ -1220,7 +1140,6 @@ class SettingsService {
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
       _stremioAutoPlayEnabledKey,
-      _iptvPtHdhomerunLanBroadcastKey,
     ]) {
       final v = prefs.getBool(key);
       if (v != null) prefsMap[key] = v;
@@ -1240,8 +1159,6 @@ class SettingsService {
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
-      _iptvPtHdhomerunLanIpv4OverrideKey,
-      _iptvPtHdhomerunFfmpegPlexProfileKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
@@ -1257,7 +1174,6 @@ class SettingsService {
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
       _ptProfileIdKey,
-      _iptvPtHdhomerunLanPortKey,
     ]) {
       final v = prefs.getInt(key);
       if (v != null) prefsMap[key] = v;
@@ -1325,7 +1241,6 @@ class SettingsService {
       _ptProfileGateKey,
       _torrentAutoPickEnabledKey,
       _stremioAutoPlayEnabledKey,
-      _iptvPtHdhomerunLanBroadcastKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setBool(key, prefsMap[key] as bool);
@@ -1348,8 +1263,6 @@ class SettingsService {
       _defaultStremioAddonBaseUrlKey,
       _xmltvEpgUrlKey,
       _xmltvChannelMapKey,
-      _iptvPtHdhomerunLanIpv4OverrideKey,
-      _iptvPtHdhomerunFfmpegPlexProfileKey,
       TraktService.prefsClientIdKey,
       TraktService.prefsClientSecretKey,
       _subFontKey,
@@ -1366,7 +1279,6 @@ class SettingsService {
       _androidTvMaxStreamBitrateKbpsKey,
       _subColorKey,
       _ptProfileIdKey,
-      _iptvPtHdhomerunLanPortKey,
     ]) {
       if (prefsMap.containsKey(key)) {
         await prefs.setInt(key, (prefsMap[key] as num).toInt());

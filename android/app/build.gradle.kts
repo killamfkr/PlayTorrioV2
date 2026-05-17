@@ -1,5 +1,3 @@
-import kotlin.math.max
-
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -28,8 +26,7 @@ android {
         applicationId = "com.example.play_torrio_native"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // ffmpeg_kit_flutter_new_https documents Android API 24+.
-        minSdk = max(flutter.minSdkVersion, 24)
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -61,14 +58,6 @@ android {
             storePassword = project.findProperty("PLAYTORRIO_KEYSTORE_PASSWORD") as String? ?: ""
             keyAlias = project.findProperty("PLAYTORRIO_KEY_ALIAS") as String? ?: "playtorrio"
             keyPassword = project.findProperty("PLAYTORRIO_KEY_PASSWORD") as String? ?: ""
-        }
-    }
-
-    packaging {
-        jniLibs {
-            pickFirsts += listOf(
-                "**/libc++_shared.so",
-            )
         }
     }
 }

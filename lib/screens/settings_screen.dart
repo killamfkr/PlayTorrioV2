@@ -10,8 +10,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
-import '../api/pt_tv_hdhomerun_server.dart';
-import '../utils/ipv4_literal.dart';
 import '../services/external_player_service.dart';
 import '../api/debrid_api.dart';
 import '../api/trakt_service.dart';
@@ -146,15 +144,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _ptProfileGateOnStart = true;
   int _ptActiveProfileId = 1;
 
-  /// PT TV Guide → HDHomeRun-style LAN HTTP (mobile / desktop / TV; not web).
-  bool _iptvPtHdhrBroadcast = false;
-  String? _iptvPtHdhrUrlHint;
-  int _iptvPtHdhrPort = SettingsService.iptvPtHdhomerunLanPortDefault;
-  String _iptvPtHdhrFfmpegPlexProfile =
-      SettingsService.iptvPtHdhomerunFfmpegPlexProfileCopy;
-  final TextEditingController _iptvPtHdhrLanIpController =
-      TextEditingController();
-
   @override
   void initState() {
     super.initState();
@@ -257,17 +246,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ptGate = await _settings.getPlaytorrioProfileGateEnabled();
     final ptProf = await _settings.getPlaytorrioProfileId();
 
-    final iptvHdhr = await _settings.getIptvPtHdhomerunLanBroadcastEnabled();
-    final iptvHdhrPort = await _settings.getIptvPtHdhomerunLanPort();
-    final iptvHdhrFfmpegPlex =
-        await _settings.getIptvPtHdhomerunFfmpegPlexProfile();
-    final iptvHdhrIpOverride =
-        await _settings.getIptvPtHdhomerunLanIpv4Override() ?? '';
-    String? iptvHdhrHint;
-    if (!kIsWeb) {
-      iptvHdhrHint = await PtTvHdhomerunServer().describeLanBaseUrl();
-    }
-
     // Load navbar config
     final navVisible = await _settings.getNavbarConfig();
     // Full order: visible items first, then hidden items
@@ -354,11 +332,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ptCloudConfigured = ptCfg;
         _ptProfileGateOnStart = ptGate;
         _ptActiveProfileId = ptProf;
-        _iptvPtHdhrBroadcast = iptvHdhr;
-        _iptvPtHdhrPort = iptvHdhrPort;
-        _iptvPtHdhrFfmpegPlexProfile = iptvHdhrFfmpegPlex;
-        _iptvPtHdhrLanIpController.text = iptvHdhrIpOverride;
-        _iptvPtHdhrUrlHint = iptvHdhrHint;
       });
     }
   }
@@ -456,7 +429,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _rdApiKeyController.dispose();
     _ptCloudEmailController.dispose();
     _ptCloudPasswordController.dispose();
-    _iptvPtHdhrLanIpController.dispose();
     _traktPollTimer?.cancel();
     _simklPollTimer?.cancel();
     _jackett.dispose();
@@ -820,11 +792,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildDefaultStremioStreamSource(),
                     const SizedBox(height: 24),
                     _buildXmltvEpgSection(),
-                    if (!kIsWeb) ...[
-                      const SizedBox(height: 32),
-                      _buildSectionHeader('PT TV Guide on your network'),
-                      _buildPtTvHdhomerunSection(),
-                    ],
                     const SizedBox(height: 32),
                     _buildSectionHeader('Jackett'),
                     _buildJackettConfig(),
@@ -1651,189 +1618,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
-  }
-
-  String _iptvPtHdhrFfmpegPlexProfileLabel(String key) {
-    if (key == SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3) {
-      return 'Plex-friendly (AC3 audio)';
-    }
-    return 'Stream copy (default)';
-  }
-
-  String _iptvPtHdhrFfmpegPlexProfileFromLabel(String label) {
-    if (label == 'Plex-friendly (AC3 audio)') {
-      return SettingsService.iptvPtHdhomerunFfmpegPlexProfilePlexAc3;
-    }
-    return SettingsService.iptvPtHdhomerunFfmpegPlexProfileCopy;
-  }
-
-  Widget _buildPtTvHdhomerunSection() {
-    final hint = _iptvPtHdhrUrlHint;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'HDHomeRun-style tuner (LAN)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'When enabled, this device serves discover.json, lineup.json, lineup_status.json, '
-            'and tune URLs on port $_iptvPtHdhrPort (HTTP). Channels match PT TV Guide (starred Live in PT IPTV). '
-            'Up to ${PtTvHdhomerunServer.advertisedTunerCount} tuner slots are advertised so Plex and similar apps '
-            'may use several streams at once. On Android, iOS, macOS, Windows, and Linux, each tune is remuxed to **MPEG-TS** (Dispatcharr-style) via bundled FFmpeg so Plex can play HLS and TS panels; use the remux profile below if Plex still fails on some channels (AAC-in-TS). Other platforms fall back to HTTP proxy.\n\n'
-            'Plex: add this URL on the **Plex Media Server** machine (same subnet): '
-            'http://YOUR_DEVICE_IP:$_iptvPtHdhrPort — Plex must reach that address (Settings shows a guess below). '
-            'If the IP is wrong because of a VPN, set the manual IPv4 field. '
-            'This source reports no over-the-air scan (IPTV lineup only); Plex should load channels from lineup.json without a long scan.',
-            style: const TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _iptvPtHdhrLanIpController,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: 'LAN IPv4 (optional override)',
-              hintText: 'e.g. 192.168.0.190',
-              filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.05),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saveIptvHdhrLanIpOverride,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.primaryColor,
-                    side: BorderSide(
-                        color: AppTheme.primaryColor.withValues(alpha: 0.5)),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('Save LAN IP'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () async {
-                    _iptvPtHdhrLanIpController.clear();
-                    await _settings.setIptvPtHdhomerunLanIpv4Override(null);
-                    final h = await PtTvHdhomerunServer().describeLanBaseUrl();
-                    if (mounted) {
-                      setState(() => _iptvPtHdhrUrlHint = h);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('LAN IP override cleared')),
-                      );
-                    }
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white54,
-                    side: const BorderSide(color: Colors.white24),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('Clear IP'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _buildFocusableDropdown(
-            'LAN tune FFmpeg profile',
-            'Stream copy is fastest. Plex-friendly (AC3) re-encodes audio to Dolby Digital (stereo) — try when Plex/ffmpeg rejects AAC in MPEG-TS.',
-            _iptvPtHdhrFfmpegPlexProfileLabel(_iptvPtHdhrFfmpegPlexProfile),
-            const [
-              'Stream copy (default)',
-              'Plex-friendly (AC3 audio)',
-            ],
-            (val) async {
-              if (val == null) return;
-              final key = _iptvPtHdhrFfmpegPlexProfileFromLabel(val);
-              await _settings.setIptvPtHdhomerunFfmpegPlexProfile(key);
-              PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
-              if (mounted) {
-                setState(() => _iptvPtHdhrFfmpegPlexProfile = key);
-              }
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildFocusableToggle(
-            'Broadcast PT TV Guide on this network',
-            'Off: nothing is exposed on the LAN. On: HTTP on 0.0.0.0:$_iptvPtHdhrPort.',
-            _iptvPtHdhrBroadcast,
-            (val) {
-              Future(() async {
-                await _settings.setIptvPtHdhomerunLanBroadcastEnabled(val);
-                await PtTvHdhomerunServer().applyFromSettings();
-                final port = await _settings.getIptvPtHdhomerunLanPort();
-                final h = await PtTvHdhomerunServer().describeLanBaseUrl();
-                if (mounted) {
-                  setState(() {
-                    _iptvPtHdhrBroadcast = val;
-                    _iptvPtHdhrPort = port;
-                    _iptvPtHdhrUrlHint = h;
-                  });
-                }
-              });
-            },
-          ),
-          if (hint != null && hint.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            SelectableText(
-              hint,
-              style: const TextStyle(fontSize: 12, color: Colors.white38),
-            ),
-          ] else if (_iptvPtHdhrBroadcast) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Could not detect a LAN IPv4 address. The server may still be running; '
-              'open http://THIS_DEVICE_IP:$_iptvPtHdhrPort/discover.json from another machine.',
-              style: const TextStyle(
-                  fontSize: 12, color: Colors.white38, height: 1.35),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Future<void> _saveIptvHdhrLanIpOverride() async {
-    final raw = _iptvPtHdhrLanIpController.text.trim();
-    if (raw.isNotEmpty && !isIpv4Literal(raw)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Enter a valid IPv4 address (four numbers 0–255).'),
-          ),
-        );
-      }
-      return;
-    }
-    await _settings.setIptvPtHdhomerunLanIpv4Override(raw.isEmpty ? null : raw);
-    final h = await PtTvHdhomerunServer().describeLanBaseUrl();
-    if (mounted) {
-      setState(() => _iptvPtHdhrUrlHint = h);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            raw.isEmpty ? 'LAN IP override cleared' : 'LAN IP override saved',
-          ),
-        ),
-      );
-    }
   }
 
   Future<void> _saveXmltvEpgUrl() async {
