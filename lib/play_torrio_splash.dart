@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
@@ -67,6 +69,20 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const MainScreen()),
         );
+        unawaited(
+          TorrentStreamService()
+              .start()
+              .timeout(
+                const Duration(seconds: 30),
+                onTimeout: () {
+                  debugPrint('[Boot] ⚠ TorrentStream (offline bg) timed out');
+                  return false;
+                },
+              )
+              .catchError((e, st) {
+                debugPrint('[Boot] ✗ TorrentStream (offline bg): $e\n$st');
+              }),
+        );
       }
       return;
     }
@@ -74,23 +90,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     debugPrint('[Boot] Step 2: Initializing services in parallel...');
     final api = TmdbApi();
 
-    debugPrint('[Boot]   - Starting TorrentStream engine...');
     debugPrint('[Boot]   - Starting LocalServer...');
     debugPrint('[Boot]   - Initializing MusicPlayer...');
     debugPrint('[Boot]   - Fetching TMDB data (trending, popular, top rated, now playing)...');
+    debugPrint('[Boot]   - TorrentStream: deferred until after first screen (native init)');
 
     final results = await Future.wait([
-      TorrentStreamService().start().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          debugPrint('[Boot] ⚠ TorrentStream startup timed out after 10s');
-          return false;
-        },
-      ).catchError((e, st) {
-        debugPrint('[Boot] ✗ TorrentStream error: $e');
-        debugPrint('[Boot] Stack trace: $st');
-        return false;
-      }),
       LocalServerService().start().catchError((e) {
         debugPrint('[Boot] ✗ LocalServer error: $e');
       }),
@@ -116,15 +121,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     ]);
 
     debugPrint('[Boot] Step 3: Service initialization results:');
-    final torrentEngineReady = (results[0] as bool?) == true;
-    debugPrint('[Boot]   TorrentStream: ${torrentEngineReady ? "✓ READY" : "✗ FAILED"}');
+    debugPrint('[Boot]   TorrentStream: deferred (starts in background after UI)');
     debugPrint('[Boot]   LocalServer: ✓ READY');
     debugPrint('[Boot]   MusicPlayer: ✓ READY');
 
-    final trendingList = results[3] as List;
-    final popularList = results[4] as List;
-    final topRatedList = results[5] as List;
-    final nowPlayingList = results[6] as List;
+    final trendingList = results[2] as List;
+    final popularList = results[3] as List;
+    final topRatedList = results[4] as List;
+    final nowPlayingList = results[5] as List;
 
     debugPrint('[Boot]   TMDB Trending: ${trendingList.isNotEmpty ? "✓ ${trendingList.length} items" : "✗ Empty"}');
     debugPrint('[Boot]   TMDB Popular: ${popularList.isNotEmpty ? "✓ ${popularList.length} items" : "✗ Empty"}');
@@ -148,6 +152,26 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           },
           transitionDuration: const Duration(milliseconds: 800),
         ),
+      );
+      unawaited(
+        TorrentStreamService()
+            .start()
+            .timeout(
+              const Duration(seconds: 30),
+              onTimeout: () {
+                debugPrint('[Boot] ⚠ TorrentStream startup timed out after 30s');
+                return false;
+              },
+            )
+            .then((ok) {
+              debugPrint(
+                '[Boot] TorrentStream (background): ${ok == true ? "READY" : "FAILED"}',
+              );
+            })
+            .catchError((e, st) {
+              debugPrint('[Boot] ✗ TorrentStream (background): $e');
+              debugPrint('[Boot] Stack trace: $st');
+            }),
       );
       debugPrint('═══════════════════════════════════════════════════════════');
       debugPrint('[Boot] ✓✓✓ ENGINE INITIALIZATION COMPLETE ✓✓✓');
