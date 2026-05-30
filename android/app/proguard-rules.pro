@@ -72,3 +72,6 @@
 -keepclassmembers class * implements com.google.android.gms.cast.framework.OptionsProvider {
     <methods>;
 }
+
+# Play Core (Flutter deferred components / split installs — optional at runtime)
+-dontwarn com.google.android.play.core.**
