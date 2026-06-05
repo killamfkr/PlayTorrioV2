@@ -1,7 +1,11 @@
 import 'dart:convert';
-import 'dart:io';
+
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/playtorrio_cloud_sync_service.dart';
 
 /// Service to interact with miruro.tv API for anime streaming.
 /// Uses the secure pipe protocol: base64url-encoded GET requests
@@ -17,7 +21,7 @@ class AnimeService {
   );
   static const String _protocolVersion = '0.2.0';
 
-  final HttpClient _client = HttpClient();
+  static final http.Client _http = http.Client();
 
   /// Generic API GET request through the secure pipe.
   Future<dynamic> _apiGet(String path, {Map<String, String>? query}) async {
@@ -31,16 +35,17 @@ class AnimeService {
     final encoded = _base64urlEncode(jsonEncode(request));
     final uri = Uri.parse('$_baseUrl/api/secure/pipe?e=$encoded');
 
-    final httpReq = await _client.getUrl(uri);
-    httpReq.headers.set('User-Agent', 'Mozilla/5.0');
-    httpReq.headers.set('Referer', '$_baseUrl/');
-    httpReq.headers.set('Origin', _baseUrl);
+    final response = await _http.get(
+      uri,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': '$_baseUrl/',
+        'Origin': _baseUrl,
+      },
+    );
+    final body = utf8.decode(response.bodyBytes);
 
-    final response = await httpReq.close();
-    final bytes = await consolidateHttpClientResponseBytes(response);
-    final body = utf8.decode(bytes);
-
-    final xObf = response.headers.value('x-obfuscated');
+    final xObf = response.headers['x-obfuscated'];
     if (xObf != null) {
       return jsonDecode(_deobfuscate(body, xObf));
     }
@@ -73,23 +78,19 @@ class AnimeService {
   }
 
   Uint8List _decompress(Uint8List data) {
-    // Try gzip
     try {
       if (data.length >= 2 && data[0] == 0x1f && data[1] == 0x8b) {
-        return Uint8List.fromList(gzip.decode(data));
+        return Uint8List.fromList(GZipDecoder().decodeBytes(data));
       }
     } catch (_) {}
-    // Try zlib
     try {
-      return Uint8List.fromList(zlib.decode(data));
+      return Uint8List.fromList(ZLibDecoder().decodeBytes(data));
     } catch (_) {}
-    // Try raw deflate with zlib header
     try {
       return Uint8List.fromList(
-        zlib.decode([0x78, 0x01, ...data]),
+        ZLibDecoder().decodeBytes(Uint8List.fromList([0x78, 0x01, ...data])),
       );
     } catch (_) {}
-    // Return as-is if nothing works
     return data;
   }
 
@@ -123,14 +124,23 @@ class AnimeService {
     return AnimeSources.fromJson(data);
   }
 
-  /// Search anime.
-  Future<List<AnimeCard>> search(String query, {int page = 1, int perPage = 20}) async {
-    final data = await _apiGet('search/browse', query: {
+  /// Search anime. Pass [isAdult]=true to include 18+ titles. The Miruro
+  /// `search/browse` endpoint filters them OUT by default, so we mirror the
+  /// same `isAdult=true` opt-in used by [browse].
+  Future<List<AnimeCard>> search(
+    String query, {
+    int page = 1,
+    int perPage = 20,
+    bool isAdult = false,
+  }) async {
+    final q = <String, String>{
       'search': query,
       'type': 'ANIME',
       'page': '$page',
       'perPage': '$perPage',
-    });
+    };
+    if (isAdult) q['isAdult'] = 'true';
+    final data = await _apiGet('search/browse', query: q);
     if (data is List) {
       return data.map((e) => AnimeCard.fromJson(e)).toList();
     }
@@ -206,11 +216,11 @@ class AnimeService {
 
   // ─── Likes ─────────────────────────────────────────────────────
 
-  static const String _likedKey = 'liked_anime';
+  static const String prefsLikedKey = 'liked_anime';
 
   Future<void> toggleLike(AnimeCard anime) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     final idx = list.indexWhere((e) {
       final m = jsonDecode(e);
       return m['id'] == anime.id;
@@ -220,24 +230,25 @@ class AnimeService {
     } else {
       list.add(jsonEncode(anime.toJson()));
     }
-    await prefs.setStringList(_likedKey, list);
+    await prefs.setStringList(prefsLikedKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<bool> isLiked(int id) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     return list.any((e) => jsonDecode(e)['id'] == id);
   }
 
   Future<List<AnimeCard>> getLiked() async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_likedKey) ?? [];
+    final list = prefs.getStringList(prefsLikedKey) ?? [];
     return list.map((e) => AnimeCard.fromJson(jsonDecode(e))).toList().reversed.toList();
   }
 
   // ─── Continue Watching ─────────────────────────────────────────
 
-  static const String _watchHistoryKey = 'anime_watch_history';
+  static const String prefsWatchHistoryKey = 'anime_watch_history';
 
   Future<void> addToWatchHistory({
     required AnimeCard anime,
@@ -251,7 +262,7 @@ class AnimeService {
     int? duration,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     // Remove existing entry for this anime
     list.removeWhere((e) => jsonDecode(e)['animeId'] == anime.id);
     // Add to front
@@ -270,20 +281,22 @@ class AnimeService {
     }));
     // Keep max 20
     if (list.length > 20) list.removeLast();
-    await prefs.setStringList(_watchHistoryKey, list);
+    await prefs.setStringList(prefsWatchHistoryKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 
   Future<List<Map<String, dynamic>>> getWatchHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     return list.map((e) => jsonDecode(e) as Map<String, dynamic>).toList();
   }
 
   Future<void> removeFromWatchHistory(int animeId) async {
     final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_watchHistoryKey) ?? [];
+    final list = prefs.getStringList(prefsWatchHistoryKey) ?? [];
     list.removeWhere((e) => jsonDecode(e)['animeId'] == animeId);
-    await prefs.setStringList(_watchHistoryKey, list);
+    await prefs.setStringList(prefsWatchHistoryKey, list);
+    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
   }
 }
 

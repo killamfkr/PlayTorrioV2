@@ -11,10 +11,10 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Required by ota_update and other deps that use newer java.time APIs on older minSdk
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        // Enable desugaring for modern Java features (required by ota_update)
-        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -26,12 +26,10 @@ android {
         applicationId = "com.example.play_torrio_native"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        // Enable multidex for desugaring
-        multiDexEnabled = true
     }
 
     buildTypes {
@@ -39,7 +37,11 @@ android {
             // Enable minification and resource shrinking
             isMinifyEnabled = true
             isShrinkResources = true
-            
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+
             // Use release signing config if available, otherwise fall back to debug
             signingConfig = if (project.hasProperty("PLAYTORRIO_KEYSTORE_PATH")) {
                 signingConfigs.getByName("release")
@@ -65,6 +67,8 @@ flutter {
 }
 
 dependencies {
-    // Core library desugaring for modern Java features
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Official `com.arthenica:ffmpeg-kit-*` artifacts were removed from Maven Central (~Apr 2025).
+    // Community rebuild (same FFmpeg Kit JNI surface): https://github.com/moizhassankh/ffmpeg-kit-android-16KB
+    implementation("com.moizhassan.ffmpeg:ffmpeg-kit-16kb:6.1.1")
 }

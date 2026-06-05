@@ -3,6 +3,7 @@ import '../api/settings_service.dart';
 import '../screens/home_screen.dart';
 import '../screens/search_screen.dart';
 import '../screens/discover_screen.dart';
+import 'tv_interactive.dart';
 
 class SideNavbar extends StatefulWidget {
   final String activeItem;
@@ -197,7 +198,7 @@ class _SideNavbarState extends State<SideNavbar> {
     
     return Tooltip(
       message: label,
-      child: InkWell(
+      child: TvInkWell(
         onTap: onTap ?? () {
           if (isActive) return;
           if (label == 'Home') {

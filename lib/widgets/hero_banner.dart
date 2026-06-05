@@ -6,12 +6,19 @@ import '../api/tmdb_api.dart';
 import '../screens/details_screen.dart';
 import '../screens/streaming_details_screen.dart';
 import '../api/settings_service.dart';
+import '../services/my_list_service.dart';
+import '../utils/app_theme.dart';
 import '../utils/extensions.dart';
+import '../utils/performance_tuning.dart';
+import 'tv_interactive.dart';
 
 class HeroBanner extends StatefulWidget {
   final List<Movie> movies;
 
-  const HeroBanner({super.key, required this.movies});
+  /// When set (e.g. Android TV split layout), fixes carousel height to the parent constraint.
+  final double? height;
+
+  const HeroBanner({super.key, required this.movies, this.height});
 
   @override
   State<HeroBanner> createState() => _HeroBannerState();
@@ -28,9 +35,12 @@ class _HeroBannerState extends State<HeroBanner> {
     final screenHeight = MediaQuery.of(context).size.height;
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 600;
-    
-    final heroHeight = isMobile ? screenHeight * 0.6 : screenHeight * 0.75;
+
+    final heroHeight = widget.height ??
+        (isMobile ? screenHeight * 0.6 : screenHeight * 0.75);
     final featuredMovies = widget.movies.take(5).toList();
+    final autoAdvance =
+        !PerformanceTuning.skipHomeHeroAutoAdvance && !AppTheme.isLightMode;
 
     return Focus(
       child: Stack(
@@ -40,10 +50,11 @@ class _HeroBannerState extends State<HeroBanner> {
             options: CarouselOptions(
               height: heroHeight,
               viewportFraction: 1.0,
-              autoPlay: true,
+              autoPlay: autoAdvance,
               autoPlayInterval: const Duration(seconds: 8),
               autoPlayAnimationDuration: const Duration(milliseconds: 1000),
               autoPlayCurve: Curves.fastOutSlowIn,
+              enableInfiniteScroll: featuredMovies.length > 1,
               onPageChanged: (index, reason) {
                 setState(() {
                   _currentIndex = index;
@@ -52,9 +63,10 @@ class _HeroBannerState extends State<HeroBanner> {
             ),
             items: featuredMovies.map((movie) {
               final imageUrl = TmdbApi.getBackdropUrl(movie.backdropPath);
-              return InkWell(
+              return TvInkWell(
                 onTap: () => _navigateToDetails(movie),
-                focusColor: Colors.deepPurpleAccent.withValues(alpha: 0.1),
+                cornerRadius: 0,
+                focusColor: AppTheme.primaryColor.withValues(alpha: 0.15),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -164,29 +176,17 @@ class _HeroBannerState extends State<HeroBanner> {
                     icon: const Icon(Icons.play_arrow_rounded, size: 28),
                     label: const Text('Play Now'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurpleAccent,
+                      backgroundColor: AppTheme.primaryColor,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                       textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 8,
-                      shadowColor: Colors.deepPurpleAccent.withValues(alpha: 0.5),
+                      shadowColor: AppTheme.primaryColor.withValues(alpha: 0.5),
                     ),
                   ),
                   const SizedBox(width: 16),
-                  OutlinedButton.icon(
-                    onPressed: () {}, // TODO: Add to list
-                    icon: const Icon(Icons.add_rounded, size: 24),
-                    label: const Text('My List'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white24, width: 2),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: Colors.black.withValues(alpha: 0.3),
-                    ),
-                  ),
+                  _HeroMyListButton(movie: featuredMovies[_currentIndex]),
                 ],
               ),
             ],
@@ -200,7 +200,8 @@ class _HeroBannerState extends State<HeroBanner> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: featuredMovies.asMap().entries.map((entry) {
-              return GestureDetector(
+              return TvGestureTap(
+                borderRadius: 8,
                 onTap: () => _carouselController.animateToPage(entry.key),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
@@ -210,7 +211,7 @@ class _HeroBannerState extends State<HeroBanner> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(4),
                     color: _currentIndex == entry.key 
-                        ? Colors.deepPurpleAccent 
+                        ? AppTheme.primaryColor 
                         : Colors.white.withValues(alpha: 0.2),
                   ),
                 ),
@@ -249,6 +250,57 @@ class _HeroBannerState extends State<HeroBanner> {
     );
   }
 
+}
+
+/// My List toggle for the hero (matches home screen behaviour).
+class _HeroMyListButton extends StatelessWidget {
+  final Movie movie;
+
+  const _HeroMyListButton({required this.movie});
+
+  @override
+  Widget build(BuildContext context) {
+    final uniqueId = MyListService.movieId(movie.id, movie.mediaType);
+    return ValueListenableBuilder<int>(
+      valueListenable: MyListService.changeNotifier,
+      builder: (context, _, __) {
+        final inList = MyListService().contains(uniqueId);
+        return OutlinedButton.icon(
+          onPressed: () async {
+            final added = await MyListService().toggleMovie(
+              tmdbId: movie.id,
+              imdbId: movie.imdbId,
+              title: movie.title,
+              posterPath: movie.posterPath,
+              mediaType: movie.mediaType,
+              voteAverage: movie.voteAverage,
+              releaseDate: movie.releaseDate,
+            );
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).clearSnackBars();
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(added ? 'Added to My List' : 'Removed from My List'),
+                duration: const Duration(seconds: 1),
+              ));
+            }
+          },
+          icon: Icon(inList ? Icons.bookmark_rounded : Icons.add_rounded, size: 24),
+          label: Text(inList ? 'In My List' : 'My List'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white,
+            side: const BorderSide(color: Colors.white24, width: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: Colors.black.withValues(alpha: 0.3),
+          ),
+        );
+      },
+    );
+  }
+}
+
+extension _HeroBannerNavigate on _HeroBannerState {
   Future<void> _navigateToDetails(Movie movie) async {
     final navigator = Navigator.of(context);
     final isStreamingMode = await SettingsService().isStreamingModeEnabled();

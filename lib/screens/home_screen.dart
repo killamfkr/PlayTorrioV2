@@ -5,6 +5,7 @@ import 'package:shimmer/shimmer.dart';
 import '../api/tmdb_api.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
+import '../utils/stremio_stream_headers.dart';
 import '../api/stream_extractor.dart';
 import '../api/stream_providers.dart';
 import '../api/amri_extractor.dart';
@@ -14,14 +15,95 @@ import '../api/trakt_service.dart';
 import '../api/simkl_service.dart';
 import '../api/webstreamr_service.dart';
 import '../services/watch_history_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import '../utils/device_profile.dart';
+import '../utils/performance_tuning.dart';
+import '../utils/dlstreams_top_home.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
+import '../widgets/hero_banner.dart';
+import '../widgets/tv_interactive.dart';
+
+/// Converts nested maps from JSON decode into String maps for HTTP headers.
+Map<String, String>? _watchHistoryParseHeaders(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is Map<String, String>) return raw;
+  if (raw is Map) {
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      out['$k'] = '$v';
+    });
+    return out.isEmpty ? null : out;
+  }
+  return null;
+}
+
+/// Prefer Continue Watching with the **exact URL + headers** we saved while playing.
+Future<bool> _tryResumeSavedStreamDirect(
+    BuildContext context, Map<String, dynamic> item) async {
+  final savedUrl = item['streamUrl']?.toString();
+  if (savedUrl == null ||
+      savedUrl.isEmpty ||
+      !(savedUrl.startsWith('http://') || savedUrl.startsWith('https://'))) {
+    return false;
+  }
+
+  final tmdbId = item['tmdbId'] as int;
+  final season = item['season'] as int?;
+  final episode = item['episode'] as int?;
+  final title = item['title'] as String;
+  final posterPath = item['posterPath'] as String;
+  final startPos = Duration(milliseconds: item['position'] as int);
+  final headers = _watchHistoryParseHeaders(item['streamHeaders']);
+
+  final method = item['method'] as String? ?? 'stream';
+  String activeProvider = method == 'stremio_direct' ? 'stremio_direct' : method;
+  if (method == 'stream' && item['sourceId'] is String) {
+    activeProvider = item['sourceId'] as String;
+  }
+
+  if (!context.mounted) return true;
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => PlayerScreen(
+        streamUrl: savedUrl,
+        title: title,
+        headers: headers,
+        movie: Movie(
+          id: tmdbId,
+          title: title,
+          posterPath: posterPath,
+          backdropPath: '',
+          overview: '',
+          releaseDate: '',
+          voteAverage: 0,
+          mediaType: season != null ? 'tv' : 'movie',
+          genres: [],
+          imdbId: item['imdbId'],
+        ),
+        selectedSeason: season,
+        selectedEpisode: episode,
+        magnetLink: item['magnetLink'] as String?,
+        fileIndex: item['fileIndex'] as int?,
+        activeProvider: activeProvider,
+        startPosition: startPos,
+        stremioId: item['stremioId'] as String?,
+        stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
+        stremioStreamType: StremioService.streamTypeForStremioMetaType(
+          item['stremioType']?.toString(),
+          fallbackMediaType: season != null ? 'tv' : 'movie',
+        ),
+      ),
+    ),
+  );
+  return true;
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,12 +118,16 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   final PageController _heroController = PageController();
   
   late Future<List<Movie>> _trendingFuture;
+  late Future<List<Movie>> _trendingTvFuture;
   late Future<List<Movie>> _popularFuture;
+  late Future<List<Movie>> _popularTvFuture;
   late Future<List<Movie>> _topRatedFuture;
   late Future<List<Movie>> _nowPlayingFuture;
   
   Timer? _heroTimer;
   int _heroIndex = 0;
+  /// Hero uses at most 5 items; kept in sync with trending load for correct auto-advance.
+  int _heroPageCount = 1;
 
   // Hero logo cache: movieId -> logo URL
   final Map<int, String> _heroLogos = {};
@@ -64,13 +150,22 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     super.initState();
     _trendingFuture = _api.getTrending().then((movies) {
       _fetchHeroLogos(movies.take(5).toList());
+      if (mounted) {
+        final n = movies.length.clamp(0, 5);
+        setState(() => _heroPageCount = n > 0 ? n : 1);
+      }
       return movies;
     });
+    _trendingTvFuture = _api.getTrendingTv();
     _popularFuture = _api.getPopular();
+    _popularTvFuture = _api.getPopularTv();
     _topRatedFuture = _api.getTopRated();
     _nowPlayingFuture = _api.getNowPlaying();
-    
-    _startHeroTimer();
+
+    // TV hero uses HeroBanner (carousel); mobile/tablet use PageView + this timer.
+    if (!DeviceProfile.isAndroidTv) {
+      _startHeroTimer();
+    }
     _loadStremioCatalogs();
 
     // Reload catalogs whenever addons are added/removed in Settings
@@ -146,16 +241,17 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   }
 
   void _startHeroTimer() {
-    if (AppTheme.isLightMode) return; // skip periodic rebuilds in light mode
+    if (AppTheme.isLightMode || PerformanceTuning.skipHomeHeroAutoAdvance) {
+      return;
+    }
     _heroTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
-      if (_heroController.hasClients) {
-        final next = (_heroIndex + 1) % 5;
+      if (_heroController.hasClients && _heroPageCount > 1) {
+        final next = (_heroIndex + 1) % _heroPageCount;
         _heroController.animateToPage(
           next,
           duration: const Duration(milliseconds: 1000),
           curve: Curves.easeInOutCubic,
         );
-        setState(() => _heroIndex = next);
       }
     });
   }
@@ -261,7 +357,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               final showIds = show['ids'] as Map<String, dynamic>? ?? {};
               final tmdbId = showIds['tmdb'] as int?;
 
-              return GestureDetector(
+              return TvGestureTap(
                 onTap: () async {
                   if (tmdbId == null) return;
                   try {
@@ -379,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               final movieIds = movie['ids'] as Map<String, dynamic>? ?? {};
               final tmdbId = movieIds['tmdb'] as int?;
 
-              return GestureDetector(
+              return TvGestureTap(
                 onTap: () async {
                   if (tmdbId == null) return;
                   try {
@@ -439,24 +535,83 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     }
   }
 
+  /// Hosted Streaming Catalogs addon (Netflix, Disney+, Prime, etc.) — load every catalog row on Home.
+  static bool _isStreamingCatalogsAddon(Map<String, dynamic> cat) {
+    final u = (cat['addonBaseUrl'] as String? ?? '').toLowerCase();
+    return u.contains('stremio-netflix-catalog-addon.baby-beamup.club');
+  }
+
   Future<void> _loadStremioCatalogs() async {
     try {
       final catalogs = await _stremio.getAllCatalogs();
       if (!mounted || catalogs.isEmpty) return;
 
-      // Group non-search-required catalogs by addon, preserving order.
-      final Map<String, List<Map<String, dynamic>>> byAddon = {};
-      for (final c in catalogs) {
-        if (c['searchRequired'] == true) continue;
-        final key = c['addonBaseUrl'] as String;
-        byAddon.putIfAbsent(key, () => []).add(c);
+      final usable = catalogs.where((c) => c['searchRequired'] != true).toList();
+
+      final streamingAddonCats = usable.where(_isStreamingCatalogsAddon).toList();
+      final dlstreamsAddonCats =
+          usable.where(isDlstreamsTopCatalog).toList();
+      final otherCats = usable
+          .where((c) =>
+              !_isStreamingCatalogsAddon(c) && !isDlstreamsTopCatalog(c))
+          .toList();
+
+      final Map<String, List<Map<String, dynamic>>> nextItems = {};
+      final List<Map<String, dynamic>> nextOrder = [];
+
+      // Streaming Catalogs addon: fetch in manifest order (sequential so rows match Netflix → Disney+ → …).
+      for (final cat in streamingAddonCats) {
+        try {
+          final items = await _stremio.getCatalog(
+            baseUrl: cat['addonBaseUrl'],
+            type: cat['catalogType'],
+            id: cat['catalogId'],
+          );
+          if (items.isEmpty) continue;
+          for (final item in items) {
+            item['_addonBaseUrl'] = cat['addonBaseUrl'];
+            item['_addonName'] = cat['addonName'];
+          }
+          final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+          nextItems[itemKey] = items;
+          nextOrder.add(cat);
+        } catch (_) {}
       }
 
-      // Mark that we've started loading so the build can show shimmer / placeholders.
-      if (mounted) setState(() => _catalogsLoaded = true);
+      // dlstreams.top: load **every** catalog as its own home row, grouped into shelves
+      // (Sports TV, Movies & Series, …); schedule-style catalogs → "Live schedules" board.
+      if (dlstreamsAddonCats.isNotEmpty) {
+        final ordered = orderedDlstreamsCatalogs(dlstreamsAddonCats);
+        annotateDlstreamsShelfHeaders(ordered);
+        if (ordered.isNotEmpty) {
+          ordered.first['_homeShowDlstreamsSource'] = true;
+          ordered.first['_homeTightDlstreamsTop'] = true;
+        }
+        await Future.wait(ordered.map((cat) async {
+          try {
+            final items = await _stremio.getCatalog(
+              baseUrl: cat['addonBaseUrl'],
+              type: cat['catalogType'],
+              id: cat['catalogId'],
+            );
+            if (items.isEmpty) return;
+            for (final item in items) {
+              item['_addonBaseUrl'] = cat['addonBaseUrl'];
+              item['_addonName'] = cat['addonName'];
+            }
+            final itemKey =
+                '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+            nextItems[itemKey] = items;
+            nextOrder.add(cat);
+          } catch (_) {}
+        }));
+      }
 
-      // For each addon, try catalogs in order until one returns items.
-      // All addons are tried in parallel; within each addon they are tried sequentially.
+      // Other addons: first catalog per addon that returns items (original behavior).
+      final Map<String, List<Map<String, dynamic>>> byAddon = {};
+      for (final c in otherCats) {
+        byAddon.putIfAbsent(c['addonBaseUrl'] as String, () => []).add(c);
+      }
       await Future.wait(byAddon.values.map((addonCatalogs) async {
         for (final cat in addonCatalogs) {
           try {
@@ -465,29 +620,27 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               type: cat['catalogType'],
               id: cat['catalogId'],
             );
-            if (items.isEmpty) continue; // try next catalog for this addon
-
-            // Tag each item with the addon that provided it
+            if (items.isEmpty) continue;
             for (final item in items) {
               item['_addonBaseUrl'] = cat['addonBaseUrl'];
               item['_addonName'] = cat['addonName'];
             }
-            if (mounted) {
-              final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
-              setState(() {
-                // Add the winning catalog to the list if not already present
-                if (!_stremioCatalogs.any((c) =>
-                    c['addonBaseUrl'] == cat['addonBaseUrl'] &&
-                    c['catalogId'] == cat['catalogId'])) {
-                  _stremioCatalogs = [..._stremioCatalogs, cat];
-                }
-                _catalogItems[itemKey] = items;
-              });
-            }
-            return; // done for this addon
+            final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+            nextItems[itemKey] = items;
+            nextOrder.add(cat);
+            return;
           } catch (_) {}
         }
       }));
+
+      if (!mounted) return;
+      setState(() {
+        _catalogsLoaded = true;
+        _stremioCatalogs = nextOrder;
+        _catalogItems
+          ..clear()
+          ..addAll(nextItems);
+      });
     } catch (e) {
       debugPrint('[HomeScreen] Error loading Stremio catalogs: $e');
     }
@@ -545,7 +698,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     // Custom ID, collection, or all lookups failed
     if (mounted) {
       // Override type to 'collections' if it's a collection ID
-      final actualType = isCollection ? 'collections' : (type == 'series' ? 'tv' : 'movie');
+      final actualType = isCollection
+          ? 'collections'
+          : ((type == 'series' || type == 'channel' || type == 'tv') ? 'tv' : 'movie');
       
       final movie = Movie(
         id: id.hashCode,
@@ -572,69 +727,13 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      backgroundColor: AppTheme.bgDark,
-      body: Stack(
-        children: [
-          // Atmospheric ambient glow spots (skipped in light mode)
-          if (!AppTheme.isLightMode) ...[
-          Positioned(
-            top: MediaQuery.of(context).size.height * 0.6,
-            left: -80,
-            child: Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            top: MediaQuery.of(context).size.height * 1.2,
-            right: -60,
-            child: Container(
-              width: 200,
-              height: 200,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: [AppTheme.accentColor.withValues(alpha: 0.04), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-          ],
-          CustomScrollView(
-        cacheExtent: 500,
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          // Hero
-          SliverToBoxAdapter(
-            child: RepaintBoundary(
-              child: FutureBuilder<List<Movie>>(
-                future: _trendingFuture,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                    return _buildHeroShimmer();
-                  }
-                  return _buildHeroCarousel(snapshot.data!.take(5).toList());
-                },
-              ),
-            ),
-          ),
+  List<Widget> _sliversBelowHero() {
+    return [
           // Continue Watching
           const SliverToBoxAdapter(child: RepaintBoundary(child: _ContinueWatchingSection())),
-          // Trending
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Now', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
-          // Popular
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
+          // Popular movies & series (TMDB), then Stremio catalog rows (Streaming Catalogs addon shows all services)
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Movies', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Series', icon: Icons.tv_rounded, future: _popularTvFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
           // Stremio Addon Catalogs
           if (_catalogsLoaded)
             ..._stremioCatalogs.map((cat) {
@@ -652,6 +751,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                 ),
               );
             }),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Movies', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
+          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Series', icon: Icons.whatshot_rounded, future: _trendingTvFuture, onMovieTap: _openDetails))),
           // Top Rated
           SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Top Rated', icon: Icons.star_rounded, future: _topRatedFuture, onMovieTap: _openDetails))),
           // Trakt Recommendations
@@ -666,16 +767,146 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           // New Releases
           SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'New Releases', icon: Icons.new_releases_rounded, future: _nowPlayingFuture, onMovieTap: _openDetails, isPortrait: true))),
           const SliverToBoxAdapter(child: SizedBox(height: 100)),
-        ],
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (DeviceProfile.isAndroidTv) {
+      return _buildAndroidTvHome(context);
+    }
+
+    final mq = MediaQuery.of(context);
+    final isLandscape = mq.orientation == Orientation.landscape;
+    final heroHeight = isLandscape ? mq.size.height * 0.65 : mq.size.height * 0.82;
+
+    final heroLayer = RepaintBoundary(
+      child: FutureBuilder<List<Movie>>(
+        future: _trendingFuture,
+        builder: (context, snapshot) {
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return _buildHeroShimmer();
+          }
+          return _buildHeroCarousel(snapshot.data!.take(5).toList());
+        },
       ),
+    );
+
+    final scrollView = CustomScrollView(
+      cacheExtent: 500,
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(child: heroLayer),
+        ..._sliversBelowHero(),
       ],
+    );
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      backgroundColor: AppTheme.bgDark,
+      body: Stack(
+        children: [
+          if (!PerformanceTuning.skipHomeAmbientGlows) ...[
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.6,
+              left: -80,
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).size.height * 1.2,
+              right: -60,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.accentColor.withValues(alpha: 0.04), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          scrollView,
+        ],
       ),
     );
   }
 
-  Widget _buildHeroShimmer() {
+  /// Leanback layout: fork-style top carousel (focus-friendly) + scrollable rows (your sections).
+  Widget _buildAndroidTvHome(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final heroH = mq.size.height * 0.42;
+
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      backgroundColor: AppTheme.bgDark,
+      body: Stack(
+        children: [
+          if (!PerformanceTuning.skipHomeAmbientGlows) ...[
+            Positioned(
+              top: mq.size.height * 0.55,
+              left: -80,
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: heroH,
+                child: RepaintBoundary(
+                  child: FutureBuilder<List<Movie>>(
+                    future: _trendingFuture,
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return _buildHeroShimmer(height: heroH);
+                      }
+                      return HeroBanner(
+                        movies: snapshot.data!.take(5).toList(),
+                        height: heroH,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Expanded(
+                child: CustomScrollView(
+                  cacheExtent: 500,
+                  physics: const BouncingScrollPhysics(),
+                  slivers: _sliversBelowHero(),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeroShimmer({double? height}) {
     final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-    final h = isLandscape ? MediaQuery.of(context).size.height * 0.65 : MediaQuery.of(context).size.height * 0.82;
+    final h = height ??
+        (isLandscape ? MediaQuery.of(context).size.height * 0.65 : MediaQuery.of(context).size.height * 0.82);
     final placeholder = Container(height: h, color: AppTheme.bgCard);
     if (AppTheme.isLightMode) return placeholder;
     return Shimmer.fromColors(
@@ -895,7 +1126,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                   Row(
                     children: [
                       // Play button with glow
-                      Container(
+                      Flexible(
+                        child: Container(
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(28),
                           boxShadow: AppTheme.isLightMode ? null : [
@@ -905,7 +1137,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                         child: Material(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(28),
-                          child: InkWell(
+                          child: TvInkWell(
                             onTap: () => _openDetails(heroMovie),
                             borderRadius: BorderRadius.circular(28),
                             child: const Padding(
@@ -922,9 +1154,11 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                           ),
                         ),
                       ),
+                      ),
                       const SizedBox(width: 12),
                       // More Info — frosted glass pill (simplified in light mode)
-                      _buildFrostedPill(
+                      Flexible(
+                        child: _buildFrostedPill(
                         onTap: () => _openDetails(heroMovie),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
@@ -937,6 +1171,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                             ],
                           ),
                         ),
+                      ),
                       ),
                       const SizedBox(width: 12),
                       // My List — frosted circle (simplified in light mode)
@@ -972,7 +1207,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             top: 0,
             bottom: 0,
             child: Center(
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () {
                   if (_heroController.hasClients && _heroIndex > 0) {
                     _heroController.animateToPage(
@@ -993,7 +1228,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             top: 0,
             bottom: 0,
             child: Center(
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () {
                   if (_heroController.hasClients && _heroIndex < movies.length - 1) {
                     _heroController.animateToPage(
@@ -1039,7 +1274,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     final inner = Material(
       color: Colors.white.withValues(alpha: 0.12),
       borderRadius: BorderRadius.circular(28),
-      child: InkWell(
+      child: TvInkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(28),
         child: child,
@@ -1239,12 +1474,12 @@ class _MovieSectionState extends State<_MovieSection> {
                       ],
                     ),
                   ),
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: _scrollLeft,
                     child: _buildSmallFrostedArrow(Icons.arrow_back_ios_new_rounded),
                   ),
                   const SizedBox(width: 6),
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: _scrollRight,
                     child: _buildSmallFrostedArrow(Icons.arrow_forward_ios_rounded),
                   ),
@@ -1379,12 +1614,12 @@ class _StaticMovieSectionState extends State<_StaticMovieSection> {
                   ],
                 ),
               ),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollLeft,
                 child: _buildSmallFrostedArrow(Icons.arrow_back_ios_new_rounded),
               ),
               const SizedBox(width: 6),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollRight,
                 child: _buildSmallFrostedArrow(Icons.arrow_forward_ios_rounded),
               ),
@@ -1467,10 +1702,18 @@ class _MovieCard extends StatelessWidget {
               color: AppTheme.bgCard,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 0.5),
-              boxShadow: AppTheme.isLightMode ? null : [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16, offset: const Offset(0, 8)),
-                BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.05), blurRadius: 20, spreadRadius: -4),
-              ],
+              boxShadow: (AppTheme.isLightMode || DeviceProfile.isAndroidTv)
+                  ? null
+                  : [
+                      BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8)),
+                      BoxShadow(
+                          color: AppTheme.primaryColor.withValues(alpha: 0.05),
+                          blurRadius: 20,
+                          spreadRadius: -4),
+                    ],
             ),
             child: Stack(
               fit: StackFit.expand,
@@ -1680,17 +1923,60 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
     setState(() => _loadingItemId = uniqueId);
 
     try {
-      final method = item['method'] as String;
-      final tmdbId = item['tmdbId'] as int;
-      final season = item['season'] as int?;
-      final episode = item['episode'] as int?;
-      final title = item['title'] as String;
-      final posterPath = item['posterPath'] as String; 
-      final startPos = Duration(milliseconds: item['position'] as int);
-      
+      await PlaytorrioCloudSyncService.instance.refreshWatchHistoryFromCloudIfPossible();
+      final fresh = await WatchHistoryService().getEntryByUniqueId(uniqueId);
+      final row = fresh ?? item;
+
+      if (await _tryResumeSavedStreamDirect(context, row)) return;
+
+      final method = row['method'] as String;
+      final tmdbId = row['tmdbId'] as int;
+      final season = row['season'] as int?;
+      final episode = row['episode'] as int?;
+      final title = row['title'] as String;
+      final posterPath = row['posterPath'] as String;
+      final startPos = Duration(milliseconds: row['position'] as int);
+
+      // Streaming-mode entries often lose a re-playable URL after extraction
+      // tokens expire. When no saved http(s) URL was available above, re-open
+      // StreamingDetailsScreen so extraction runs again and forwards startPosition.
+      final isStreamingEntry = method == 'stream' ||
+          method == 'amri' ||
+          method == 'stremio_direct';
+      if (isStreamingEntry) {
+        if (mounted) {
+          final mediaType =
+              row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final movie = Movie(
+            id: tmdbId,
+            title: title,
+            posterPath: posterPath,
+            backdropPath: '',
+            overview: '',
+            releaseDate: '',
+            voteAverage: 0,
+            mediaType: mediaType,
+            genres: [],
+            imdbId: row['imdbId'],
+          );
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => StreamingDetailsScreen(
+                movie: movie,
+                initialSeason: season,
+                initialEpisode: episode,
+                startPosition: startPos,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
       // Get saved magnet link and file index for torrents
-      final savedMagnetLink = item['magnetLink'] as String?;
-      final savedFileIndex = item['fileIndex'] as int?;
+      final savedMagnetLink = row['magnetLink'] as String?;
+      final savedFileIndex = row['fileIndex'] as int?;
 
       String? streamUrl;
       String? activeProvider;
@@ -1698,12 +1984,13 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       int? fileIndex;
       String? stremioItemId;
       String? stremioAddonBase;
+      Map<String, String>? stremioResumeHeaders;
 
       if (method == 'stremio_direct') {
         // Direct stremio stream — try the saved URL first
-        final savedUrl = item['streamUrl'] as String?;
-        stremioItemId = item['stremioId'] as String?;
-        stremioAddonBase = item['stremioAddonBaseUrl'] as String?;
+        final savedUrl = row['streamUrl'] as String?;
+        stremioItemId = row['stremioId'] as String?;
+        stremioAddonBase = row['stremioAddonBaseUrl'] as String?;
         activeProvider = 'stremio_direct';
 
         if (savedUrl != null && savedUrl.isNotEmpty) {
@@ -1717,7 +2004,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         if (streamUrl == null && stremioItemId != null && stremioAddonBase != null) {
           // Re-fetch streams from the addon
           debugPrint('[Resume] Re-fetching stremio streams for $stremioItemId from $stremioAddonBase');
-          final stremioType = item['stremioType'] as String? ?? (season != null ? 'series' : 'movie');
+          final stremioType = row['stremioType'] as String? ?? (season != null ? 'series' : 'movie');
           final stremio = StremioService();
           try {
             final streams = await stremio.getStreams(
@@ -1729,6 +2016,8 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               final first = streams.first;
               if (first is Map<String, dynamic> && first['url'] != null) {
                 streamUrl = first['url'] as String;
+                stremioResumeHeaders = stremioProxyRequestHeadersFromStream(first);
+                if (stremioResumeHeaders.isEmpty) stremioResumeHeaders = null;
               }
             }
           } catch (e) {
@@ -1739,7 +2028,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         // If we still have nothing, open the details page
         if (streamUrl == null) {
           if (mounted) {
-            final mediaType = item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+            final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
             final movie = Movie(
               id: tmdbId,
               title: title,
@@ -1750,32 +2039,38 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               voteAverage: 0,
               mediaType: mediaType,
               genres: [],
-              imdbId: item['imdbId'],
+              imdbId: row['imdbId'],
             );
             Map<String, dynamic>? stremioItem;
             if (stremioItemId != null) {
               stremioItem = {
                 'id': stremioItemId,
                 '_addonBaseUrl': stremioAddonBase ?? '',
-                'type': item['stremioType'] ?? (season != null ? 'series' : 'movie'),
+                'type': row['stremioType'] ?? (season != null ? 'series' : 'movie'),
                 'name': title,
               };
             }
             Navigator.push(context, MaterialPageRoute(
-              builder: (_) => DetailsScreen(movie: movie, stremioItem: stremioItem),
+              builder: (_) => DetailsScreen(
+                movie: movie,
+                stremioItem: stremioItem,
+                initialSeason: season,
+                initialEpisode: episode,
+                startPosition: startPos,
+              ),
             ));
           }
           return; // Skip the player launch below
         }
       } else if (method == 'stream') {
         // Re-extract stream using saved sourceId (tmdbId + season + episode)
-        final sourceId = item['sourceId'] as String;
+        final sourceId = row['sourceId'] as String;
         activeProvider = sourceId;
         
         if (sourceId == 'webstreamr') {
           debugPrint('[Resume] Using WebStreamrService for $title');
           final webStreamr = WebStreamrService();
-          final imdbId = item['imdbId']?.toString() ?? '';
+          final imdbId = row['imdbId']?.toString() ?? '';
           if (imdbId.isNotEmpty) {
             final webStreamrSources = await webStreamr.getStreams(
               imdbId: imdbId,
@@ -1839,7 +2134,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
           onLog: (message) => debugPrint('[AMRI Resume] $message'),
         );
         
-        final year = item['year']?.toString() ?? '';
+        final year = row['year']?.toString() ?? '';
         
         final sourcesData = await amriExtractor.extractSources(
           tmdbId.toString(),
@@ -1873,24 +2168,21 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
         if (useDebrid) {
           debugPrint('[Resume] Using debrid service: $debridService');
           if (debridService == 'Real-Debrid') {
-             final files = await DebridApi().resolveRealDebrid(magnetLink);
-             if (fileIndex != null && fileIndex < files.length) {
-               // Use saved file index
-               streamUrl = files[fileIndex].downloadUrl;
-               debugPrint('[Resume] Using file at index $fileIndex: ${files[fileIndex].filename}');
-             } else {
-               // Fallback to largest file
-               files.sort((a, b) => b.filesize.compareTo(a.filesize));
-               if (files.isNotEmpty) streamUrl = files.first.downloadUrl;
+             final files = await DebridApi().resolveRealDebrid(magnetLink,
+                 season: season, episode: episode);
+             if (files.isNotEmpty) {
+               // resolveRealDebrid now returns a single, pre-picked file.
+               streamUrl = files.first.downloadUrl;
+               fileIndex = 0;
+               debugPrint('[Resume] Picked: ${files.first.filename}');
              }
           } else if (debridService == 'TorBox') {
-             final files = await DebridApi().resolveTorBox(magnetLink);
-             if (fileIndex != null && fileIndex < files.length) {
-               streamUrl = files[fileIndex].downloadUrl;
-               debugPrint('[Resume] Using file at index $fileIndex: ${files[fileIndex].filename}');
-             } else {
-               files.sort((a, b) => b.filesize.compareTo(a.filesize));
-               if (files.isNotEmpty) streamUrl = files.first.downloadUrl;
+             final files = await DebridApi().resolveTorBox(magnetLink,
+                 season: season, episode: episode);
+             if (files.isNotEmpty) {
+               streamUrl = files.first.downloadUrl;
+               fileIndex = 0;
+               debugPrint('[Resume] Picked: ${files.first.filename}');
              }
           } else {
              throw Exception("No Debrid service configured");
@@ -1903,7 +2195,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       } else if (method == 'trakt_import') {
         // Trakt-imported items have no stream source — find one automatically
         if (context.mounted) {
-          final mediaType = item['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
           final movie = Movie(
             id: tmdbId,
             title: title,
@@ -1914,7 +2206,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             voteAverage: 0,
             mediaType: mediaType,
             genres: [],
-            imdbId: item['imdbId'],
+            imdbId: row['imdbId'],
           );
           final navigator = Navigator.of(context);
           final isStreaming = await SettingsService().isStreamingModeEnabled();
@@ -1930,6 +2222,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                     movie: movie,
                     initialSeason: season,
                     initialEpisode: episode,
+                    startPosition: startPos,
                   ),
           ));
         }
@@ -1944,6 +2237,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             builder: (_) => PlayerScreen(
               streamUrl: streamUrl!,
               title: title,
+              headers: stremioResumeHeaders,
               movie: Movie(
                 id: tmdbId,
                 title: title,
@@ -1954,7 +2248,7 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                 voteAverage: 0, 
                 mediaType: season != null ? 'tv' : 'movie', 
                 genres: [], 
-                imdbId: item['imdbId'],
+                imdbId: row['imdbId'],
               ),
               selectedSeason: season,
               selectedEpisode: episode,
@@ -1964,6 +2258,10 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               startPosition: startPos,
               stremioId: stremioItemId,
               stremioAddonBaseUrl: stremioAddonBase,
+              stremioStreamType: StremioService.streamTypeForStremioMetaType(
+                row['stremioType']?.toString(),
+                fallbackMediaType: season != null ? 'tv' : 'movie',
+              ),
             ),
           ),
         );
@@ -2138,12 +2436,12 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                     ),
                   ),
                   if (history.isNotEmpty) ...[
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: _scrollLeft,
                       child: _buildCWSectionArrow(Icons.arrow_back_ios_new_rounded),
                     ),
                     const SizedBox(width: 6),
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: _scrollRight,
                       child: _buildCWSectionArrow(Icons.arrow_forward_ios_rounded),
                     ),
@@ -2295,7 +2593,7 @@ class _HistoryCard extends StatelessWidget {
                 children: [
                   Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: onRemove,
                       child: Container(
@@ -2308,7 +2606,7 @@ class _HistoryCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: onInfo,
                       child: Container(
@@ -2473,12 +2771,44 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
     final catalogName = cat['catalogName'] as String;
     final addonIcon = (cat['addonIcon'] ?? '').toString();
     final isDesktop = MediaQuery.of(context).size.width > 900;
+    final shelfHeader = cat['_homeShelfHeader'] as String?;
+    final showDlstreamsSource = cat['_homeShowDlstreamsSource'] == true;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (shelfHeader != null)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              cat['_homeTightDlstreamsTop'] == true ? 8 : 28,
+              24,
+              0,
+            ),
+            child: Text(
+              shelfHeader,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.92),
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        if (showDlstreamsSource)
+          Padding(
+            padding: EdgeInsets.fromLTRB(24, shelfHeader != null ? 6 : 8, 24, 0),
+            child: Text(
+              'Source: dlstreams.top',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.38),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 36, 24, 14),
+          padding: EdgeInsets.fromLTRB(24, shelfHeader != null || showDlstreamsSource ? 14 : 36, 24, 14),
           child: Row(
             children: [
               if (addonIcon.isNotEmpty) ...[
@@ -2519,7 +2849,7 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      addonName,
+                      isDlstreamsTopCatalog(cat) ? catalogName : addonName,
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 11),
                     ),
                     const SizedBox(height: 4),
@@ -2563,12 +2893,12 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
                 const SizedBox(width: 10),
               ],
               const SizedBox(width: 8),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollLeft,
                 child: _buildStremioArrow(Icons.arrow_back_ios_new_rounded),
               ),
               const SizedBox(width: 6),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollRight,
                 child: _buildStremioArrow(Icons.arrow_forward_ios_rounded),
               ),
@@ -2724,7 +3054,7 @@ class _MyListButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(_uniqueId);
-        return GestureDetector(
+        return TvGestureTap(
           onTap: () async {
             if (movie != null) {
               final added = await MyListService().toggleMovie(

@@ -6,6 +6,7 @@ import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_series.dart';
 import 'series_detail_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvShowsScreen extends StatefulWidget {
   const IptvShowsScreen({super.key});
@@ -266,7 +267,7 @@ class _IptvShowsScreenState extends State<IptvShowsScreen> {
           Text('Failed to load TV shows', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: _loadCategories,
+            onPressed: () => _loadCategories(),
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Retry'),
             style: ElevatedButton.styleFrom(
@@ -289,7 +290,7 @@ class _SeriesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -381,7 +382,7 @@ class _CategoryArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(

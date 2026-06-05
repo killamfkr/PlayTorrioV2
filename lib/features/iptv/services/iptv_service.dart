@@ -65,7 +65,13 @@ class IptvService {
       // Load active credential by ID
       final activeId = prefs.getString(_activeCredentialIdKey);
       if (activeId != null && _savedCredentials.isNotEmpty) {
-        final active = _savedCredentials.where((c) => c.id == activeId).firstOrNull;
+        IptvCredential? active;
+        for (final c in _savedCredentials) {
+          if (c.id == activeId) {
+            active = c;
+            break;
+          }
+        }
         if (active != null) {
           _credential = active;
           _initApiForCredential(active);
@@ -113,7 +119,13 @@ class IptvService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_activeCredentialIdKey, id);
     // Also keep legacy key in sync for backward compat
-    final cred = _savedCredentials.where((c) => c.id == id).firstOrNull;
+    IptvCredential? cred;
+    for (final c in _savedCredentials) {
+      if (c.id == id) {
+        cred = c;
+        break;
+      }
+    }
     if (cred != null) {
       await prefs.setString(_credentialKey, jsonEncode(cred.toJson()));
     }

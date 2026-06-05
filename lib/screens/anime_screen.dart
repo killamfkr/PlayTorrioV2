@@ -7,6 +7,7 @@ import '../utils/app_theme.dart';
 import 'anime_details_screen.dart';
 import 'anime_discover_screen.dart';
 import 'anime_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AnimeScreen extends StatefulWidget {
   const AnimeScreen({super.key});
@@ -29,6 +30,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
   bool _isSearching = false;
   bool _isSearchLoading = false;
   bool _isShowingLiked = false;
+  bool _isAdultSearch = false;
   List<AnimeCard> _likedAnime = [];
   int _heroIndex = 0;
 
@@ -87,7 +89,8 @@ class _AnimeScreenState extends State<AnimeScreen> {
       _isShowingLiked = false;
     });
     try {
-      final results = await _service.search(query, perPage: 30);
+      final results =
+          await _service.search(query, perPage: 30, isAdult: _isAdultSearch);
       if (mounted) {
         setState(() {
           _searchResults = results;
@@ -213,6 +216,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
             const SizedBox(height: 16),
             _buildHeader(),
             _buildSearchBar(),
+            _buildAdultToggle(),
             if (_isShowingLiked || _isSearching)
               _buildBackChip(),
             Expanded(
@@ -277,7 +281,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
           ),
           const Spacer(),
           // Discover button
-          GestureDetector(
+          TvGestureTap(
             onTap: _openDiscover,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -299,7 +303,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
           ),
           const SizedBox(width: 8),
           // Liked button
-          GestureDetector(
+          TvGestureTap(
             onTap: () {
               if (_isShowingLiked) {
                 _goBackToHome();
@@ -375,12 +379,72 @@ class _AnimeScreenState extends State<AnimeScreen> {
     );
   }
 
+  Widget _buildAdultToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+      child: Row(
+        children: [
+          TvGestureTap(
+            onTap: () {
+              setState(() => _isAdultSearch = !_isAdultSearch);
+              // Re-run the search with the new filter so the user sees the
+              // change immediately, mirroring the Discover screen behaviour.
+              if (_searchController.text.trim().isNotEmpty) {
+                _doSearch(_searchController.text);
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _isAdultSearch
+                    ? const Color(0xFFFF6B9D).withValues(alpha: 0.15)
+                    : Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _isAdultSearch
+                      ? const Color(0xFFFF6B9D)
+                      : Colors.white12,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _isAdultSearch
+                        ? Icons.eighteen_up_rating
+                        : Icons.eighteen_up_rating_outlined,
+                    color: _isAdultSearch
+                        ? const Color(0xFFFF6B9D)
+                        : Colors.white38,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '18+',
+                    style: TextStyle(
+                      color: _isAdultSearch
+                          ? const Color(0xFFFF6B9D)
+                          : Colors.white38,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBackChip() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
       child: Row(
         children: [
-          GestureDetector(
+          TvGestureTap(
             onTap: _goBackToHome,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -510,7 +574,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
               final anime = AnimeCard.fromJson(entry['anime']);
               final epNum = entry['episodeNumber'] ?? 0;
               final epTitle = entry['episodeTitle'] ?? '';
-              return GestureDetector(
+              return TvGestureTap(
                 onTap: () => _resumeWatching(entry),
                 child: Stack(
                   children: [
@@ -566,7 +630,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
                     Positioned(
                       top: 2,
                       right: 2,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromWatchHistory(anime.id, anime.displayTitle),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -610,7 +674,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
           ),
           items: featured.map((anime) {
             final img = anime.bannerImage ?? anime.coverUrl;
-            return GestureDetector(
+            return TvGestureTap(
               onTap: () => _openDetails(anime),
               child: Stack(
                 fit: StackFit.expand,
@@ -958,7 +1022,7 @@ class _AnimeCardWidgetState extends State<AnimeCardWidget> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
@@ -1001,7 +1065,7 @@ class _AnimeCardWidgetState extends State<AnimeCardWidget> {
                 // Like button (top-left)
                 Positioned(
                   top: 6, left: 6,
-                  child: GestureDetector(
+                  child: TvGestureTap(
                     onTap: _toggleLike,
                     child: Container(
                       padding: const EdgeInsets.all(5),

@@ -5,7 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:visibility_detector/visibility_detector.dart';
 import '../models/iptv_credential.dart';
 import '../services/iptv_service.dart';
+import '../../../utils/iframe_sandbox_strip_js.dart';
 import 'iptv_home_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvLoginScreen extends StatefulWidget {
   const IptvLoginScreen({super.key});
@@ -178,7 +180,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
   }
 
   Widget _buildModeButton(String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -224,6 +226,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       child: InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(_defaultIptvUrl)),
+        initialUserScripts: iframeSandboxStripUserScripts(),
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
           domStorageEnabled: true,
@@ -235,6 +238,11 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
           allowsInlineMediaPlayback: true,
           supportMultipleWindows: false,
         ),
+        onLoadStop: (controller, url) async {
+          await controller.evaluateJavascript(
+            source: iframeSandboxStripAtDocumentStartJs(),
+          );
+        },
         shouldOverrideUrlLoading: (ctrl, action) async {
           final url = action.request.url?.toString() ?? '';
           final embedHost = Uri.tryParse(_defaultIptvUrl)?.host ?? '';
@@ -387,7 +395,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
                           ],
                         ),
                         child: ElevatedButton(
-                          onPressed: _loading ? null : _login,
+                          onPressed: _loading ? null : () => _login(),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.transparent,
                             shadowColor: Colors.transparent,
@@ -434,7 +442,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Material(
                             color: Colors.transparent,
-                            child: InkWell(
+                            child: TvInkWell(
                               borderRadius: BorderRadius.circular(12),
                               onTap: () async {
                                 setState(() => _loading = true);

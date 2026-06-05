@@ -62,7 +62,9 @@ class _ArabicPlayerScreenState extends State<ArabicPlayerScreen> {
       return;
     }
 
-    final servers = await _service.getServers(widget.videoId);
+    final servers = widget.source == 'brstej'
+        ? await _service.getBrstejServers(widget.videoId)
+        : await _service.getServers(widget.videoId);
     if (!mounted) return;
 
     if (servers.isEmpty) {
@@ -178,7 +180,7 @@ class _ArabicPlayerScreenState extends State<ArabicPlayerScreen> {
           ),
           const SizedBox(height: 24),
           TextButton(
-            onPressed: _loadAndPlay,
+            onPressed: () => _loadAndPlay(),
             child: const Text(
               'إعادة المحاولة',
               style: TextStyle(color: AppTheme.primaryColor),

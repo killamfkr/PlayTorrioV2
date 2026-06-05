@@ -1,10 +1,12 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'music_local_file.dart';
 import 'music_service.dart';
 import 'music_storage_service.dart';
 import 'audio_handler.dart';
@@ -152,14 +154,11 @@ class MusicPlayerService {
       _fetchLyricsForTrack(track);
 
       // 1. Local Offline Playback
-      if (track.localPath != null) {
-        final file = File(track.localPath!);
-        if (await file.exists()) {
-          debugPrint('MusicPlayerService: Playing from local storage');
-          await _player.open(Media(track.localPath!));
-          _prefetchNext();
-          return;
-        }
+      if (track.localPath != null && await localMusicFileExists(track.localPath!)) {
+        debugPrint('MusicPlayerService: Playing from local storage');
+        await _player.open(Media(track.localPath!));
+        _prefetchNext();
+        return;
       }
 
       // 2. YouTube Match (cached + runs in background isolate)

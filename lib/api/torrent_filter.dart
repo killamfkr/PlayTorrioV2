@@ -276,4 +276,83 @@ class TorrentFilter {
     if (name.contains('480p') || name.contains('sd')) return 100;
     return 0;
   }
+
+  /// Tier labels: `best` (top seeders, any resolution), `4k`, `1080`, `720`.
+  /// Uses seeders as primary sort; optional [fallbackChain] tries lower tiers if empty.
+  static TorrentResult? pickAutoTorrent(
+    List<TorrentResult> items,
+    String tierPreference, {
+    bool fallbackChain = true,
+  }) {
+    if (items.isEmpty) return null;
+    final tier = tierPreference.trim().toLowerCase();
+
+    List<TorrentResult> filterTier(String t) {
+      return items.where((r) => _torrentMatchesResolutionTier(r.name, t)).toList();
+    }
+
+    TorrentResult? pickTopSeeders(List<TorrentResult> list) {
+      if (list.isEmpty) return null;
+      final copy = List<TorrentResult>.from(list);
+      copy.sort((a, b) => _parseSeeds(b.seeders).compareTo(_parseSeeds(a.seeders)));
+      return copy.first;
+    }
+
+    if (tier == 'best' || tier.isEmpty) {
+      return pickTopSeeders(items);
+    }
+
+    final tryOrder = <String>[];
+    switch (tier) {
+      case '4k':
+      case '2160':
+      case 'uhd':
+        tryOrder.addAll(['4k', '1080', '720', 'best']);
+        break;
+      case '1080':
+      case '1080p':
+        tryOrder.addAll(['1080', '720', '4k', 'best']);
+        break;
+      case '720':
+      case '720p':
+        tryOrder.addAll(['720', '1080', '4k', 'best']);
+        break;
+      default:
+        tryOrder.addAll(['1080', '720', '4k', 'best']);
+    }
+
+    if (!fallbackChain) {
+      final f = filterTier(tryOrder.first);
+      return pickTopSeeders(f);
+    }
+
+    for (final step in tryOrder) {
+      if (step == 'best') return pickTopSeeders(items);
+      final f = filterTier(step);
+      final p = pickTopSeeders(f);
+      if (p != null) return p;
+    }
+    return null;
+  }
+
+  static bool _torrentMatchesResolutionTier(String name, String tier) {
+    final n = name.toLowerCase();
+    final q = _getQualityScore(name);
+    switch (tier) {
+      case '4k':
+        return q >= 400 ||
+            (n.contains('2160') && !n.contains('1080') && !n.contains('720'));
+      case '1080':
+        if (q >= 400) return false;
+        return q == 300 ||
+            n.contains('1080') ||
+            n.contains('fhd') ||
+            n.contains('full hd');
+      case '720':
+        if (q >= 400 || q == 300) return false;
+        return q == 200 || n.contains('720');
+      default:
+        return true;
+    }
+  }
 }

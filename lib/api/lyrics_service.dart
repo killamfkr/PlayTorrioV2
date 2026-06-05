@@ -1,8 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+
+import 'lyrics_disk.dart';
 import 'music_service.dart';
 
 class LyricLine {
@@ -83,13 +84,8 @@ class LyricsService {
 
   Future<void> saveLyrics(MusicTrack track, List<LyricLine> lyrics) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final lyricsDir = Directory('${dir.path}/lyrics');
-      if (!await lyricsDir.exists()) await lyricsDir.create(recursive: true);
-
-      final file = File('${lyricsDir.path}/${track.id}.json');
       final data = lyrics.map((l) => l.toJson()).toList();
-      await file.writeAsString(json.encode(data));
+      await saveLyricsJson(track.id, json.encode(data));
     } catch (e) {
       debugPrint('LyricsService: Error saving local lyrics: $e');
     }
@@ -97,13 +93,10 @@ class LyricsService {
 
   Future<List<LyricLine>?> getLocalLyrics(MusicTrack track) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/lyrics/${track.id}.json');
-      if (await file.exists()) {
-        final String content = await file.readAsString();
-        final List data = json.decode(content);
-        return data.map((item) => LyricLine.fromJson(item)).toList();
-      }
+      final content = await loadLyricsJson(track.id);
+      if (content == null) return null;
+      final List data = json.decode(content);
+      return data.map((item) => LyricLine.fromJson(item)).toList();
     } catch (e) {
       debugPrint('LyricsService: Error reading local lyrics: $e');
     }

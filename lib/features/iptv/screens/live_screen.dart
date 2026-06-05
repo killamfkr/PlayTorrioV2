@@ -6,6 +6,7 @@ import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_channel.dart';
 import '../../../screens/player_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvLiveScreen extends StatefulWidget {
   const IptvLiveScreen({super.key});
@@ -69,6 +70,7 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
         builder: (_) => PlayerScreen(
           streamUrl: url,
           title: channel.name,
+          isLiveBroadcast: true,
         ),
       ),
     );
@@ -283,7 +285,7 @@ class _IptvLiveScreenState extends State<IptvLiveScreen> {
           Text('Failed to load channels', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: _loadCategories,
+            onPressed: () => _loadCategories(),
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Retry'),
             style: ElevatedButton.styleFrom(
@@ -314,7 +316,7 @@ class _ChannelTile extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Padding(
@@ -408,7 +410,7 @@ class _CategoryArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(

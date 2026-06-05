@@ -35,6 +35,9 @@ class MusicStorageService {
   factory MusicStorageService() => _instance;
   MusicStorageService._internal();
 
+  static const String prefsLikedSongsKey = 'music_liked_songs';
+  static const String prefsPlaylistsKey = 'music_playlists';
+
   final ValueNotifier<List<MusicTrack>> likedSongs = ValueNotifier<List<MusicTrack>>([]);
   final ValueNotifier<List<MusicTrack>> downloadedTracks = ValueNotifier<List<MusicTrack>>([]);
   
@@ -93,7 +96,7 @@ class MusicStorageService {
 
   Future<void> saveLikedSong(MusicTrack track) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('music_liked_songs') ?? [];
+    final List<String> liked = prefs.getStringList('prefsLikedSongsKey') ?? [];
     
     final exists = liked.any((s) {
       try {
@@ -105,14 +108,14 @@ class MusicStorageService {
 
     if (!exists) {
       liked.insert(0, jsonEncode(track.toJson()));
-      await prefs.setStringList('music_liked_songs', liked);
+      await prefs.setStringList('prefsLikedSongsKey', liked);
       likedSongs.value = await getLikedSongs(); // Update notifier
     }
   }
 
   Future<void> removeLikedSong(String id) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('music_liked_songs') ?? [];
+    final List<String> liked = prefs.getStringList('prefsLikedSongsKey') ?? [];
     liked.removeWhere((s) {
       try {
         return jsonDecode(s)['id'] == id;
@@ -120,13 +123,13 @@ class MusicStorageService {
         return false;
       }
     });
-    await prefs.setStringList('music_liked_songs', liked);
+    await prefs.setStringList('prefsLikedSongsKey', liked);
     likedSongs.value = await getLikedSongs(); // Update notifier
   }
 
   Future<bool> isLiked(String id) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('music_liked_songs') ?? [];
+    final List<String> liked = prefs.getStringList('prefsLikedSongsKey') ?? [];
     return liked.any((s) {
       try {
         return jsonDecode(s)['id'] == id;
@@ -138,7 +141,7 @@ class MusicStorageService {
 
   Future<List<MusicTrack>> getLikedSongs() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> liked = prefs.getStringList('music_liked_songs') ?? [];
+    final List<String> liked = prefs.getStringList('prefsLikedSongsKey') ?? [];
     return liked.map((s) => MusicTrack.fromJson(jsonDecode(s))).toList();
   }
 
@@ -146,7 +149,7 @@ class MusicStorageService {
 
   Future<void> savePlaylist(MusicPlaylist playlist) async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> playlists = prefs.getStringList('music_playlists') ?? [];
+    final List<String> playlists = prefs.getStringList('prefsPlaylistsKey') ?? [];
     
     final index = playlists.indexWhere((p) {
       try {
@@ -162,12 +165,12 @@ class MusicStorageService {
       playlists.add(jsonEncode(playlist.toJson()));
     }
     
-    await prefs.setStringList('music_playlists', playlists);
+    await prefs.setStringList('prefsPlaylistsKey', playlists);
   }
 
   Future<List<MusicPlaylist>> getPlaylists() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> playlists = prefs.getStringList('music_playlists') ?? [];
+    final List<String> playlists = prefs.getStringList('prefsPlaylistsKey') ?? [];
     return playlists.map((p) => MusicPlaylist.fromJson(jsonDecode(p))).toList();
   }
 
@@ -209,9 +212,9 @@ class MusicStorageService {
 
   Future<void> deletePlaylist(String name) async {
      final prefs = await SharedPreferences.getInstance();
-     final List<String> playlists = prefs.getStringList('music_playlists') ?? [];
+     final List<String> playlists = prefs.getStringList('prefsPlaylistsKey') ?? [];
      playlists.removeWhere((p) => MusicPlaylist.fromJson(jsonDecode(p)).name == name);
-     await prefs.setStringList('music_playlists', playlists);
+     await prefs.setStringList('prefsPlaylistsKey', playlists);
   }
 
   Future<void> unsaveAlbum(String id) async {

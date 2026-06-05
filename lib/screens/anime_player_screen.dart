@@ -306,7 +306,7 @@ class _AnimePlayerScreenState extends State<AnimePlayerScreen> {
           ),
           const SizedBox(height: 24),
           TextButton(
-            onPressed: _loadAndPlay,
+            onPressed: () => _loadAndPlay(),
             child: const Text(
               'Retry',
               style: TextStyle(color: Color(0xFFFF6B9D)),

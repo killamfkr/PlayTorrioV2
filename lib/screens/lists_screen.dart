@@ -5,6 +5,7 @@ import '../api/tmdb_api.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
 import 'details_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class ListsScreen extends StatefulWidget {
   const ListsScreen({super.key});
@@ -243,7 +244,7 @@ class _ListsScreenState extends State<ListsScreen> with SingleTickerProviderStat
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _createTraktList,
+              onPressed: () => _createTraktList(),
               icon: const Icon(Icons.add),
               label: const Text('Create New List'),
               style: ElevatedButton.styleFrom(
@@ -353,7 +354,7 @@ class _ListsScreenState extends State<ListsScreen> with SingleTickerProviderStat
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -638,7 +639,7 @@ Widget _movieListTile({
       ? TmdbApi.getImageUrl(movie.posterPath)
       : '';
 
-  return GestureDetector(
+  return TvGestureTap(
     onTap: onTap,
     child: Container(
       padding: const EdgeInsets.all(12),

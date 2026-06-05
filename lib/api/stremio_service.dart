@@ -10,6 +10,24 @@ class StremioService {
 
   final SettingsService _settings = SettingsService();
 
+  /// Manifest catalog [type] values for live TV lineups (Stremio uses `channel`;
+  /// some addons e.g. Debridio TV use `tv` with `idPrefixes` like `debtv:`).
+  static bool isLiveTvCatalogType(Object? catalogType) {
+    final t = catalogType?.toString().toLowerCase() ?? '';
+    return t == 'channel' || t == 'tv';
+  }
+
+  /// Resource path segment for `/stream/{type}/{id}.json` from a catalog/meta `type` field.
+  /// Live TV addons often use `tv` or `channel`; episode-based addons use `series` / `movie`.
+  static String streamTypeForStremioMetaType(String? metaType, {String? fallbackMediaType}) {
+    final t = metaType?.toString().toLowerCase() ?? '';
+    if (t == 'tv' || t == 'channel') return 'tv';
+    if (t == 'series' || t == 'movie' || t == 'collections') return t;
+    final m = fallbackMediaType?.toLowerCase() ?? '';
+    if (m == 'tv') return 'series';
+    return 'movie';
+  }
+
   /// Retry an HTTP GET with exponential backoff.
   /// Does NOT retry on 404 (content simply doesn't exist).
   Future<http.Response> _retryGet(Uri uri, {int retries = 2, Duration timeout = const Duration(seconds: 15)}) async {
@@ -60,6 +78,14 @@ class StremioService {
     // Handle stremio:// protocol
     if (manifestUrl.startsWith('stremio://')) {
       manifestUrl = manifestUrl.replaceFirst('stremio://', 'https://');
+    }
+
+    // Installer / playlist URL: same path as addon root; swap last segment for manifest.json
+    if (RegExp(r'\.m3u8$', caseSensitive: false).hasMatch(manifestUrl)) {
+      manifestUrl = manifestUrl.replaceAll(
+        RegExp(r'[^/]+\.m3u8$', caseSensitive: false),
+        'manifest.json',
+      );
     }
 
     // Ensure it ends with manifest.json

@@ -1,5 +1,6 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -10,12 +11,15 @@ import '../models/torrent_result.dart';
 import '../api/torrent_api.dart';
 import '../api/torrent_stream_service.dart';
 import '../api/stremio_service.dart';
+import '../utils/stremio_stream_headers.dart';
+import '../utils/stremio_stream_autopick.dart';
 import '../api/torrent_filter.dart';
 import '../api/settings_service.dart';
 import '../api/debrid_api.dart';
 import '../services/jackett_service.dart';
 import '../services/prowlarr_service.dart';
 import '../services/link_resolver.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/episode_watched_service.dart';
 import '../api/trakt_service.dart';
@@ -23,10 +27,14 @@ import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
 import '../utils/extensions.dart';
 import '../utils/app_theme.dart';
+import '../utils/performance_tuning.dart';
+import '../platform_flags.dart';
 import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
 import 'main_screen.dart';
+import '../widgets/movie_atmosphere.dart';
+import '../widgets/tv_interactive.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -37,13 +45,15 @@ class DetailsScreen extends StatefulWidget {
   final int? initialSeason;
   /// Optional: pre-select an episode (e.g. from Continue Watching / Trakt import).
   final int? initialEpisode;
-  const DetailsScreen({super.key, required this.movie, this.stremioItem, this.initialSeason, this.initialEpisode});
+  /// Optional: resume position from Trakt/Simkl import (used when no local progress matches).
+  final Duration? startPosition;
+  const DetailsScreen({super.key, required this.movie, this.stremioItem, this.initialSeason, this.initialEpisode, this.startPosition});
 
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
 }
 
-class _DetailsScreenState extends State<DetailsScreen> {
+class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   late Movie _movie;
   bool _isLoading = true;
   final TmdbApi _api = TmdbApi();
@@ -55,6 +65,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
   final LinkResolver _linkResolver = LinkResolver();
 
   String _sortPreference = 'Seeders (High to Low)';
+  bool _torrentAutoPickEnabled = false;
+  String _torrentAutoPickTier = '1080';
+  /// Debounce rapid searches / episode switches so we don't stack opens.
+  String? _lastAutoPickTorrentSignature;
+  bool _stremioAutoPlayEnabled = false;
+  String _stremioAutoPlayAddonKeyPref = '__all__';
+  String? _lastStremioAutoPlaySignature;
   Set<String> _activeAudioFilters = {};
   List<TorrentResult> _allTorrentResults = [];
   bool _isSearching = false;
@@ -94,6 +111,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // Stream resolution cancellation
   bool _streamCancelled = false;
 
+  /// `/stream/{type}/...` for Stremio when playing from [stremioItem] (e.g. `tv` for live channel addons).
+  String get _stremioStreamApiType => StremioService.streamTypeForStremioMetaType(
+        widget.stremioItem?['type']?.toString(),
+        fallbackMediaType: _movie.mediaType,
+      );
+
+  bool get _isLiveTvStremioChannel => _stremioStreamApiType == 'tv';
+
   // Desktop cast avatars
   List<Map<String, String>> _castMembers = [];
   final ScrollController _castScrollController = ScrollController();
@@ -119,8 +144,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _movie = widget.movie;
     if (widget.initialSeason != null) _selectedSeason = widget.initialSeason!;
     if (widget.initialEpisode != null) _selectedEpisode = widget.initialEpisode!;
+    // Start atmosphere color extraction
+    final url = (_movie.posterPath.isNotEmpty ? _movie.posterPath : _movie.backdropPath);
+    loadAtmosphere(url.startsWith('http') ? url : TmdbApi.getImageUrl(url));
     _checkHistory();
     _loadSortPreference();
+    _loadTorrentAutoPickPrefs();
     _checkIndexerConfiguration();
     _loadWatchedEpisodes();
     _fetchDetails();
@@ -146,6 +175,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   // ─── data methods ─────────────────────────────────────────────────────────
 
   Future<void> _checkHistory() async {
+    await PlaytorrioCloudSyncService.instance.refreshWatchHistoryFromCloudIfPossible();
     final progress = await WatchHistoryService().getProgress(
       _movie.id,
       season: _movie.mediaType == 'tv' ? _selectedSeason : null,
@@ -162,6 +192,90 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Future<void> _toggleEpisodeWatched(int season, int episode) async {
     await _episodeWatchedService.toggle(_movie.id, season, episode);
     await _loadWatchedEpisodes();
+  }
+
+  Future<void> _loadTorrentAutoPickPrefs() async {
+    final en = await _settings.getTorrentAutoPickEnabled();
+    final tier = await _settings.getTorrentAutoPickTier();
+    final stEn = await _settings.getStremioAutoPlayEnabled();
+    final stAddon = await _settings.getStremioAutoPlayAddonKey();
+    if (mounted) {
+      setState(() {
+        _torrentAutoPickEnabled = en;
+        _torrentAutoPickTier = tier;
+        _stremioAutoPlayEnabled = stEn;
+        _stremioAutoPlayAddonKeyPref = stAddon;
+      });
+    }
+  }
+
+  String _effectiveStremioAutoAddon() {
+    if (_stremioAutoPlayAddonKeyPref == '__all__') return '__all__';
+    for (final a in _streamAddons) {
+      if (a['baseUrl'] == _stremioAutoPlayAddonKeyPref) return _stremioAutoPlayAddonKeyPref;
+    }
+    return '__all__';
+  }
+
+  void _scheduleStremioAutoPlay() {
+    if (!_stremioAutoPlayEnabled || _isTorrentSource) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_maybeAutoPlayStremio());
+    });
+  }
+
+  Future<void> _maybeAutoPlayStremio() async {
+    if (!mounted || !_stremioAutoPlayEnabled || _isTorrentSource) return;
+    if (_isStremioFetching) return;
+    if (_movie.imdbId == null || _movie.imdbId!.isEmpty) return;
+
+    final addonKey = _effectiveStremioAutoAddon();
+    final list = List<dynamic>.from(_allCombinedStremioStreams);
+    if (list.isEmpty) return;
+
+    final picked = pickAutoStremioStream(
+      list,
+      addonBaseUrl: addonKey,
+      resolutionTier: _torrentAutoPickTier,
+    );
+    if (picked == null || !mounted) return;
+
+    final urlPart = picked['url']?.toString() ?? '';
+    final ih = picked['infoHash']?.toString() ?? '';
+    final sig =
+        '$urlPart|$ih|$addonKey|${_movie.id}|$_selectedSeason|$_selectedEpisode|${_torrentAutoPickTier}';
+    if (_lastStremioAutoPlaySignature == sig) return;
+    _lastStremioAutoPlaySignature = sig;
+
+    Duration? startPos;
+    bool useSaved = false;
+    if (_lastProgress != null) {
+      final m = _lastProgress!['method']?.toString() ?? '';
+      if (m == 'stremio_direct' || m == 'stream') {
+        final sid = _lastProgress!['sourceId']?.toString() ?? '';
+        if (urlPart.isNotEmpty && sid == urlPart) {
+          final pos = _lastProgress!['position'];
+          final dur = _lastProgress!['duration'];
+          if (pos is int && dur is int && dur > 0 && pos > 10000) {
+            startPos = Duration(milliseconds: pos);
+            useSaved = true;
+          }
+        } else if (ih.isNotEmpty &&
+            sid.contains(ih.toLowerCase())) {
+          final pos = _lastProgress!['position'];
+          final dur = _lastProgress!['duration'];
+          if (pos is int && dur is int && dur > 0 && pos > 10000) {
+            startPos = Duration(milliseconds: pos);
+          }
+        }
+      }
+    }
+
+    _playStremioStream(
+      Map<String, dynamic>.from(picked),
+      startPosition: startPos,
+      useSavedHttpPlayback: useSaved,
+    );
   }
 
   Future<void> _loadSortPreference() async {
@@ -235,6 +349,39 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
     }
     if (mounted) setState(() => _allTorrentResults = sorted);
+    await _maybeAutoPickTorrent();
+  }
+
+  Future<void> _maybeAutoPickTorrent() async {
+    if (!_torrentAutoPickEnabled || !_isTorrentSource || !mounted) return;
+    if (_isSearching) return;
+    final list = _filteredTorrentResults;
+    if (list.isEmpty) return;
+
+    final picked = TorrentFilter.pickAutoTorrent(list, _torrentAutoPickTier);
+    if (picked == null || !mounted) return;
+
+    final sig =
+        '${picked.magnet}|${_movie.id}|${_movie.mediaType}|$_selectedSeason|$_selectedEpisode|${_activeAudioFilters.join(',')}';
+    if (_lastAutoPickTorrentSignature == sig) return;
+    _lastAutoPickTorrentSignature = sig;
+
+    Duration? startPos;
+    if (_lastProgress != null &&
+        _lastProgress!['method'] == 'torrent' &&
+        _getHash(_lastProgress!['sourceId'] as String) ==
+            _getHash(picked.magnet)) {
+      final pos = _lastProgress!['position'];
+      final dur = _lastProgress!['duration'];
+      if (pos is int && dur is int && dur > 0 && pos > 10000) {
+        startPos = Duration(milliseconds: pos);
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _playTorrent(picked, startPosition: startPos);
+    });
   }
 
   Future<void> _fetchDetails() async {
@@ -434,7 +581,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(10, (i) {
                   final val = i + 1;
-                  return GestureDetector(
+                  return TvGestureTap(
                     onTap: () => setDialogState(() => selected = val),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 1),
@@ -647,7 +794,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(10, (i) {
                   final val = i + 1;
-                  return GestureDetector(
+                  return TvGestureTap(
                     onTap: () => setDialogState(() => selected = val),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 1),
@@ -903,6 +1050,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 _errorMessage = 'No streams found from any addon';
               }
             });
+            _scheduleStremioAutoPlay();
           }
         });
       }
@@ -916,8 +1064,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final customId = item['id']?.toString() ?? '';
     final addonBaseUrl = item['_addonBaseUrl']?.toString() ?? '';
     final addonName = item['_addonName']?.toString() ?? 'Unknown';
-    final type = item['type']?.toString() ?? (_movie.mediaType == 'tv' ? 'series' : 'movie');
-    debugPrint('[CustomIdStreams] customId=$customId, addonBaseUrl=$addonBaseUrl, type=$type');
+    final metaType = item['type']?.toString() ?? (_movie.mediaType == 'tv' ? 'series' : 'movie');
+    // `/stream/...` path type: live TV addons use `tv` (not `series`) per Stremio manifest.
+    final apiType = StremioService.streamTypeForStremioMetaType(metaType, fallbackMediaType: _movie.mediaType);
+    debugPrint('[CustomIdStreams] customId=$customId, addonBaseUrl=$addonBaseUrl, metaType=$metaType apiType=$apiType');
     if (customId.isEmpty || addonBaseUrl.isEmpty) {
       debugPrint('[CustomIdStreams] SKIPPED: customId empty=${customId.isEmpty}, addonBaseUrl empty=${addonBaseUrl.isEmpty}');
       return;
@@ -927,8 +1077,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     
     try {
       // For collections, fetch meta to get videos array with collection items
-      if (type == 'collections') {
-        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: type, id: customId);
+      if (metaType == 'collections') {
+        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: metaType, id: customId);
         if (meta != null && meta['videos'] != null) {
           final videos = meta['videos'] as List;
           debugPrint('[CustomIdStreams] Got ${videos.length} collection items from meta');
@@ -949,8 +1099,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
       
       // For series, first fetch meta to get videos array with season/episode info
-      if (type == 'series') {
-        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: type, id: customId);
+      if (metaType == 'series') {
+        final meta = await _stremio.getMeta(baseUrl: addonBaseUrl, type: apiType, id: customId);
         if (meta != null && meta['videos'] != null) {
           final videos = meta['videos'] as List;
           debugPrint('[CustomIdStreams] Got ${videos.length} videos from meta');
@@ -963,7 +1113,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           if (selectedVideo != null) {
             final videoId = selectedVideo['id']?.toString() ?? '';
             debugPrint('[CustomIdStreams] Fetching streams for video: $videoId');
-            final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: type, id: videoId);
+            final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: apiType, id: videoId);
             debugPrint('[CustomIdStreams] Got ${streams.length} streams');
             
             if (mounted) {
@@ -980,6 +1130,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 _isStremioFetching = false;
                 if (streams.isEmpty) _errorMessage = 'No streams found';
               });
+              _scheduleStremioAutoPlay();
             }
             return;
           }
@@ -987,7 +1138,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       }
       
       // For movies or if meta fetch failed, use the original ID directly
-      final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: type, id: customId);
+      final streams = await _stremio.getStreams(baseUrl: addonBaseUrl, type: apiType, id: customId);
       debugPrint('[CustomIdStreams] Got ${streams.length} streams');
       if (streams.isNotEmpty) debugPrint('[CustomIdStreams] First stream: ${streams.first}');
       if (mounted) {
@@ -1004,6 +1155,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _isStremioFetching = false;
           if (streams.isEmpty) _errorMessage = 'No streams found';
         });
+        _scheduleStremioAutoPlay();
       }
     } catch (e) {
       if (mounted) setState(() { _errorMessage = 'Error: $e'; _isStremioFetching = false; _loadedAddonBaseUrls.add(addonBaseUrl); });
@@ -1120,6 +1272,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _stremioStreams = streams;
           if (streams.isEmpty) _errorMessage = 'No streams found in ${addon['name']}';
         });
+        _scheduleStremioAutoPlay();
       }
     } catch (e) {
       if (mounted) setState(() => _errorMessage = 'Error: $e');
@@ -1265,12 +1418,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
       if (baseUrl == null || apiKey == null) throw Exception('Prowlarr configuration missing');
 
+      // Resolve any saved tag filter to indexer IDs for this session.
+      // Empty tag selection means no filter — use all torrent indexers.
+      final tagIds = await _settings.getProwlarrTagIds();
+      List<int>? allowedIndexerIds;
+      if (tagIds.isNotEmpty) {
+        final resolved = await _prowlarr.resolveTagIndexerIds(baseUrl, apiKey, tagIds);
+        if (resolved.isNotEmpty) allowedIndexerIds = resolved;
+        // If resolved is empty (tags exist but no matching indexers), fall back to all.
+      }
+
       if (_movie.mediaType == 'tv') {
         final s = _selectedSeason.toString().padLeft(2, '0');
         final e = _selectedEpisode.toString().padLeft(2, '0');
         final results = await Future.wait([
-          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S$s'),
-          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S${s}E$e'),
+          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S$s', indexerIds: allowedIndexerIds),
+          _prowlarr.search(baseUrl, apiKey, '${_movie.title} S${s}E$e', indexerIds: allowedIndexerIds),
         ]);
         if (mounted) {
           final filteredSeason = await TorrentFilter.filterTorrentsAsync(results[0], _movie.title, requiredSeason: _selectedSeason);
@@ -1290,7 +1453,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       } else {
         final year = _movie.releaseDate.length >= 4 ? _movie.releaseDate.substring(0, 4) : '';
         final query = year.isNotEmpty ? '${_movie.title} $year' : _movie.title;
-        final results = await _prowlarr.search(baseUrl, apiKey, query);
+        final results = await _prowlarr.search(baseUrl, apiKey, query, indexerIds: allowedIndexerIds);
         if (mounted) {
           final filtered = await TorrentFilter.filterTorrentsAsync(results, _movie.title);
           if (mounted) {
@@ -1330,7 +1493,33 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   // ─── play methods ─────────────────────────────────────────────────────────
 
-  void _playStremioStream(Map<String, dynamic> stream, {Duration? startPosition}) async {
+  /// Prefer [WatchHistoryService] `streamUrl` when resuming so playback uses the last working link.
+  String _playbackUrlPreferSaved(String fallback, {required bool useSavedHttp}) {
+    if (!useSavedHttp || _lastProgress == null) return fallback;
+    final saved = _lastProgress!['streamUrl']?.toString();
+    if (saved == null ||
+        saved.isEmpty ||
+        !(saved.startsWith('http://') || saved.startsWith('https://'))) {
+      return fallback;
+    }
+    return saved;
+  }
+
+  Map<String, String>? _playbackHeadersPreferSaved({required bool useSavedHttp}) {
+    if (!useSavedHttp || _lastProgress == null) return null;
+    final raw = _lastProgress!['streamHeaders'];
+    if (raw == null) return null;
+    if (raw is Map<String, String>) return raw;
+    if (raw is Map) {
+      final out = <String, String>{};
+      raw.forEach((k, v) => out['$k'] = '$v');
+      return out.isEmpty ? null : out;
+    }
+    return null;
+  }
+
+  void _playStremioStream(Map<String, dynamic> stream,
+      {Duration? startPosition, bool useSavedHttpPlayback = false}) async {
     // Handle externalUrl streams (e.g. "More Like This" addon)
     final externalUrl = stream['externalUrl']?.toString();
     if (externalUrl != null && externalUrl.isNotEmpty) {
@@ -1348,16 +1537,28 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     if (stream['url'] != null) {
       if (!mounted) return;
+      final rawUrl = stream['url'] as String;
+      final playUrl =
+          _playbackUrlPreferSaved(rawUrl, useSavedHttp: useSavedHttpPlayback);
+      final proxied = stremioProxyRequestHeadersFromStream(stream);
+      final savedH =
+          _playbackHeadersPreferSaved(useSavedHttp: useSavedHttpPlayback);
+      final hdr = (useSavedHttpPlayback &&
+              savedH != null &&
+              savedH.isNotEmpty)
+          ? savedH
+          : proxied;
       Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-        streamUrl: stream['url'], title: _movie.title,
-        headers: Map<String, String>.from(stream['behaviorHints']?['proxyHeaders']?['request'] ?? {}),
+        streamUrl: playUrl, title: _movie.title,
+        headers: (hdr == null || hdr.isEmpty) ? null : hdr,
         movie: _movie,
-        selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
-        selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+        selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
+        selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
         startPosition: startPosition,
         activeProvider: 'stremio_direct',
         stremioId: stremioId,
         stremioAddonBaseUrl: stremioAddonBaseUrl,
+        stremioStreamType: _stremioStreamApiType,
       )));
     } else if (stream['infoHash'] != null) {
       // Build a proper magnet link:
@@ -1396,25 +1597,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
       try {
         if (useDebrid && debridService != 'None') {
           final debrid = DebridApi();
-          final files = debridService == 'Real-Debrid'
-              ? await debrid.resolveRealDebrid(magnet) : await debrid.resolveTorBox(magnet);
+          final isTv = _movie.mediaType == 'tv';
+          final files = await debrid.resolveByService(
+            debridService,
+            magnet,
+            season: isTv ? _selectedSeason : null,
+            episode: isTv ? _selectedEpisode : null,
+          );
           if (_streamCancelled) return;
           if (files.isNotEmpty) {
-            if (_movie.mediaType == 'tv') {
-              final s = 'S${_selectedSeason.toString().padLeft(2, '0')}';
-              final e = 'E${_selectedEpisode.toString().padLeft(2, '0')}';
-              final match = files.where((f) => f.filename.toUpperCase().contains(s) && f.filename.toUpperCase().contains(e)).toList();
-              if (match.isNotEmpty) {
-                resolvedFileIndex = files.indexOf(match.first);
-                url = match.first.downloadUrl;
-              } else {
-                files.sort((a, b) => b.filesize.compareTo(a.filesize));
-                url = files.first.downloadUrl;
-              }
-            } else {
-              files.sort((a, b) => b.filesize.compareTo(a.filesize));
-              url = files.first.downloadUrl;
-            }
+            // resolveX always returns a single, pre-picked file.
+            resolvedFileIndex = 0;
+            url = files.first.downloadUrl;
           }
         } else {
           url = await TorrentStreamService().streamTorrent(magnet,
@@ -1430,15 +1624,21 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (_streamCancelled) return;
       if (navigator.canPop()) navigator.pop();
       if (url != null && mounted) {
+        final playUrl =
+            _playbackUrlPreferSaved(url!, useSavedHttp: useSavedHttpPlayback);
+        final hdr =
+            _playbackHeadersPreferSaved(useSavedHttp: useSavedHttpPlayback);
         Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-          streamUrl: url!, title: _movie.title, magnetLink: magnet, movie: _movie,
-          selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
-          selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+          streamUrl: playUrl, title: _movie.title, magnetLink: magnet, movie: _movie,
+          headers: hdr,
+          selectedSeason: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedSeason : null,
+          selectedEpisode: (_movie.mediaType == 'tv' && !_isLiveTvStremioChannel) ? _selectedEpisode : null,
           fileIndex: resolvedFileIndex,
           startPosition: startPosition,
           activeProvider: 'stremio_direct',
           stremioId: stremioId,
-          stremioAddonBaseUrl: stremioAddonBaseUrl)));
+          stremioAddonBaseUrl: stremioAddonBaseUrl,
+          stremioStreamType: _stremioStreamApiType)));
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to resolve stream.')));
       }
@@ -1504,7 +1704,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
   }
 
-  void _playTorrent(TorrentResult result, {Duration? startPosition}) async {
+  void _playTorrent(TorrentResult result,
+      {Duration? startPosition, bool preferSavedHttpUrl = false}) async {
     final useDebrid = await _settings.useDebridForStreams();
     final debridService = await _settings.getDebridService();
     if (!mounted) return;
@@ -1556,26 +1757,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
       if (useDebrid && debridService != 'None') {
         final debrid = DebridApi();
-        final files = debridService == 'Real-Debrid'
-            ? await debrid.resolveRealDebrid(magnetLink)
-            : await debrid.resolveTorBox(magnetLink);
+        final isTv = _movie.mediaType == 'tv';
+        final files = await debrid.resolveByService(
+          debridService,
+          magnetLink,
+          season: isTv ? _selectedSeason : null,
+          episode: isTv ? _selectedEpisode : null,
+        );
         if (_streamCancelled) return;
         if (files.isNotEmpty) {
-          if (_movie.mediaType == 'tv') {
-            final s = 'S${_selectedSeason.toString().padLeft(2, '0')}';
-            final e = 'E${_selectedEpisode.toString().padLeft(2, '0')}';
-            final match = files.where((f) => f.filename.toUpperCase().contains(s) && f.filename.toUpperCase().contains(e)).toList();
-            if (match.isNotEmpty) {
-              resolvedFileIndex = files.indexOf(match.first);
-              url = match.first.downloadUrl;
-            } else {
-              files.sort((a, b) => b.filesize.compareTo(a.filesize));
-              url = files.first.downloadUrl;
-            }
-          } else {
-            files.sort((a, b) => b.filesize.compareTo(a.filesize));
-            url = files.first.downloadUrl;
-          }
+          resolvedFileIndex = 0;
+          url = files.first.downloadUrl;
         }
       } else {
         url = await TorrentStreamService().streamTorrent(magnetLink,
@@ -1596,8 +1788,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (Navigator.canPop(context)) Navigator.pop(context);
 
     if (url != null) {
+      final playUrl =
+          _playbackUrlPreferSaved(url!, useSavedHttp: preferSavedHttpUrl);
+      final hdr =
+          _playbackHeadersPreferSaved(useSavedHttp: preferSavedHttpUrl);
       Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(
-        streamUrl: url!, title: result.name, magnetLink: magnetLink, movie: _movie,
+        streamUrl: playUrl, title: result.name, magnetLink: magnetLink, movie: _movie,
+        headers: hdr,
         selectedSeason: _movie.mediaType == 'tv' ? _selectedSeason : null,
         selectedEpisode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
         fileIndex: resolvedFileIndex,
@@ -1622,7 +1819,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     }
 
     final w = MediaQuery.of(context).size.width;
-    final isMobile = (Platform.isAndroid || Platform.isIOS) || w < 800;
+    final isMobile = (platformIsAndroid || platformIsIOS) || w < 800;
 
     return KeyboardListener(
       focusNode: _keyboardFocusNode,
@@ -1677,20 +1874,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Widget _buildBackdropWidget() {
     final url = _imageUrl(_movie.backdropPath.isNotEmpty ? _movie.backdropPath : _movie.posterPath);
-    return Positioned.fill(
-      child: Stack(fit: StackFit.expand, children: [
-        CachedNetworkImage(
-          imageUrl: url,
-          fit: BoxFit.cover,
-          alignment: Alignment.topCenter,
-          errorWidget: (c, u, e) => Container(color: const Color(0xFF0A0A1A)),
-        ),
-        BackdropFilter(filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-          child: Container(color: Colors.transparent)),
-        Container(decoration: const BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [Color(0xD5050510), Color(0xE8000000)]))),
-      ]),
+    return buildAtmosphereBackdrop(
+      imageUrl: url,
+      genres: _movie.genres,
+      blurSigma: 12,
     );
   }
 
@@ -1875,7 +2062,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2015,13 +2202,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Hero(
-                  tag: 'movie-poster-${_movie.id}',
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: CachedNetworkImage(
-                      imageUrl: _imageUrl(_movie.posterPath),
-                      width: 90, height: 132, fit: BoxFit.cover,
+                wrapPosterGlow(
+                  width: 90,
+                  height: 132,
+                  borderRadius: 10,
+                  genres: _movie.genres,
+                  child: Hero(
+                    tag: 'movie-poster-${_movie.id}',
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CachedNetworkImage(
+                        imageUrl: _imageUrl(_movie.posterPath),
+                        width: 90, height: 132, fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                 ),
@@ -2091,13 +2284,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Hero(
-              tag: 'movie-poster-${_movie.id}',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: CachedNetworkImage(
-                  imageUrl: _imageUrl(_movie.posterPath),
-                  width: 260, height: 380, fit: BoxFit.cover),
+            wrapPosterGlow(
+              width: 260,
+              height: 380,
+              borderRadius: 12,
+              genres: _movie.genres,
+              child: Hero(
+                tag: 'movie-poster-${_movie.id}',
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: CachedNetworkImage(
+                    imageUrl: _imageUrl(_movie.posterPath),
+                    width: 260, height: 380, fit: BoxFit.cover),
+                ),
               ),
             ),
             const SizedBox(width: 24),
@@ -2390,7 +2589,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           ),
                           Positioned(
                             top: 4, right: 4,
-                            child: GestureDetector(
+                            child: TvGestureTap(
                               onTap: () => _toggleEpisodeWatched(_selectedSeason, epNum),
                               child: Container(
                                 padding: const EdgeInsets.all(3),
@@ -2467,7 +2666,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Widget _sourceTab(String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -2516,7 +2715,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           final sel = _selectedSourceId == chip['id'];
           return Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: GestureDetector(
+            child: TvGestureTap(
               onTap: () {
                 final id = chip['id'] as String;
                 setState(() => _selectedSourceId = id);
@@ -2573,52 +2772,304 @@ class _DetailsScreenState extends State<DetailsScreen> {
       final e = _selectedEpisode.toString().padLeft(2, '0');
       epLabel = 'S${s}E$e';
     }
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.download_rounded, color: Colors.white54, size: 16),
-        const SizedBox(width: 6),
-        const Text('Available Sources',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-        if (epLabel != null) ...[
-          const SizedBox(width: 6),
-          Text('— $epLabel', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+        Row(
+          children: [
+            Icon(
+              showSort ? Icons.download_rounded : Icons.extension_outlined,
+              color: Colors.white54,
+              size: 16,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              showSort ? 'Available Sources' : 'Stremio streams',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14),
+            ),
+            if (epLabel != null) ...[
+              const SizedBox(width: 6),
+              Text('— $epLabel',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            ],
+            if (_isSearching || _isStremioFetching) ...[
+              const SizedBox(width: 8),
+              const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppTheme.primaryColor)),
+            ],
+            const Spacer(),
+            if (showSort)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: DropdownButton<String>(
+                  value: _sortPreference,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  dropdownColor: const Color(0xFF0F0F2D),
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                      color: Colors.white54, size: 16),
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  items: [
+                    'Seeders (High to Low)',
+                    'Seeders (Low to High)',
+                    'Quality (High to Low)',
+                    'Quality (Low to High)',
+                    'Size (High to Low)',
+                    'Size (Low to High)',
+                  ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _sortPreference = val);
+                      _settings.setSortPreference(val);
+                      _sortResults();
+                    }
+                  },
+                ),
+              ),
+            if (showSort) ...[
+              const SizedBox(width: 8),
+              _buildTorrentAutoPickControls()
+            ],
+            if (showSort) ...[
+              const SizedBox(width: 8),
+              _buildAudioFilterButton()
+            ],
+          ],
+        ),
+        if (!showSort) ...[
+          const SizedBox(height: 8),
+          _buildStremioAddonAutoRow(),
         ],
-        if (_isSearching || _isStremioFetching) ...[
-          const SizedBox(width: 8),
-          const SizedBox(width: 12, height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor)),
-        ],
-        const Spacer(),
-        if (showSort)
+      ],
+    );
+  }
+
+  Widget _buildStremioAddonAutoRow() {
+    final hasImdb = _movie.imdbId != null && _movie.imdbId!.isNotEmpty;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_circle_outline_rounded,
+                color: Colors.white54, size: 16),
+            const SizedBox(width: 4),
+            Text(
+              'Auto-play',
+              style: TextStyle(
+                color: _stremioAutoPlayEnabled
+                    ? AppTheme.primaryColor
+                    : Colors.white54,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Transform.scale(
+              scale: 0.82,
+              child: Switch(
+                value: _stremioAutoPlayEnabled,
+                activeThumbColor: AppTheme.primaryColor,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: hasImdb
+                    ? (v) async {
+                        await _settings.setStremioAutoPlayEnabled(v);
+                        PlaytorrioCloudSyncService.instance
+                            .scheduleDebouncedSettingsPush();
+                        setState(() {
+                          _stremioAutoPlayEnabled = v;
+                          _lastStremioAutoPlaySignature = null;
+                        });
+                        if (v) _scheduleStremioAutoPlay();
+                      }
+                    : null,
+              ),
+            ),
+          ],
+        ),
+        if (!hasImdb)
+          Text(
+            'IMDB id required for addon streams',
+            style: TextStyle(color: Colors.amber.withValues(alpha: 0.85), fontSize: 10),
+          ),
+        if (hasImdb) ...[
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white12),
             ),
-            child: DropdownButton<String>(
-              value: _sortPreference,
-              isDense: true,
-              underline: const SizedBox.shrink(),
-              dropdownColor: const Color(0xFF0F0F2D),
-              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white54, size: 16),
-              style: const TextStyle(color: Colors.white70, fontSize: 11),
-              items: [
-                'Seeders (High to Low)', 'Seeders (Low to High)',
-                'Quality (High to Low)', 'Quality (Low to High)',
-                'Size (High to Low)', 'Size (Low to High)',
-              ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _sortPreference = val);
-                  _settings.setSortPreference(val);
-                  _sortResults();
-                }
-              },
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _effectiveStremioAutoAddon(),
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: [
+                  const DropdownMenuItem(
+                      value: '__all__', child: Text('All addons')),
+                  ..._streamAddons
+                      .where((a) => a['type'] != 'torrent')
+                      .map(
+                    (a) => DropdownMenuItem(
+                      value: a['baseUrl'] as String,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 160),
+                        child: Text(
+                          a['name']?.toString() ?? 'Addon',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await _settings.setStremioAutoPlayAddonKey(v);
+                  PlaytorrioCloudSyncService.instance
+                      .scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _stremioAutoPlayAddonKeyPref = v;
+                    _lastStremioAutoPlaySignature = null;
+                  });
+                  _scheduleStremioAutoPlay();
+                },
+              ),
             ),
           ),
-        if (showSort) ...[const SizedBox(width: 8), _buildAudioFilterButton()],
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _torrentAutoPickTier,
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: const [
+                  DropdownMenuItem(value: 'best', child: Text('Any quality')),
+                  DropdownMenuItem(value: '4k', child: Text('4K')),
+                  DropdownMenuItem(value: '1080', child: Text('1080p')),
+                  DropdownMenuItem(value: '720', child: Text('720p')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await _settings.setTorrentAutoPickTier(v);
+                  PlaytorrioCloudSyncService.instance
+                      .scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _torrentAutoPickTier = v;
+                    _lastStremioAutoPlaySignature = null;
+                    _lastAutoPickTorrentSignature = null;
+                  });
+                  _sortResults();
+                  _scheduleStremioAutoPlay();
+                },
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildTorrentAutoPickControls() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'After torrent results load, automatically open the best release '
+              'for the chosen quality tier (top seeders). Configure default in Settings.',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.bolt_rounded, color: Colors.white54, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                'Auto',
+                style: TextStyle(
+                  color: _torrentAutoPickEnabled
+                      ? AppTheme.primaryColor
+                      : Colors.white54,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Transform.scale(
+                scale: 0.82,
+                child: Switch(
+                  value: _torrentAutoPickEnabled,
+                  activeThumbColor: AppTheme.primaryColor,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onChanged: (v) async {
+                    await _settings.setTorrentAutoPickEnabled(v);
+                    PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                    setState(() => _torrentAutoPickEnabled = v);
+                    if (v) _maybeAutoPickTorrent();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_torrentAutoPickEnabled)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _torrentAutoPickTier,
+                isDense: true,
+                dropdownColor: const Color(0xFF0F0F2D),
+                icon: const Icon(Icons.arrow_drop_down_rounded,
+                    color: Colors.white54, size: 18),
+                style: const TextStyle(color: Colors.white70, fontSize: 10),
+                items: const [
+                  DropdownMenuItem(value: 'best', child: Text('Any · top seeds')),
+                  DropdownMenuItem(value: '4k', child: Text('4K')),
+                  DropdownMenuItem(value: '1080', child: Text('1080p')),
+                  DropdownMenuItem(value: '720', child: Text('720p')),
+                ],
+                onChanged: (val) async {
+                  if (val == null) return;
+                  await _settings.setTorrentAutoPickTier(val);
+                  PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+                  setState(() {
+                    _torrentAutoPickTier = val;
+                    _lastAutoPickTorrentSignature = null;
+                  });
+                  _maybeAutoPickTorrent();
+                },
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -2771,11 +3222,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     return FocusableControl(
       onTap: () => _playTorrent(result,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+        preferSavedHttpUrl: isResumable),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
-          color: isResumable ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04),
+          color: (isResumable || widget.startPosition != null) ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isResumable
               ? AppTheme.primaryColor.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.07)),
@@ -2835,7 +3287,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   }),
                   const SizedBox(height: 6),
                   _iconBtn(Icons.play_arrow_rounded, true, () => _playTorrent(result,
-                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null)),
+                    startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+                    preferSavedHttpUrl: isResumable)),
                 ]),
               ],
             ),
@@ -2905,13 +3358,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     return FocusableControl(
       onTap: () => _playStremioStream(stream,
-        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null),
+        startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+        useSavedHttpPlayback: isResumable),
       borderRadius: 10,
       child: Container(
         decoration: BoxDecoration(
           color: isExternal
               ? leadingColor.withValues(alpha: 0.06)
-              : (isResumable ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04)),
+              : ((isResumable || widget.startPosition != null) ? AppTheme.primaryColor.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.04)),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: isExternal
               ? leadingColor.withValues(alpha: 0.25)
@@ -2943,7 +3397,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
               ),
               const SizedBox(width: 8),
               _iconBtn(actionIcon, true, () => _playStremioStream(stream,
-                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : null)),
+                startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
+                useSavedHttpPlayback: isResumable)),
             ]),
           ),
           if (isResumable && progress > 0 && !isExternal)
@@ -2992,7 +3447,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     child: Text(codec,
       style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 10, fontWeight: FontWeight.w600)));
 
-  Widget _iconBtn(IconData icon, bool highlight, VoidCallback onTap) => GestureDetector(
+  Widget _iconBtn(IconData icon, bool highlight, VoidCallback onTap) => TvGestureTap(
     onTap: onTap,
     child: Container(
       width: 32, height: 32,
@@ -3002,7 +3457,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         border: Border.all(color: highlight ? AppTheme.primaryColor.withValues(alpha: 0.4) : Colors.white12)),
       child: Icon(icon, size: 17, color: highlight ? AppTheme.primaryColor : Colors.white54)));
 
-  Widget _scrollArrow(IconData icon, VoidCallback onTap) => GestureDetector(
+  Widget _scrollArrow(IconData icon, VoidCallback onTap) => TvGestureTap(
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -3388,7 +3843,7 @@ class _ExpandableSynopsisState extends State<_ExpandableSynopsis> {
           crossFadeState: _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
         ),
         const SizedBox(height: 4),
-        GestureDetector(
+        TvGestureTap(
           onTap: () => setState(() => _expanded = !_expanded),
           child: Text(_expanded ? 'Show less' : 'Show more',
             style: TextStyle(color: AppTheme.primaryColor.withValues(alpha: 0.9),
@@ -3452,7 +3907,7 @@ class _AudioFilterMenuState extends State<_AudioFilterMenu> {
                             letterSpacing: 0.5)),
                   ),
                   if (_selected.isNotEmpty)
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: () {
                         setState(() => _selected.clear());
                         widget.onChanged({});
@@ -3468,7 +3923,7 @@ class _AudioFilterMenuState extends State<_AudioFilterMenu> {
             const Divider(color: Colors.white12, height: 8),
             ...widget.allTags.map((tag) {
               final on = _selected.contains(tag);
-              return InkWell(
+              return TvInkWell(
                 onTap: () {
                   setState(() {
                     if (on) { _selected.remove(tag); } else { _selected.add(tag); }

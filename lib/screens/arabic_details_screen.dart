@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/arabic_service.dart';
 import '../utils/app_theme.dart';
 import 'arabic_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class ArabicDetailsScreen extends StatefulWidget {
   final ArabicShow show;
@@ -31,6 +32,8 @@ class _ArabicDetailsScreenState extends State<ArabicDetailsScreen> {
     final ArabicShowDetail detail;
     if (widget.show.source == 'dimatoon') {
       detail = await _service.getDimaToonDetails(widget.show.url);
+    } else if (widget.show.source == 'brstej') {
+      detail = await _service.getBrstejDetails(widget.show.id);
     } else {
       detail = await _service.getShowDetails(widget.show.id);
     }
@@ -250,7 +253,7 @@ class _ArabicDetailsScreenState extends State<ArabicDetailsScreen> {
           final isSelected = _selectedSeason == index;
           return Padding(
             padding: const EdgeInsets.only(left: 8),
-            child: GestureDetector(
+            child: TvGestureTap(
               onTap: () => setState(() => _selectedSeason = index),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -336,7 +339,7 @@ class _EpisodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),

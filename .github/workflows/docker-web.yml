@@ -1,0 +1,51 @@
+# Build Flutter web and push to GitHub Container Registry (GHCR).
+# Pull (no local build): ghcr.io/<owner>/playtorrio-web:latest
+name: Docker Web (GHCR)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - 'web/**'
+      - 'docker/web/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'assets/**'
+  workflow_dispatch:
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name (lowercase for GHCR)
+        id: image
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${OWNER}/playtorrio-web" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}

@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>playtorrio-web</Name>
+  <Repository>ghcr.io/killamfkr/playtorrio-web:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/killamfkr/PlayTorrioV2</Support>
+  <Project>https://github.com/killamfkr/PlayTorrioV2</Project>
+  <Overview>
+    PlayTorrio **web** build (experimental): browse Stremio/TMDB-style UI in a browser. Served by nginx inside the container.&#xD;&#xD;
+    **Default image:** `ghcr.io/killamfkr/playtorrio-web:latest` — pulled from **GitHub Container Registry** (no build on Unraid). Requires the repo workflow *Docker Web (GHCR)* to have run on `main` at least once.&#xD;&#xD;
+    **Forks:** Change **Repository** to `ghcr.io/YOUR_GITHUB_USER/playtorrio-web:latest` after your fork’s workflow pushes.&#xD;&#xD;
+    **Local build instead:** Set **Repository** to `playtorrio-web:latest`, clear **Registry**, then `docker build -f docker/web/Dockerfile -t playtorrio-web:latest .` from a repo clone.&#xD;&#xD;
+    **Private GHCR:** add `ghcr.io` credentials under Docker (PAT with read:packages).
+  </Overview>
+  <Category>MediaApp:Video MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:8089]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/assets/icon/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI port" Target="80" Default="8089" Mode="tcp" Description="HTTP port (host 8089 → container 80). Change host side if 8089 is in use." Type="Port" Display="always" Required="true" Mask="false">8089</Config>
+</Container>

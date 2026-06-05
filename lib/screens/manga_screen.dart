@@ -6,6 +6,7 @@ import '../utils/app_theme.dart';
 import '../api/manga_service.dart';
 import 'manga_details_screen.dart';
 import 'manga_reader_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class MangaScreen extends StatefulWidget {
   final String? initialSearch;
@@ -30,7 +31,8 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
   int _currentPage = 1;
   String? _selectedGenre;
   bool _isGenreDropdownOpen = false;
-  bool _allowAdult = false;
+  /// Default on: show all ratings including 18+ / NSFW (user can turn off via 18+ toggle).
+  bool _allowAdult = true;
 
   @override
   void initState() {
@@ -237,7 +239,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
               ],
             ),
             if (_isGenreDropdownOpen)
-              GestureDetector(
+              TvGestureTap(
                 onTap: () {
                   setState(() {
                     _isGenreDropdownOpen = false;
@@ -325,7 +327,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
           const SizedBox(width: 12),
           _buildGenreDropdown(),
           const SizedBox(width: 8),
-          GestureDetector(
+          TvGestureTap(
             onTap: () {
               setState(() => _allowAdult = !_allowAdult);
               if (_isSearching) {
@@ -373,7 +375,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildGenreDropdown() {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: () {
         setState(() {
           _isGenreDropdownOpen = !_isGenreDropdownOpen;
@@ -445,7 +447,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 if (_selectedGenre != null)
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: () {
                       setState(() {
                         _selectedGenre = null;
@@ -476,7 +478,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
                 final genre = MangaService.availableTags[index];
                 final isSelected = _selectedGenre == genre;
                 
-                return InkWell(
+                return TvInkWell(
                   onTap: () {
                     setState(() {
                       _selectedGenre = genre;
@@ -713,7 +715,7 @@ class _MangaScreenState extends State<MangaScreen> with WidgetsBindingObserver {
                     Positioned(
                       top: 4,
                       right: 4,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromHistory(manga.id),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -767,7 +769,7 @@ class _MangaCardState extends State<_MangaCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
+      child: TvGestureTap(
         onTap: () {
           Navigator.push(
             context,
@@ -851,7 +853,7 @@ class _MangaCardState extends State<_MangaCard> {
               Positioned(
                 top: 8,
                 right: 8,
-                child: GestureDetector(
+                child: TvGestureTap(
                   onTap: _toggleLike,
                   child: Container(
                     padding: const EdgeInsets.all(6),

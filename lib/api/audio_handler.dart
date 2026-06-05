@@ -11,6 +11,8 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   final mk.Player _musicPlayer;
   AudioPlayerType _currentType = AudioPlayerType.music;
   dynamic _activePlayer;
+  /// Built-in video player currently bound to [mediaItem] / Android Auto.
+  mk.Player? _attachedVideoPlayer;
   final List<StreamSubscription<dynamic>> _videoSubs = [];
 
   PlayTorrioAudioHandler(this._musicPlayer) {
@@ -30,6 +32,7 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
         s.cancel();
       }
       _videoSubs.clear();
+      _attachedVideoPlayer = null;
     }
     _currentType = type;
     _activePlayer = player;
@@ -42,6 +45,10 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
     mk.Player p, {
     required String title,
     Uri? artUri,
+    String? displaySubtitle,
+    String? album,
+    bool? isLive,
+    Map<String, dynamic>? extras,
   }) {
     for (final s in _videoSubs) {
       s.cancel();
@@ -49,13 +56,18 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
     _videoSubs.clear();
 
     setPlayerType(AudioPlayerType.video, p);
+    _attachedVideoPlayer = p;
 
     mediaItem.add(MediaItem(
-      id: 'playtorrio_builtin_video',
+      id: 'playtorrio_builtin_video_${p.hashCode}',
       title: title,
+      displayTitle: title,
+      displaySubtitle: displaySubtitle,
       artist: 'PlayTorrio',
-      album: 'Video',
+      album: album ?? 'Video',
       artUri: artUri,
+      isLive: isLive,
+      extras: extras,
     ));
 
     void pushVideoState() {
@@ -105,11 +117,19 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
     pushVideoState();
   }
 
-  void detachVideoPlayer() {
+  /// If [onlyPlayer] is set, only detach when that same [mk.Player] is active
+  /// (avoids [Navigator.pushReplacement] tearing down the new session).
+  void detachVideoPlayer([mk.Player? onlyPlayer]) {
+    if (onlyPlayer != null &&
+        (_attachedVideoPlayer == null ||
+            !identical(_attachedVideoPlayer, onlyPlayer))) {
+      return;
+    }
     for (final s in _videoSubs) {
       s.cancel();
     }
     _videoSubs.clear();
+    _attachedVideoPlayer = null;
     if (_currentType != AudioPlayerType.video) return;
     setPlayerType(AudioPlayerType.music, _musicPlayer);
   }
@@ -215,7 +235,7 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> stop() async {
     if (_currentType == AudioPlayerType.video) {
       await (_activePlayer as mk.Player).pause();
-      detachVideoPlayer();
+      detachVideoPlayer(_attachedVideoPlayer);
       return super.stop();
     }
     if (_currentType == AudioPlayerType.music) {

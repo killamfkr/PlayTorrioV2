@@ -1,0 +1,44 @@
+From 44dd4ffcbac5e232ee55d825dce6967f181abe02 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 5 Apr 2026 01:16:28 +0000
+Subject: [PATCH 2/2] Refresh TV Guide EPG when app resumes
+
+---
+ lib/main.dart | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/lib/main.dart b/lib/main.dart
+index 939b7f2..ef01914 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -13,6 +13,7 @@ import 'screens/music_screen.dart';
+ 
+ import 'screens/stremio_catalog_screen.dart';
+ import 'screens/stremio_live_tv_screen.dart';
++import 'utils/tv_guide_refresh.dart';
+ import 'screens/update_dialog.dart';
+ import 'services/stream_service.dart';
+ import 'services/settings_service.dart';
+@@ -476,6 +477,7 @@ class MainShellState extends State<MainShell>
+   void didChangeAppLifecycleState(AppLifecycleState state) {
+     if (state == AppLifecycleState.resumed) {
+       SettingsService.instance.refreshLocalIpForQr();
++      TvGuideRefresh.bump();
+     }
+   }
+ 
+@@ -504,9 +506,10 @@ class MainShellState extends State<MainShell>
+       case 2:
+         return const StremioCatalogScreen();
+       case 3:
+-        return const StremioLiveTvScreen(
++        return StremioLiveTvScreen(
+           tvChannelsOnly: true,
+           showCatalogBackButton: false,
++          tvGuideRefreshListenable: TvGuideRefresh.notifier,
+         );
+       case 4:
+         return const AudiobookScreen();
+-- 
+2.43.0
+

@@ -19,11 +19,13 @@ class TraktService {
   // ── Constants ──────────────────────────────────────────────────────────
   static const String _baseUrl = 'https://api.trakt.tv';
 
-  // Injected at build time via --dart-define or .env
-  static const String _clientId =
-      String.fromEnvironment('TRAKT_CLIENT_ID');
-  static const String _clientSecret =
+  /// Compile-time (CI / release builds). Local dev: set credentials in Settings → Trakt.
+  static const String _envClientId = String.fromEnvironment('TRAKT_CLIENT_ID');
+  static const String _envClientSecret =
       String.fromEnvironment('TRAKT_CLIENT_SECRET');
+
+  static const String prefsClientIdKey = 'trakt_api_client_id';
+  static const String prefsClientSecretKey = 'trakt_api_client_secret';
 
   // ── Secure Storage Keys ────────────────────────────────────────────────
   static const String _keyAccessToken = 'trakt_access_token';
@@ -39,6 +41,58 @@ class TraktService {
   bool _initialSyncDone = false;
   Future<void>? _syncInProgress;
 
+  Future<String> _effectiveClientId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final fromPrefs = prefs.getString(prefsClientIdKey)?.trim() ?? '';
+    if (fromPrefs.isNotEmpty) return fromPrefs;
+    return _envClientId.trim();
+  }
+
+  Future<String> _effectiveClientSecret() async {
+    final prefs = await SharedPreferences.getInstance();
+    final fromPrefs = prefs.getString(prefsClientSecretKey)?.trim() ?? '';
+    if (fromPrefs.isNotEmpty) return fromPrefs;
+    return _envClientSecret.trim();
+  }
+
+  /// Save Trakt API app credentials (from trakt.tv/oauth/apps). Required for device login when not baked in at build time.
+  Future<void> setApiCredentials({required String clientId, required String clientSecret}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(prefsClientIdKey, clientId.trim());
+    await prefs.setString(prefsClientSecretKey, clientSecret.trim());
+  }
+
+  Future<void> clearApiCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(prefsClientIdKey);
+    await prefs.remove(prefsClientSecretKey);
+  }
+
+  Future<bool> hasApiCredentials() async {
+    final id = await _effectiveClientId();
+    final secret = await _effectiveClientSecret();
+    return id.isNotEmpty && secret.isNotEmpty;
+  }
+
+  Future<Map<String, String>> _publicHeaders() async {
+    final id = await _effectiveClientId();
+    return {
+      'Content-Type': 'application/json',
+      'trakt-api-version': '2',
+      'trakt-api-key': id,
+    };
+  }
+
+  Future<Map<String, String>> _authHeaders(String token) async {
+    final id = await _effectiveClientId();
+    return {
+      'Content-Type': 'application/json',
+      'trakt-api-version': '2',
+      'trakt-api-key': id,
+      'Authorization': 'Bearer $token',
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   //  A U T H   —   D E V I C E   C O D E   F L O W
   // ═══════════════════════════════════════════════════════════════════════
@@ -46,16 +100,25 @@ class TraktService {
   /// Step 1 — request a device code + user_code.
   /// Returns the API response map or null on failure.
   Future<Map<String, dynamic>?> startDeviceAuth() async {
+    final cid = await _effectiveClientId();
+    if (cid.isEmpty) {
+      debugPrint(
+        '[Trakt] No Client ID — open Settings → Trakt and paste your Trakt API credentials (create an app at trakt.tv/oauth/apps), or build with --dart-define=TRAKT_CLIENT_ID=...',
+      );
+      return null;
+    }
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl/oauth/device/code'),
-        headers: _publicHeaders,
-        body: json.encode({'client_id': _clientId}),
+        headers: await _publicHeaders(),
+        body: json.encode({'client_id': cid}),
       );
       if (response.statusCode == 200) {
         return json.decode(response.body) as Map<String, dynamic>;
       }
-      debugPrint('[Trakt] Device code request failed: ${response.statusCode}');
+      debugPrint(
+        '[Trakt] Device code request failed: ${response.statusCode} ${response.body}',
+      );
     } catch (e) {
       debugPrint('[Trakt] Device code error: $e');
     }
@@ -70,14 +133,20 @@ class TraktService {
   ///   'denied'   — user denied
   ///   'error'    — unexpected failure
   Future<String> pollForToken(String deviceCode) async {
+    final cid = await _effectiveClientId();
+    final secret = await _effectiveClientSecret();
+    if (cid.isEmpty || secret.isEmpty) {
+      debugPrint('[Trakt] pollForToken: missing client id or secret');
+      return 'error';
+    }
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl/oauth/device/token'),
-        headers: _publicHeaders,
+        headers: await _publicHeaders(),
         body: json.encode({
           'code': deviceCode,
-          'client_id': _clientId,
-          'client_secret': _clientSecret,
+          'client_id': cid,
+          'client_secret': secret,
         }),
       );
       switch (response.statusCode) {
@@ -111,14 +180,18 @@ class TraktService {
     final refreshToken = await _storage.read(key: _keyRefreshToken);
     if (refreshToken == null) return false;
 
+    final cid = await _effectiveClientId();
+    final secret = await _effectiveClientSecret();
+    if (cid.isEmpty || secret.isEmpty) return false;
+
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl/oauth/token'),
-        headers: _publicHeaders,
+        headers: await _publicHeaders(),
         body: json.encode({
           'refresh_token': refreshToken,
-          'client_id': _clientId,
-          'client_secret': _clientSecret,
+          'client_id': cid,
+          'client_secret': secret,
           'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',
           'grant_type': 'refresh_token',
         }),
@@ -141,15 +214,19 @@ class TraktService {
     final token = await _storage.read(key: _keyAccessToken);
     if (token != null) {
       try {
-        await http.post(
-          Uri.parse('$_baseUrl/oauth/revoke'),
-          headers: _publicHeaders,
-          body: json.encode({
-            'token': token,
-            'client_id': _clientId,
-            'client_secret': _clientSecret,
-          }),
-        );
+        final cid = await _effectiveClientId();
+        final secret = await _effectiveClientSecret();
+        if (cid.isNotEmpty && secret.isNotEmpty) {
+          await http.post(
+            Uri.parse('$_baseUrl/oauth/revoke'),
+            headers: await _publicHeaders(),
+            body: json.encode({
+              'token': token,
+              'client_id': cid,
+              'client_secret': secret,
+            }),
+          );
+        }
       } catch (_) {} // best-effort
     }
     await _storage.delete(key: _keyAccessToken);
@@ -182,7 +259,7 @@ class TraktService {
       // Fetch movies watchlist
       final moviesResp = await http.get(
         Uri.parse('$_baseUrl/sync/watchlist/movies?extended=full'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (moviesResp.statusCode == 200) {
         final List movies = json.decode(moviesResp.body);
@@ -213,7 +290,7 @@ class TraktService {
       // Fetch shows watchlist
       final showsResp = await http.get(
         Uri.parse('$_baseUrl/sync/watchlist/shows?extended=full'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (showsResp.statusCode == 200) {
         final List shows = json.decode(showsResp.body);
@@ -265,7 +342,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/watchlist'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {'ids': ids}
@@ -297,7 +374,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/watchlist/remove'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {'ids': ids}
@@ -413,7 +490,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/history'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode(body),
       );
       debugPrint('[Trakt] Add to history: ${resp.statusCode}');
@@ -474,7 +551,7 @@ class TraktService {
 
       final resp = await http.delete(
         Uri.parse('$_baseUrl/sync/playback/$playbackId'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       debugPrint('[Trakt] Remove playback (id:$playbackId tmdb:$tmdbId): ${resp.statusCode}');
       return resp.statusCode == 204 || resp.statusCode == 200;
@@ -496,7 +573,7 @@ class TraktService {
       // Movies in progress
       final moviesResp = await http.get(
         Uri.parse('$_baseUrl/sync/playback/movies'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (moviesResp.statusCode == 200) {
         final List items = json.decode(moviesResp.body);
@@ -508,7 +585,7 @@ class TraktService {
       // Episodes in progress
       final episodesResp = await http.get(
         Uri.parse('$_baseUrl/sync/playback/episodes'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (episodesResp.statusCode == 200) {
         final List items = json.decode(episodesResp.body);
@@ -578,8 +655,10 @@ class TraktService {
           continue;
         }
 
-        // Fetch poster from TMDB
-        posterPath = await _fetchTmdbPoster(tmdbId, mediaType);
+        // Fetch poster + runtime from TMDB
+        final tmdbInfo = await _fetchTmdbInfo(tmdbId, mediaType);
+        posterPath = tmdbInfo['poster'] as String;
+        final durationMs = tmdbInfo['runtimeMs'] as int;
 
         // Check if already in local history
         final existing = await WatchHistoryService().getProgress(
@@ -589,11 +668,8 @@ class TraktService {
         );
         if (existing != null) continue;
 
-        // Estimate position/duration from progress percentage.
-        // We don't have real duration from Trakt playback, use 100min default.
-        // The actual position matters less — what matters is having the entry.
-        const estimatedDurationMs = 6000000; // 100 minutes
-        final estimatedPositionMs = (progress / 100 * estimatedDurationMs).round();
+        // Derive position from Trakt progress % + real TMDB runtime.
+        final estimatedPositionMs = (progress / 100 * durationMs).round();
 
         await WatchHistoryService().saveProgress(
           tmdbId: tmdbId,
@@ -603,7 +679,7 @@ class TraktService {
           method: 'trakt_import',
           sourceId: 'trakt',
           position: estimatedPositionMs,
-          duration: estimatedDurationMs,
+          duration: durationMs,
           season: season,
           episode: episode,
           episodeTitle: episodeTitle,
@@ -637,7 +713,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/ratings'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {
@@ -668,7 +744,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/ratings/remove'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {'ids': {'tmdb': tmdbId}}
@@ -693,7 +769,7 @@ class TraktService {
       for (final type in ['movies', 'shows']) {
         final resp = await http.get(
           Uri.parse('$_baseUrl/sync/ratings/$type'),
-          headers: _authHeaders(token),
+          headers: await _authHeaders(token),
         );
         if (resp.statusCode == 200) {
           result[type] = json.decode(resp.body);
@@ -727,7 +803,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/collection'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {
@@ -762,7 +838,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/collection/remove'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           type: [
             {'ids': ids}
@@ -787,7 +863,7 @@ class TraktService {
       for (final type in ['movies', 'shows']) {
         final resp = await http.get(
           Uri.parse('$_baseUrl/sync/collection/$type?extended=metadata'),
-          headers: _authHeaders(token),
+          headers: await _authHeaders(token),
         );
         if (resp.statusCode == 200) {
           result[type] = json.decode(resp.body);
@@ -838,7 +914,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/history/remove'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode(body),
       );
       debugPrint('[Trakt] Remove from history: ${resp.statusCode}');
@@ -861,7 +937,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/users/me/lists'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         final List items = json.decode(resp.body);
@@ -881,7 +957,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/users/me/lists/$listId/items'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         final List items = json.decode(resp.body);
@@ -908,7 +984,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/users/me/lists'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           'name': name,
           'description': ?description,
@@ -939,7 +1015,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/users/me/lists/$listId/items'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           if (movies.isNotEmpty) 'movies': movies,
           if (shows.isNotEmpty) 'shows': shows,
@@ -964,7 +1040,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/users/me/lists/$listId/items/remove'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           if (movies.isNotEmpty) 'movies': movies,
           if (shows.isNotEmpty) 'shows': shows,
@@ -989,7 +1065,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/recommendations/$type?extended=full&limit=30'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         final List items = json.decode(resp.body);
@@ -1014,7 +1090,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/calendars/my/shows/$startDate/$days'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         final List items = json.decode(resp.body);
@@ -1035,7 +1111,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/calendars/my/movies/$startDate/$days'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         final List items = json.decode(resp.body);
@@ -1082,7 +1158,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/checkin'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode(body),
       );
       debugPrint('[Trakt] Checkin (tmdb:$tmdbId): ${resp.statusCode}');
@@ -1101,7 +1177,7 @@ class TraktService {
     try {
       final resp = await http.delete(
         Uri.parse('$_baseUrl/checkin'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       return resp.statusCode == 204;
     } catch (e) {
@@ -1122,7 +1198,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/users/me/stats'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         return json.decode(resp.body) as Map<String, dynamic>;
@@ -1145,7 +1221,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/sync/last_activities'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       _handleUnauthorized(resp.statusCode);
       if (resp.statusCode == 200) {
@@ -1181,7 +1257,9 @@ class TraktService {
       debugPrint('[Trakt] Starting smart sync...');
       final activities = await _getLastActivities();
       final lastWatchlist = activities?['watchlist']?['updated_at']?.toString() ?? '';
-      final lastScrobble = activities?['episodes']?['paused_at']?.toString() ?? '';
+      final lastEpisodeScrobble = activities?['episodes']?['paused_at']?.toString() ?? '';
+      final lastMovieScrobble = activities?['movies']?['paused_at']?.toString() ?? '';
+      final lastScrobble = '${lastEpisodeScrobble}_$lastMovieScrobble';
       final lastWatched = activities?['episodes']?['watched_at']?.toString() ?? '';
 
       final savedWatchlist = await _storage.read(key: 'trakt_last_watchlist');
@@ -1229,7 +1307,7 @@ class TraktService {
       // Single API call — includes full season/episode data by default
       final resp = await http.get(
         Uri.parse('$_baseUrl/sync/watched/shows'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode != 200) return 0;
 
@@ -1301,7 +1379,7 @@ class TraktService {
       try {
         final resp = await http.post(
           Uri.parse('$_baseUrl/sync/history'),
-          headers: _authHeaders(token),
+          headers: await _authHeaders(token),
           body: json.encode({
             'shows': [
               {
@@ -1364,7 +1442,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/sync/watchlist'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode({
           if (movies.isNotEmpty) 'movies': movies,
           if (shows.isNotEmpty) 'shows': shows,
@@ -1391,7 +1469,7 @@ class TraktService {
     try {
       final resp = await http.get(
         Uri.parse('$_baseUrl/users/me'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
       );
       if (resp.statusCode == 200) {
         return json.decode(resp.body) as Map<String, dynamic>;
@@ -1405,19 +1483,6 @@ class TraktService {
   // ═══════════════════════════════════════════════════════════════════════
   //  I N T E R N A L   H E L P E R S
   // ═══════════════════════════════════════════════════════════════════════
-
-  Map<String, String> get _publicHeaders => {
-        'Content-Type': 'application/json',
-        'trakt-api-version': '2',
-        'trakt-api-key': _clientId,
-      };
-
-  Map<String, String> _authHeaders(String token) => {
-        'Content-Type': 'application/json',
-        'trakt-api-version': '2',
-        'trakt-api-key': _clientId,
-        'Authorization': 'Bearer $token',
-      };
 
   Future<void> _saveTokens(Map<String, dynamic> data) async {
     await _storage.write(key: _keyAccessToken, value: data['access_token']);
@@ -1498,7 +1563,7 @@ class TraktService {
     try {
       final resp = await http.post(
         Uri.parse('$_baseUrl/scrobble/$action'),
-        headers: _authHeaders(token),
+        headers: await _authHeaders(token),
         body: json.encode(body),
       );
       _handleUnauthorized(resp.statusCode);
@@ -1510,7 +1575,7 @@ class TraktService {
         await Future.delayed(Duration(seconds: retryAfter));
         final retry = await http.post(
           Uri.parse('$_baseUrl/scrobble/$action'),
-          headers: _authHeaders(token),
+          headers: await _authHeaders(token),
           body: json.encode(body),
         );
         _handleUnauthorized(retry.statusCode);
@@ -1531,6 +1596,12 @@ class TraktService {
   /// Fetch the TMDB poster_path for a given TMDB ID.
   /// Returns the relative path (e.g. "/abc123.jpg") or empty string.
   Future<String> _fetchTmdbPoster(int tmdbId, String mediaType) async {
+    final info = await _fetchTmdbInfo(tmdbId, mediaType);
+    return info['poster'] as String;
+  }
+
+  /// Fetch poster + runtime (in ms) from TMDB in a single call.
+  Future<Map<String, dynamic>> _fetchTmdbInfo(int tmdbId, String mediaType) async {
     try {
       final type = (mediaType == 'tv' || mediaType == 'series') ? 'tv' : 'movie';
       final resp = await http.get(
@@ -1538,11 +1609,22 @@ class TraktService {
       );
       if (resp.statusCode == 200) {
         final data = json.decode(resp.body) as Map<String, dynamic>;
-        return data['poster_path']?.toString() ?? '';
+        final poster = data['poster_path']?.toString() ?? '';
+        // runtime in minutes → milliseconds
+        int runtimeMs = 6000000; // fallback 100 min
+        if (type == 'movie' && data['runtime'] is int && (data['runtime'] as int) > 0) {
+          runtimeMs = (data['runtime'] as int) * 60000;
+        } else if (type == 'tv') {
+          final epRuntimes = data['episode_run_time'] as List?;
+          if (epRuntimes != null && epRuntimes.isNotEmpty) {
+            runtimeMs = ((epRuntimes.first as int?) ?? 100) * 60000;
+          }
+        }
+        return {'poster': poster, 'runtimeMs': runtimeMs};
       }
     } catch (e) {
-      debugPrint('[Trakt] TMDB poster fetch failed for $tmdbId: $e');
+      debugPrint('[Trakt] TMDB info fetch failed for $tmdbId: $e');
     }
-    return '';
+    return {'poster': '', 'runtimeMs': 6000000};
   }
 }

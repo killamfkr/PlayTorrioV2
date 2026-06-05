@@ -1,9 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../api/local_server_service.dart';
+import '../platform_flags.dart';
+import 'jellyfin_http.dart';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Models
+// ═════════════════════════════════════════════════════════════════════════════
 
 /// Represents a single Jellyfin server account.
 class JellyfinAccount {
@@ -44,7 +51,7 @@ class JellyfinAccount {
   String get normalizedUrl {
     var url = serverUrl.trim();
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://$url'; // default to https
+      url = 'https://$url';
     }
     return url.replaceAll(RegExp(r'/+$'), '');
   }
@@ -54,7 +61,7 @@ class JellyfinAccount {
 class JellyfinItem {
   final String id;
   final String name;
-  final String type; // Movie, Series, Season, Episode, ...
+  final String type;
   final String? overview;
   final int? productionYear;
   final double? communityRating;
@@ -63,8 +70,8 @@ class JellyfinItem {
   final String? seriesId;
   final String? seriesName;
   final String? seasonId;
-  final int? indexNumber;       // episode number or season number
-  final int? parentIndexNumber; // season number for episodes
+  final int? indexNumber;
+  final int? parentIndexNumber;
   final List<String> genres;
   final Map<String, String> imageTags;
   final List<String> backdropImageTags;
@@ -130,7 +137,6 @@ class JellyfinItem {
     );
   }
 
-  /// Formatted runtime string (e.g. "2h 15m")
   String get runtime {
     if (runTimeTicks == null) return '';
     final minutes = (runTimeTicks! / 600000000).round();
@@ -138,7 +144,6 @@ class JellyfinItem {
     return '${minutes ~/ 60}h ${minutes % 60}m';
   }
 
-  /// Percentage of playback completed (0.0 – 1.0)
   double get playbackProgress {
     if (userData == null || runTimeTicks == null || runTimeTicks == 0) return 0;
     final pos = userData!['PlaybackPositionTicks'] as int? ?? 0;
@@ -150,7 +155,51 @@ class JellyfinItem {
   int get unplayedCount => userData?['UnplayedItemCount'] as int? ?? 0;
 }
 
-/// Service for communicating with a Jellyfin server.
+/// Preloaded home screen data returned by [JellyfinService.loadHomeData].
+class HomeData {
+  final List<JellyfinItem> libraries;
+  final List<JellyfinItem> resumeItems;
+  final List<JellyfinItem> nextUpItems;
+  final Map<String, List<JellyfinItem>> latestByLibrary;
+
+  const HomeData({
+    this.libraries = const [],
+    this.resumeItems = const [],
+    this.nextUpItems = const [],
+    this.latestByLibrary = const {},
+  });
+}
+
+/// Preloaded series detail data returned by [JellyfinService.loadSeriesData].
+class SeriesData {
+  final JellyfinItem details;
+  final List<JellyfinItem> seasons;
+  final List<JellyfinItem> allEpisodes;
+  final List<JellyfinItem> similarItems;
+
+  const SeriesData({
+    required this.details,
+    this.seasons = const [],
+    this.allEpisodes = const [],
+    this.similarItems = const [],
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cache
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _CacheEntry<T> {
+  final T data;
+  final DateTime expires;
+  _CacheEntry(this.data, Duration ttl) : expires = DateTime.now().add(ttl);
+  bool get isValid => DateTime.now().isBefore(expires);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Service
+// ═════════════════════════════════════════════════════════════════════════════
+
 class JellyfinService {
   static final JellyfinService _instance = JellyfinService._internal();
   factory JellyfinService() => _instance;
@@ -158,96 +207,163 @@ class JellyfinService {
 
   static const String _accountsKey = 'jellyfin_accounts';
   static const String _activeAccountKey = 'jellyfin_active_account';
+  static const _secureStorage = FlutterSecureStorage();
 
-  /// HTTP client that follows redirects (including 308 on POST).
-  late final HttpClient _ioClient = HttpClient()
-    ..badCertificateCallback = (cert, host, port) => true;
+  // In-memory cache — keyed by URL string, values are _CacheEntry<dynamic>.
+  final Map<String, _CacheEntry<dynamic>> _cache = {};
+  static const _maxCacheEntries = 200;
+  static const _shortTtl = Duration(minutes: 2);   // resume, nextUp
+  static const _mediumTtl = Duration(minutes: 10);  // items, details
+  static const _longTtl = Duration(minutes: 30);    // libraries
 
-  /// Performs an HTTP request following all redirects (301/302/307/308).
-  /// Returns the final response. Works for GET, POST, HEAD, etc.
+  void clearCache() => _cache.clear();
+
+  T? _getFromCache<T>(String key) {
+    final entry = _cache[key];
+    if (entry != null && entry.isValid) return entry.data as T;
+    if (entry != null) _cache.remove(key);
+    return null;
+  }
+
+  void _putInCache<T>(String key, T data, Duration ttl) {
+    // Evict expired entries first, then oldest if still over limit
+    if (_cache.length >= _maxCacheEntries) {
+      _cache.removeWhere((_, e) => !e.isValid);
+    }
+    if (_cache.length >= _maxCacheEntries) {
+      final oldest = _cache.entries
+          .reduce((a, b) => a.value.expires.isBefore(b.value.expires) ? a : b);
+      _cache.remove(oldest.key);
+    }
+    _cache[key] = _CacheEntry<T>(data, ttl);
+  }
+
+  // ─── HTTP Client ─────────────────────────────────────────────────────────
+  // Uses the shared Jellyfin client (self-signed friendly on IO; std client on web).
+  final http.Client _httpClient = createJellyfinHttpClient();
+
+  /// Core HTTP request method.
+  /// - Follows redirects (301/302/307/308) manually.
+  /// - Retries on transient network errors with exponential backoff.
   Future<http.Response> _request(
     String method,
     Uri uri, {
     Map<String, String>? headers,
     String? body,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
+    int maxRetries = 2,
+  }) async {
+    Exception? lastError;
+
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        final delay = Duration(milliseconds: 300 * (1 << (attempt - 1)));
+        debugPrint('[Jellyfin] Retry $attempt after ${delay.inMilliseconds}ms');
+        await Future.delayed(delay);
+      }
+
+      try {
+        return await _doRequest(method, uri, headers: headers, body: body, timeout: timeout);
+      } on Exception catch (e) {
+        lastError = e;
+        debugPrint('[Jellyfin] Request error (attempt $attempt): $e');
+      }
+    }
+
+    throw lastError ?? Exception('Request failed after retries');
+  }
+
+  Future<http.Response> _doRequest(
+    String method,
+    Uri uri, {
+    Map<String, String>? headers,
+    String? body,
+    Duration timeout = const Duration(seconds: 30),
   }) async {
     var currentUri = uri;
     const maxRedirects = 5;
 
     for (var i = 0; i <= maxRedirects; i++) {
-      final ioReq = await _ioClient.openUrl(method, currentUri).timeout(timeout);
-      ioReq.followRedirects = false; // we handle manually
-
-      // Set headers
-      headers?.forEach((k, v) => ioReq.headers.set(k, v));
-
-      // Write body for POST/PUT
+      final req = http.Request(method, currentUri);
+      headers?.forEach((k, v) {
+        req.headers[k] = v;
+      });
       if (body != null && (method == 'POST' || method == 'PUT')) {
-        ioReq.write(body);
+        req.body = body;
       }
 
-      final ioResp = await ioReq.close().timeout(timeout);
-      final statusCode = ioResp.statusCode;
+      final streamed = await _httpClient.send(req).timeout(timeout);
+      final statusCode = streamed.statusCode;
 
-      // Handle redirects
       if (statusCode >= 300 && statusCode < 400) {
-        final location = ioResp.headers.value('location');
+        final location = streamed.headers['location'];
         if (location == null) break;
-        await ioResp.drain<void>();
-        currentUri = Uri.parse(location);
+        await streamed.stream.drain();
+        currentUri = currentUri.resolve(location);
         debugPrint('[Jellyfin] Redirect $statusCode → $currentUri');
         continue;
       }
 
-      // Read response body
-      final respBody = await ioResp.transform(utf8.decoder).join();
-      final respHeaders = <String, String>{};
-      ioResp.headers.forEach((name, values) {
-        respHeaders[name] = values.join(', ');
-      });
-
-      return http.Response(respBody, statusCode, headers: respHeaders);
+      final respBody = await streamed.stream.transform(utf8.decoder).join();
+      return http.Response(respBody, statusCode, headers: streamed.headers);
     }
 
     throw Exception('Too many redirects');
   }
 
-  /// Shorthand GET.
-  Future<http.Response> _get(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 15)}) =>
+  Future<http.Response> _get(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 30)}) =>
       _request('GET', uri, headers: headers, timeout: timeout);
 
-  /// Shorthand POST.
-  Future<http.Response> _post(Uri uri, {Map<String, String>? headers, String? body, Duration timeout = const Duration(seconds: 15)}) =>
-      _request('POST', uri, headers: headers, body: body, timeout: timeout);
+  Future<http.Response> _post(Uri uri, {Map<String, String>? headers, String? body, Duration timeout = const Duration(seconds: 30)}) =>
+      _request('POST', uri, headers: headers, body: body, timeout: timeout, maxRetries: 0);
 
-  /// Shorthand DELETE.
-  Future<http.Response> _delete(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 15)}) =>
-      _request('DELETE', uri, headers: headers, timeout: timeout);
+  Future<http.Response> _delete(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 30)}) =>
+      _request('DELETE', uri, headers: headers, timeout: timeout, maxRetries: 0);
+
+  /// Cached GET — returns parsed JSON (already decoded) from cache or network.
+  Future<dynamic> _cachedGet(String url, {Duration ttl = _mediumTtl}) async {
+    final cached = _getFromCache<dynamic>(url);
+    if (cached != null) return cached;
+
+    final resp = await _get(Uri.parse(url), headers: _authHeaders);
+    if (resp.statusCode != 200) throw Exception('GET $url failed (${resp.statusCode})');
+
+    final data = json.decode(resp.body);
+    _putInCache(url, data, ttl);
+    return data;
+  }
+
+  // ─── Auth / Session State ────────────────────────────────────────────────
 
   JellyfinAccount? _activeAccount;
   JellyfinAccount? get activeAccount => _activeAccount;
   bool get isLoggedIn => _activeAccount?.accessToken != null;
 
-  final String _deviceId = 'playtorrio_${DateTime.now().millisecondsSinceEpoch}';
+  static const String _deviceIdKey = 'jellyfin_device_id';
+  String _deviceId = '';
 
-  /// Subtitles from the last PlaybackInfo call.
+  /// Ensures a persistent deviceId exists. Called lazily on first use.
+  Future<void> _ensureDeviceId() async {
+    if (_deviceId.isNotEmpty) return;
+    final stored = await _secureStorage.read(key: _deviceIdKey);
+    if (stored != null && stored.isNotEmpty) {
+      _deviceId = stored;
+    } else {
+      _deviceId = 'playtorrio_${DateTime.now().millisecondsSinceEpoch}';
+      await _secureStorage.write(key: _deviceIdKey, value: _deviceId);
+    }
+  }
+
   List<Map<String, dynamic>> _lastSubtitles = [];
-
-  // Stored from the last successful PlaybackInfo call — used in progress reporting
   String _lastPlaySessionId = '';
   String _lastMediaSourceId = '';
-  String _lastPlayMethod = 'DirectPlay'; // 'DirectPlay', 'DirectStream', or 'Transcode'
+  String _lastPlayMethod = 'DirectPlay';
   List<Map<String, dynamic>> get lastSubtitles => _lastSubtitles;
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Auth Headers
-  // ═══════════════════════════════════════════════════════════════════════════
 
   Map<String, String> get _authHeaders {
     final parts = [
       'MediaBrowser Client="PlayTorrio"',
-      'Device="${Platform.isAndroid ? "Android" : "Windows"}"',
+      'Device="${kIsWeb ? "Web" : (platformIsAndroid ? "Android" : "Windows")}"',
       'DeviceId="$_deviceId"',
       'Version="1.0.0"',
     ];
@@ -260,10 +376,8 @@ class JellyfinService {
     };
   }
 
-  /// Public getter for the auth header value (used by proxy & player headers).
   String get authHeaderValue => _authHeaders['X-Emby-Authorization'] ?? '';
 
-  /// Returns auth headers map suitable for player httpHeaders.
   Map<String, String> get streamHeaders => {
     'X-Emby-Authorization': authHeaderValue,
   };
@@ -271,49 +385,60 @@ class JellyfinService {
   String get _base => _activeAccount?.normalizedUrl ?? '';
   String get _userId => _activeAccount?.userId ?? '';
 
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  List<JellyfinItem> _parseItems(dynamic data) {
+    if (data is List) {
+      return data.map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    final items = (data as Map<String, dynamic>)['Items'] as List<dynamic>? ?? [];
+    return items.map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  String _buildQueryUrl(String path, Map<String, String> params) {
+    return Uri.parse('$_base$path').replace(queryParameters: params).toString();
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Account Persistence
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<JellyfinAccount>> getSavedAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final list = prefs.getStringList(_accountsKey) ?? [];
-    return list.map((s) => JellyfinAccount.fromJson(json.decode(s))).toList();
+    final raw = await _secureStorage.read(key: _accountsKey);
+    if (raw == null || raw.isEmpty) return [];
+    final list = json.decode(raw) as List<dynamic>;
+    return list.map((s) => JellyfinAccount.fromJson(s as Map<String, dynamic>)).toList();
   }
 
   Future<void> _saveAccounts(List<JellyfinAccount> accounts) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _accountsKey,
-      accounts.map((a) => json.encode(a.toJson())).toList(),
+    await _secureStorage.write(
+      key: _accountsKey,
+      value: json.encode(accounts.map((a) => a.toJson()).toList()),
     );
   }
 
   Future<void> _setActiveIndex(int index) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_activeAccountKey, index);
+    await _secureStorage.write(key: _activeAccountKey, value: '$index');
   }
 
-  /// Loads the previously active account (called on app start).
   Future<bool> loadSavedSession() async {
-    final prefs = await SharedPreferences.getInstance();
+    await _ensureDeviceId();
     final accounts = await getSavedAccounts();
-    final idx = prefs.getInt(_activeAccountKey) ?? -1;
+    final idxStr = await _secureStorage.read(key: _activeAccountKey);
+    final idx = idxStr != null ? int.tryParse(idxStr) ?? -1 : -1;
     if (idx >= 0 && idx < accounts.length) {
       _activeAccount = accounts[idx];
+      clearCache();
       if (_activeAccount!.accessToken != null) {
-        // Verify the token is still valid
         try {
           final resp = await _get(
               Uri.parse('$_base/Users/Me'),
-              headers: _authHeaders,
-              timeout: const Duration(seconds: 5));
+              headers: _authHeaders);
           if (resp.statusCode == 200) {
             debugPrint('[Jellyfin] Restored session for ${_activeAccount!.username}');
             return true;
           }
         } catch (_) {}
-        // Token invalid — re-login
         try {
           return await login(
             _activeAccount!.serverUrl,
@@ -330,19 +455,20 @@ class JellyfinService {
   // Authentication
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// Authenticate and get access token. Throws on failure.
   Future<bool> login(String serverUrl, String username, String password) async {
+    await _ensureDeviceId();
     _activeAccount = JellyfinAccount(
       serverUrl: serverUrl,
       username: username,
       password: password,
     );
+    clearCache();
 
     final resp = await _post(
-          Uri.parse('$_base/Users/AuthenticateByName'),
-          headers: _authHeaders,
-          body: json.encode({'Username': username, 'Pw': password}),
-          timeout: const Duration(seconds: 15));
+      Uri.parse('$_base/Users/AuthenticateByName'),
+      headers: _authHeaders,
+      body: json.encode({'Username': username, 'Pw': password}),
+    );
 
     if (resp.statusCode != 200) {
       _activeAccount = null;
@@ -354,7 +480,6 @@ class JellyfinService {
     _activeAccount!.userId = (data['User'] as Map<String, dynamic>)['Id'] as String;
     _activeAccount!.serverName = data['ServerId'] as String?;
 
-    // Persist
     final accounts = await getSavedAccounts();
     final existingIdx = accounts.indexWhere(
       (a) => a.normalizedUrl == _activeAccount!.normalizedUrl && a.username == username,
@@ -375,8 +500,8 @@ class JellyfinService {
 
   Future<void> logout() async {
     _activeAccount = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_activeAccountKey);
+    clearCache();
+    await _secureStorage.delete(key: _activeAccountKey);
   }
 
   Future<void> removeAccount(int index) async {
@@ -395,14 +520,15 @@ class JellyfinService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<JellyfinItem>> getLibraries() async {
-    final resp = await _get(
-        Uri.parse('$_base/UserViews?userId=$_userId'),
-        headers: _authHeaders);
+    const cacheKey = '__libraries__';
+    final cached = _getFromCache<List<JellyfinItem>>(cacheKey);
+    if (cached != null) return cached;
+
+    final resp = await _get(Uri.parse('$_base/UserViews?userId=$_userId'), headers: _authHeaders);
     if (resp.statusCode != 200) throw Exception('Failed to fetch libraries');
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final items = _parseItems(json.decode(resp.body));
+    _putInCache(cacheKey, items, _longTtl);
+    return items;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -418,8 +544,7 @@ class JellyfinService {
     int limit = 50,
     String? searchTerm,
     String? genres,
-    String fields =
-        'Overview,Genres,PrimaryImageAspectRatio,MediaStreams,Container',
+    String fields = 'Overview,Genres,PrimaryImageAspectRatio,MediaStreams,Container',
     bool recursive = true,
     String? filters,
   }) async {
@@ -440,24 +565,18 @@ class JellyfinService {
     if (genres != null) params['genres'] = genres;
     if (filters != null) params['filters'] = filters;
 
-    final uri = Uri.parse('$_base/Items').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch items');
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/Items', params);
+    final data = await _cachedGet(url, ttl: _mediumTtl);
+    return _parseItems(data);
   }
 
-  /// Like [getItems] but also returns the server-side [totalCount] so the
-  /// caller can implement pagination with prev/next buttons.
   Future<({List<JellyfinItem> items, int totalCount})> getItemsPaged({
     String? parentId,
     String? includeItemTypes,
     String sortBy = 'SortName',
     String sortOrder = 'Ascending',
     int startIndex = 0,
-    int limit = 50,
+    int? limit,
     String? searchTerm,
     String fields = 'Overview,Genres,PrimaryImageAspectRatio,MediaStreams,Container',
     bool recursive = true,
@@ -468,33 +587,32 @@ class JellyfinService {
       'sortBy': sortBy,
       'sortOrder': sortOrder,
       'startIndex': '$startIndex',
-      'limit': '$limit',
       'fields': fields,
       'enableImageTypes': 'Primary,Backdrop,Thumb',
       'imageTypeLimit': '1',
       'enableTotalRecordCount': 'true',
     };
+    if (limit != null) params['limit'] = '$limit';
     if (parentId != null) params['parentId'] = parentId;
     if (includeItemTypes != null) params['includeItemTypes'] = includeItemTypes;
     if (searchTerm != null && searchTerm.isNotEmpty) params['searchTerm'] = searchTerm;
 
-    final uri = Uri.parse('$_base/Items').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
+    final url = _buildQueryUrl('/Items', params);
+    // Use a longer timeout when fetching all items (no limit) — large
+    // libraries can take the server a while to serialize.
+    final timeout = limit == null ? const Duration(seconds: 60) : const Duration(seconds: 30);
+    final resp = await _get(Uri.parse(url), headers: _authHeaders, timeout: timeout);
     if (resp.statusCode != 200) throw Exception('Failed to fetch items: ${resp.statusCode}');
     final data = json.decode(resp.body) as Map<String, dynamic>;
-    final items = (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final items = _parseItems(data);
     final total = (data['TotalRecordCount'] as num?)?.toInt() ?? items.length;
     return (items: items, totalCount: total);
   }
 
   Future<JellyfinItem> getItemDetails(String itemId) async {
-    final resp = await _get(
-          Uri.parse('$_base/Items/$itemId?userId=$_userId'),
-          headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch item details');
-    return JellyfinItem.fromJson(json.decode(resp.body));
+    final url = '$_base/Items/$itemId?userId=$_userId';
+    final data = await _cachedGet(url, ttl: _mediumTtl);
+    return JellyfinItem.fromJson(data as Map<String, dynamic>);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -517,11 +635,9 @@ class JellyfinService {
     if (parentId != null) params['parentId'] = parentId;
     if (includeItemTypes != null) params['includeItemTypes'] = includeItemTypes;
 
-    final uri = Uri.parse('$_base/Items/Latest').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch latest items');
-    final list = json.decode(resp.body) as List<dynamic>;
-    return list.map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>)).toList();
+    final url = _buildQueryUrl('/Items/Latest', params);
+    final data = await _cachedGet(url, ttl: _shortTtl);
+    return _parseItems(data);
   }
 
   Future<List<JellyfinItem>> getResumeItems({int limit = 12}) async {
@@ -534,13 +650,13 @@ class JellyfinService {
       'imageTypeLimit': '1',
       'enableImageTypes': 'Primary,Backdrop,Thumb',
     };
-    final uri = Uri.parse('$_base/UserItems/Resume').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) return [];
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/UserItems/Resume', params);
+    try {
+      final data = await _cachedGet(url, ttl: _shortTtl);
+      return _parseItems(data);
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<List<JellyfinItem>> getNextUp({int limit = 20}) async {
@@ -551,13 +667,56 @@ class JellyfinService {
       'enableImages': 'true',
       'enableImageTypes': 'Primary,Backdrop,Thumb',
     };
-    final uri = Uri.parse('$_base/Shows/NextUp').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) return [];
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/Shows/NextUp', params);
+    try {
+      final data = await _cachedGet(url, ttl: _shortTtl);
+      return _parseItems(data);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Parallel Home Data Loading
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /// Loads all home screen data in parallel: libraries, resume, nextUp, and
+  /// latest items per video library. Returns a [HomeData] bundle.
+  /// This replaces the old sequential pattern where the screen awaited each
+  /// call one-by-one.
+  Future<HomeData> loadHomeData() async {
+    // Phase 1: libraries + resume + nextUp in parallel
+    final results = await Future.wait([
+      getLibraries(),
+      getResumeItems(limit: 12),
+      getNextUp(limit: 20),
+    ]);
+
+    final libraries = results[0];
+    final resumeItems = results[1];
+    final nextUpItems = results[2];
+
+    // Phase 2: latest items per video library in parallel
+    final videoLibs = libraries.where(
+      (l) => l.collectionType == 'movies' || l.collectionType == 'tvshows' || l.collectionType == null,
+    ).toList();
+
+    final latestFutures = videoLibs.map(
+      (lib) => getLatestItems(parentId: lib.id, limit: 16)
+          .then((items) => MapEntry(lib.name, items))
+          .catchError((_) => MapEntry(lib.name, <JellyfinItem>[])),
+    );
+    final latestEntries = await Future.wait(latestFutures);
+    final latestByLibrary = Map<String, List<JellyfinItem>>.fromEntries(
+      latestEntries.where((e) => e.value.isNotEmpty),
+    );
+
+    return HomeData(
+      libraries: libraries,
+      resumeItems: resumeItems,
+      nextUpItems: nextUpItems,
+      latestByLibrary: latestByLibrary,
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -565,15 +724,10 @@ class JellyfinService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<List<JellyfinItem>> getSeasons(String seriesId) async {
-    final resp = await _get(
-          Uri.parse('$_base/Shows/$seriesId/Seasons?userId=$_userId'
-              '&fields=Overview,PrimaryImageAspectRatio'),
-          headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch seasons');
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = '$_base/Shows/$seriesId/Seasons?userId=$_userId'
+        '&fields=Overview,PrimaryImageAspectRatio';
+    final data = await _cachedGet(url, ttl: _mediumTtl);
+    return _parseItems(data);
   }
 
   Future<List<JellyfinItem>> getEpisodes(String seriesId, {String? seasonId, int? seasonNumber}) async {
@@ -584,17 +738,11 @@ class JellyfinService {
     if (seasonId != null) params['seasonId'] = seasonId;
     if (seasonNumber != null) params['season'] = '$seasonNumber';
 
-    final uri = Uri.parse('$_base/Shows/$seriesId/Episodes').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch episodes: ${resp.statusCode}');
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/Shows/$seriesId/Episodes', params);
+    final data = await _cachedGet(url, ttl: _mediumTtl);
+    return _parseItems(data);
   }
 
-  /// Fallback episode fetch using /Items endpoint with seriesId filter.
-  /// Used when /Shows/{id}/Episodes returns empty for plugin-backed shows.
   Future<List<JellyfinItem>> getEpisodesByItems(String seriesId) async {
     final params = <String, String>{
       'userId': _userId,
@@ -605,24 +753,93 @@ class JellyfinService {
       'sortOrder': 'Ascending',
       'fields': 'Overview,PrimaryImageAspectRatio,MediaStreams,Container,ParentIndexNumber,IndexNumber',
     };
-    final uri = Uri.parse('$_base/Items').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) throw Exception('Failed to fetch episodes via Items: ${resp.statusCode}');
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/Items', params);
+    final data = await _cachedGet(url, ttl: _mediumTtl);
+    return _parseItems(data);
   }
 
-  /// Searches tvshows libraries for a Series by name and returns the canonical
-  /// item ID — i.e. the one that belongs to a proper TV library with season
-  /// metadata. Used as fallback when an item found via global search is a
-  /// virtual/plugin copy that lacks season/episode hierarchy.
+  /// Parallel series detail loader — fetches details, seasons, episodes, and
+  /// similar items concurrently instead of sequentially.
+  Future<SeriesData> loadSeriesData(String seriesId, {String? firstGenre}) async {
+    // Phase 1: details + seasons in parallel (similar deferred until we have genres)
+    final detailsFuture = getItemDetails(seriesId);
+    final seasonsFuture = getSeasons(seriesId).catchError((_) => <JellyfinItem>[]);
+
+    final results = await Future.wait([detailsFuture, seasonsFuture]);
+    final details = results[0] as JellyfinItem;
+    final seasons = results[1] as List<JellyfinItem>;
+
+    // Use detail's genres if caller didn't provide one (stub items from Continue Watching etc.)
+    final genre = firstGenre ?? (details.genres.isNotEmpty ? details.genres.first : null);
+
+    // Phase 2: episodes + similar in parallel
+    final similarFuture = genre != null
+        ? getItems(
+            includeItemTypes: 'Series',
+            sortBy: 'Random',
+            limit: 12,
+            genres: genre,
+          ).then((items) => items.where((i) => i.id != seriesId).toList())
+          .catchError((_) => <JellyfinItem>[])
+        : Future.value(<JellyfinItem>[]);
+
+    List<JellyfinItem> allEpisodes = [];
+    if (seasons.isNotEmpty) {
+      final episodeFutures = seasons.map(
+        (s) => getEpisodes(seriesId, seasonId: s.id).catchError((_) => <JellyfinItem>[]),
+      );
+      final episodeResults = await Future.wait([
+        ...episodeFutures,
+        similarFuture,
+      ]);
+      // Last result is similar items, rest are episode lists
+      final similarItems = episodeResults.last;
+      final episodeLists = episodeResults.sublist(0, episodeResults.length - 1);
+      allEpisodes = episodeLists.expand((e) => e).toList();
+
+      // If no episodes found, try fallback methods
+      if (allEpisodes.isEmpty) {
+        allEpisodes = await getEpisodes(seriesId).catchError((_) => <JellyfinItem>[]);
+      }
+      if (allEpisodes.isEmpty) {
+        allEpisodes = await getEpisodesByItems(seriesId).catchError((_) => <JellyfinItem>[]);
+      }
+
+      return SeriesData(
+        details: details,
+        seasons: seasons,
+        allEpisodes: allEpisodes,
+        similarItems: similarItems,
+      );
+    }
+
+    // No seasons — fetch episodes + similar in parallel
+    final fallbackResults = await Future.wait([
+      getEpisodes(seriesId).catchError((_) => <JellyfinItem>[]),
+      similarFuture,
+    ]);
+    allEpisodes = fallbackResults[0];
+    final similarItems = fallbackResults[1];
+
+    if (allEpisodes.isEmpty) {
+      allEpisodes = await getEpisodesByItems(seriesId).catchError((_) => <JellyfinItem>[]);
+    }
+
+    return SeriesData(
+      details: details,
+      seasons: seasons,
+      allEpisodes: allEpisodes,
+      similarItems: similarItems,
+    );
+  }
+
   Future<String?> findCanonicalSeriesId(String seriesName, {String? excludeId}) async {
     try {
       final libraries = await getLibraries();
       final tvLibs = libraries.where((l) => l.collectionType == 'tvshows').toList();
-      for (final lib in tvLibs) {
+
+      // Search all TV libraries in parallel
+      final futures = tvLibs.map((lib) async {
         final params = <String, String>{
           'userId': _userId,
           'parentId': lib.id,
@@ -632,17 +849,20 @@ class JellyfinService {
           'limit': '5',
           'fields': 'PrimaryImageAspectRatio',
         };
-        final uri = Uri.parse('$_base/Items').replace(queryParameters: params);
-        final resp = await _get(uri, headers: _authHeaders);
-        if (resp.statusCode != 200) continue;
-        final data = json.decode(resp.body);
-        final items = (data['Items'] as List<dynamic>)
-            .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-            .toList();
+        final url = _buildQueryUrl('/Items', params);
+        try {
+          final data = await _cachedGet(url, ttl: _mediumTtl);
+          return _parseItems(data);
+        } catch (_) {
+          return <JellyfinItem>[];
+        }
+      });
+
+      final results = await Future.wait(futures);
+      for (final items in results) {
         for (final item in items) {
           if (excludeId == null || item.id != excludeId) {
-            debugPrint('[Jellyfin] Canonical series found in library "${lib.name}": '
-                '${item.name} (${item.id})');
+            debugPrint('[Jellyfin] Canonical series found: ${item.name} (${item.id})');
             return item.id;
           }
         }
@@ -669,25 +889,19 @@ class JellyfinService {
       'imageTypeLimit': '1',
       'enableImageTypes': 'Primary,Backdrop,Thumb',
     };
-    final uri = Uri.parse('$_base/Items').replace(queryParameters: params);
-    final resp = await _get(uri, headers: _authHeaders);
-    if (resp.statusCode != 200) return [];
-    final data = json.decode(resp.body);
-    return (data['Items'] as List<dynamic>)
-        .map((e) => JellyfinItem.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final url = _buildQueryUrl('/Items', params);
+    try {
+      final data = await _cachedGet(url, ttl: _shortTtl);
+      return _parseItems(data);
+    } catch (_) {
+      return [];
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PlaybackInfo & Streaming URL
+  // PlaybackInfo & Streaming
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// Calls POST /Items/{id}/PlaybackInfo to register a playback session.
-  /// [startTimeTicks] bakes the resume offset into the returned HLS URL.
-  /// [forceTranscode] skips direct play/stream entirely — used when the first
-  /// attempt returned a direct-play URL that turned out to be inaccessible
-  /// (e.g. AIOstreams/debrid sources where the Jellyfin server can't serve
-  /// the file statically because it's a remote HTTP URL).
   Future<Map<String, String>?> getPlaybackInfo(String itemId,
       {int startTimeTicks = 0, bool forceTranscode = false}) async {
     try {
@@ -699,9 +913,6 @@ class JellyfinService {
         body: json.encode({
           'DeviceProfile': _buildDeviceProfile(),
           'UserId': _userId,
-          // When forceTranscode=true, tell server to skip direct play entirely.
-          // This makes it return only a TranscodingUrl — used for remote HTTP
-          // sources (AIOstreams, debrid) where Static=true returns 403.
           'EnableDirectPlay': !forceTranscode,
           'EnableDirectStream': !forceTranscode,
           'EnableTranscoding': true,
@@ -711,7 +922,7 @@ class JellyfinService {
       );
 
       if (resp.statusCode != 200) {
-        debugPrint('[Jellyfin] PlaybackInfo error: ${resp.statusCode} ${resp.body}');
+        debugPrint('[Jellyfin] PlaybackInfo error: ${resp.statusCode}');
         return null;
       }
 
@@ -719,65 +930,38 @@ class JellyfinService {
       final playSessionId = data['PlaySessionId'] as String? ?? '';
       final sources = data['MediaSources'] as List<dynamic>?;
 
-      // Extract subtitles from MediaStreams
       _lastSubtitles = _extractSubtitles(
         sources?.isNotEmpty == true ? sources![0] as Map<String, dynamic> : null,
         itemId,
       );
 
-      if (sources != null && sources.isNotEmpty) {
-        final src = sources[0] as Map<String, dynamic>;
-        final supportsDirectPlay = src['SupportsDirectPlay'] == true;
-        final supportsDirectStream = src['SupportsDirectStream'] == true;
-        final transcodingUrl = src['TranscodingUrl'] as String?;
-        final msId = src['Id'] as String? ?? itemId;
-        final sourcePath = src['Path'] as String? ?? '';
+      if (sources == null || sources.isEmpty) {
+        _lastPlaySessionId = playSessionId;
+        _lastMediaSourceId = itemId;
+        _lastPlayMethod = 'DirectPlay';
+        return {'mode': 'direct', 'mediaSourceId': itemId, 'container': 'mp4', 'playSessionId': playSessionId, 'etag': ''};
+      }
 
-        debugPrint('[Jellyfin] PlaybackInfo: directPlay=$supportsDirectPlay, '
-            'directStream=$supportsDirectStream, '
-            'path=${sourcePath.startsWith('http') ? '[remote]' : '[local]'}, '
-            'transcodingUrl=${transcodingUrl != null ? "present" : "null"}');
+      final src = sources[0] as Map<String, dynamic>;
+      final supportsDirectPlay = src['SupportsDirectPlay'] == true;
+      final supportsDirectStream = src['SupportsDirectStream'] == true;
+      final transcodingUrl = src['TranscodingUrl'] as String?;
+      final msId = src['Id'] as String? ?? itemId;
+      final sourcePath = src['Path'] as String? ?? '';
 
-        if (supportsDirectPlay || supportsDirectStream) {
-          // If the source file path is a remote HTTP URL (AIOstreams, debrid, etc.)
-          // the Jellyfin server cannot serve it with Static=true — it would 403.
-          // Retry with direct play disabled to get a working TranscodingUrl instead.
-          if (!forceTranscode && sourcePath.startsWith('http')) {
-            debugPrint('[Jellyfin] Remote source path detected — retrying with forced transcode');
-            return getPlaybackInfo(itemId,
-                startTimeTicks: startTimeTicks, forceTranscode: true);
-          }
+      debugPrint('[Jellyfin] PlaybackInfo: dp=$supportsDirectPlay ds=$supportsDirectStream '
+          'path=${sourcePath.startsWith('http') ? 'remote' : 'local'} '
+          'transcode=${transcodingUrl != null}');
 
-          _lastPlaySessionId = playSessionId;
-          _lastMediaSourceId = msId;
-          _lastPlayMethod = supportsDirectPlay ? 'DirectPlay' : 'DirectStream';
-          return {
-            'mode': 'direct',
-            'mediaSourceId': msId,
-            'container': (src['Container'] as String? ?? 'mp4').toLowerCase(),
-            'playSessionId': playSessionId,
-            'etag': src['ETag'] as String? ?? '',
-          };
-        } else if (transcodingUrl != null && transcodingUrl.isNotEmpty) {
-          // Server requires transcoding — use the HLS URL it gave us
-          final fullUrl = transcodingUrl.startsWith('http')
-              ? transcodingUrl
-              : '$_base$transcodingUrl';
-          _lastPlaySessionId = playSessionId;
-          _lastMediaSourceId = msId;
-          _lastPlayMethod = 'Transcode';
-          debugPrint('[Jellyfin] Using transcoding URL');
-          return {
-            'mode': 'transcode',
-            'url': fullUrl,
-            'playSessionId': playSessionId,
-          };
+      if (supportsDirectPlay || supportsDirectStream) {
+        if (!forceTranscode && sourcePath.startsWith('http')) {
+          debugPrint('[Jellyfin] Remote source → forced transcode');
+          return getPlaybackInfo(itemId, startTimeTicks: startTimeTicks, forceTranscode: true);
         }
 
-        // Fallback to direct attempt
         _lastPlaySessionId = playSessionId;
         _lastMediaSourceId = msId;
-        _lastPlayMethod = 'DirectPlay';
+        _lastPlayMethod = supportsDirectPlay ? 'DirectPlay' : 'DirectStream';
         return {
           'mode': 'direct',
           'mediaSourceId': msId,
@@ -786,10 +970,26 @@ class JellyfinService {
           'etag': src['ETag'] as String? ?? '',
         };
       }
+
+      if (transcodingUrl != null && transcodingUrl.isNotEmpty) {
+        final fullUrl = transcodingUrl.startsWith('http') ? transcodingUrl : '$_base$transcodingUrl';
+        _lastPlaySessionId = playSessionId;
+        _lastMediaSourceId = msId;
+        _lastPlayMethod = 'Transcode';
+        return {'mode': 'transcode', 'url': fullUrl, 'playSessionId': playSessionId};
+      }
+
+      // Fallback
       _lastPlaySessionId = playSessionId;
-      _lastMediaSourceId = itemId;
+      _lastMediaSourceId = msId;
       _lastPlayMethod = 'DirectPlay';
-      return {'mode': 'direct', 'mediaSourceId': itemId, 'container': 'mp4', 'playSessionId': playSessionId, 'etag': ''};
+      return {
+        'mode': 'direct',
+        'mediaSourceId': msId,
+        'container': (src['Container'] as String? ?? 'mp4').toLowerCase(),
+        'playSessionId': playSessionId,
+        'etag': src['ETag'] as String? ?? '',
+      };
     } catch (e) {
       debugPrint('[Jellyfin] PlaybackInfo exception: $e');
       _lastSubtitles = [];
@@ -797,17 +997,7 @@ class JellyfinService {
     }
   }
 
-  /// Extracts subtitle tracks from a MediaSource that can be delivered as
-  /// external streams, and returns them in the format used by the player:
-  /// [{url, display, language}].
-  ///
-  /// Includes both text-based subs (SRT/ASS → requested as .srt) and
-  /// image-based subs that support external delivery (PGSSUB → .sup,
-  /// DVDSUB → .sub), since mpv/media_kit handles all of these natively.
-  List<Map<String, dynamic>> _extractSubtitles(
-    Map<String, dynamic>? mediaSource,
-    String itemId,
-  ) {
+  List<Map<String, dynamic>> _extractSubtitles(Map<String, dynamic>? mediaSource, String itemId) {
     if (mediaSource == null) return [];
     final streams = mediaSource['MediaStreams'] as List<dynamic>? ?? [];
     final msId = mediaSource['Id'] as String? ?? itemId;
@@ -816,9 +1006,7 @@ class JellyfinService {
     for (final s in streams) {
       final stream = s as Map<String, dynamic>;
       if (stream['Type'] != 'Subtitle') continue;
-
-      final supportsExternal = stream['SupportsExternalStream'] == true;
-      if (!supportsExternal) continue; // Only include deliverable tracks
+      if (stream['SupportsExternalStream'] != true) continue;
 
       final isText = stream['IsTextSubtitleStream'] == true;
       final index = stream['Index'] as int? ?? 0;
@@ -829,25 +1017,22 @@ class JellyfinService {
       final isForced = stream['IsForced'] == true;
       final isExternal = stream['IsExternal'] == true;
 
-      // Determine the best format extension for this subtitle type
       final String format;
       if (isText) {
-        format = 'srt'; // Request SRT conversion for all text subs
+        format = 'srt';
       } else if (codec == 'pgssub' || codec == 'hdmv_pgs_subtitle') {
-        format = 'sup'; // PGS image subtitle (blu-ray)
+        format = 'sup';
       } else if (codec == 'dvdsub' || codec == 'dvd_subtitle') {
-        format = 'sub'; // DVD image subtitle
+        format = 'sub';
       } else {
-        format = 'srt'; // Fallback
+        format = 'srt';
       }
 
-      // Build display label
       final parts = <String>[displayTitle];
       if (isDefault) parts.add('[Default]');
       if (isForced) parts.add('[Forced]');
       if (isExternal) parts.add('[External]');
 
-      // Build subtitle URL and route through proxy for auth
       final directUrl = '$_base/Videos/$itemId/$msId/Subtitles/$index/0/Stream.$format';
       final proxyUrl = LocalServerService().getJellyfinProxyUrl(directUrl, authHeaderValue);
 
@@ -862,34 +1047,27 @@ class JellyfinService {
       });
     }
 
-    debugPrint('[Jellyfin] Found ${subs.length} deliverable subtitle tracks');
+    debugPrint('[Jellyfin] Found ${subs.length} subtitle tracks');
     return subs;
   }
 
-  /// Returns a subtitle URL for a specific track index and format.
   String getSubtitleUrl(String itemId, String mediaSourceId, int subtitleIndex, {String format = 'srt'}) {
     final directUrl = '$_base/Videos/$itemId/$mediaSourceId/Subtitles/$subtitleIndex/0/Stream.$format';
     return LocalServerService().getJellyfinProxyUrl(directUrl, authHeaderValue);
   }
 
-  /// DeviceProfile matching jellyfin-web capabilities.
-  /// Wide DirectPlay support to avoid unnecessary transcoding.
-  /// HLS TranscodingProfile uses TS segments (standard) with BreakOnNonKeyFrames
-  /// and MinSegments=2 for proper buffering and seeking.
   Map<String, dynamic> _buildDeviceProfile() {
     return {
       'MaxStreamingBitrate': 150000000,
       'MaxStaticBitrate': 150000000,
       'MusicStreamingTranscodingBitrate': 384000,
       'DirectPlayProfiles': [
-        // Video — wide codec support to maximise direct play
         {
           'Container': 'mp4,m4v,mkv,mov,avi,ts,m2ts,flv,webm,mpeg,ogv',
           'Type': 'Video',
           'VideoCodec': 'h264,hevc,h265,av1,vp8,vp9,vc1,mpeg2video,mpeg4',
-          'AudioCodec': 'aac,mp3,ac3,eac3,dts,truehd,flac,opus,vorbis,pcm_s16le,pcm_s24le'
+          'AudioCodec': 'aac,mp3,ac3,eac3,dts,truehd,flac,opus,vorbis,pcm_s16le,pcm_s24le',
         },
-        // Audio
         {'Container': 'mp3', 'Type': 'Audio'},
         {'Container': 'aac', 'Type': 'Audio'},
         {'Container': 'flac', 'Type': 'Audio'},
@@ -899,16 +1077,15 @@ class JellyfinService {
       ],
       'TranscodingProfiles': [
         {
-          // TS segments (standard HLS — 'mp4' causes compat issues on many servers)
           'Container': 'ts',
           'Type': 'Video',
-          'VideoCodec': 'h264',             // h264 is universally supported for HLS
+          'VideoCodec': 'h264',
           'AudioCodec': 'aac,ac3',
           'Context': 'Streaming',
           'Protocol': 'hls',
           'MaxAudioChannels': '6',
-          'MinSegments': '2',               // 2+ for proper buffering
-          'BreakOnNonKeyFrames': true,       // required for accurate HLS seeking
+          'MinSegments': '2',
+          'BreakOnNonKeyFrames': true,
           'EnableAudioVbrEncoding': true,
         },
       ],
@@ -925,11 +1102,6 @@ class JellyfinService {
     };
   }
 
-  /// Builds the direct-play/direct-stream URL matching the format used by jellyfin-web:
-  ///   /Videos/{id}/stream.{container}?Static=true&mediaSourceId={msId}&deviceId={did}&ApiKey={token}
-  ///
-  /// Note: Do NOT add startTimeTicks here — it's not valid for Static=true streams.
-  /// Seeking is handled natively via HTTP Range requests by the player.
   String _buildStreamUrl(String itemId, {String? container, String? mediaSourceId, String? etag}) {
     final ext = container ?? 'mp4';
     final msId = mediaSourceId ?? itemId;
@@ -944,20 +1116,18 @@ class JellyfinService {
     };
     if (etag != null && etag.isNotEmpty) params['Tag'] = etag;
 
-    final uri = Uri.parse('$_base/Videos/$itemId/stream.$ext').replace(queryParameters: params);
-    return uri.toString();
+    return Uri.parse('$_base/Videos/$itemId/stream.$ext').replace(queryParameters: params).toString();
   }
 
-  /// Returns the stream URL (direct play or transcoded HLS).
-  /// Calls PlaybackInfo first; if server requires transcoding, uses the
-  /// transcoding URL it provides; otherwise builds a direct-play URL.
-  Future<String> getStreamUrl(String itemId) async {
-    final info = await getPlaybackInfo(itemId);
+  /// Resolves a stream URL — handles direct-play validation and transcode fallback.
+  /// Returns the URL and whether the stream is transcoded (so callers know
+  /// not to pass a seek position — the server already starts at the offset).
+  Future<({String url, bool isTranscode})> _resolveStreamUrl(String itemId, {int startTimeTicks = 0}) async {
+    final info = await getPlaybackInfo(itemId, startTimeTicks: startTimeTicks);
+    final proxy = LocalServerService();
 
     if (info?['mode'] == 'transcode' && info?['url'] != null) {
-      final transUrl = info!['url']!;
-      debugPrint('[Jellyfin] Stream URL (transcode): $transUrl');
-      return LocalServerService().getJellyfinProxyUrl(transUrl, authHeaderValue);
+      return (url: proxy.getJellyfinProxyUrl(info!['url']!, authHeaderValue), isTranscode: true);
     }
 
     final directUrl = _buildStreamUrl(
@@ -966,37 +1136,38 @@ class JellyfinService {
       mediaSourceId: info?['mediaSourceId'],
       etag: info?['etag'],
     );
-    debugPrint('[Jellyfin] Stream URL (direct): $directUrl');
-    return LocalServerService().getJellyfinProxyUrl(directUrl, authHeaderValue);
-  }
 
-  /// Returns the stream URL with a resume position.
-  ///
-  /// For HLS transcoded streams, StartTimeTicks must be passed to PlaybackInfo
-  /// so the server generates an M3U8 with the offset already baked in.
-  /// For direct streams, native HTTP Range seeking handles position automatically.
-  Future<String> getStreamUrlWithResume(String itemId, int positionTicks) async {
-    // Pass startTimeTicks to PlaybackInfo — the server bakes the offset into
-    // the returned HLS URL so segment numbering starts at the right position.
-    final info = await getPlaybackInfo(itemId, startTimeTicks: positionTicks);
-
-    if (info?['mode'] == 'transcode' && info?['url'] != null) {
-      // The TranscodingUrl already contains StartTimeTicks — use it as-is.
-      final transUrl = info!['url']!;
-      debugPrint('[Jellyfin] Stream URL (transcode+resume @$positionTicks): $transUrl');
-      return LocalServerService().getJellyfinProxyUrl(transUrl, authHeaderValue);
+    final valid = await _validateStreamUrl(directUrl);
+    if (!valid) {
+      debugPrint('[Jellyfin] Direct URL invalid → transcode fallback');
+      final transInfo = await getPlaybackInfo(itemId,
+          startTimeTicks: startTimeTicks, forceTranscode: true);
+      if (transInfo?['mode'] == 'transcode' && transInfo?['url'] != null) {
+        return (url: proxy.getJellyfinProxyUrl(transInfo!['url']!, authHeaderValue), isTranscode: true);
+      }
     }
 
-    // Direct stream — Static=true; Range header handles seeking natively.
-    // Do NOT pass startTimeTicks here; it's not valid for Static streams.
-    final directUrl = _buildStreamUrl(
-      itemId,
-      container: info?['container'],
-      mediaSourceId: info?['mediaSourceId'],
-      etag: info?['etag'],
-    );
-    debugPrint('[Jellyfin] Stream URL (direct+resume): $directUrl');
-    return LocalServerService().getJellyfinProxyUrl(directUrl, authHeaderValue);
+    return (url: proxy.getJellyfinProxyUrl(directUrl, authHeaderValue), isTranscode: false);
+  }
+
+  Future<({String url, bool isTranscode})> getStreamUrl(String itemId) => _resolveStreamUrl(itemId);
+
+  Future<({String url, bool isTranscode})> getStreamUrlWithResume(String itemId, int positionTicks) =>
+      _resolveStreamUrl(itemId, startTimeTicks: positionTicks);
+
+  Future<bool> _validateStreamUrl(String url) async {
+    try {
+      final resp = await _request('HEAD', Uri.parse(url),
+          headers: _authHeaders, timeout: const Duration(seconds: 8), maxRetries: 0);
+      if (resp.statusCode >= 400) {
+        debugPrint('[Jellyfin] Stream validation failed: ${resp.statusCode}');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[Jellyfin] Stream validation error: $e');
+      return false;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1026,7 +1197,7 @@ class JellyfinService {
       getImageUrl(itemId, type: 'Backdrop', tag: tag, maxWidth: maxWidth);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Playback Reporting (sync watch state back to Jellyfin)
+  // Playback Reporting
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> reportPlaybackStart(String itemId) async {
@@ -1089,10 +1260,8 @@ class JellyfinService {
 
   Future<void> markPlayed(String itemId) async {
     try {
-      await _post(
-        Uri.parse('$_base/UserPlayedItems/$itemId?userId=$_userId'),
-        headers: _authHeaders,
-      );
+      await _post(Uri.parse('$_base/UserPlayedItems/$itemId?userId=$_userId'), headers: _authHeaders);
+      _invalidateItem(itemId);
     } catch (e) {
       debugPrint('[Jellyfin] Mark played error: $e');
     }
@@ -1100,10 +1269,8 @@ class JellyfinService {
 
   Future<void> markUnplayed(String itemId) async {
     try {
-      await _delete(
-        Uri.parse('$_base/UserPlayedItems/$itemId?userId=$_userId'),
-        headers: _authHeaders,
-      );
+      await _delete(Uri.parse('$_base/UserPlayedItems/$itemId?userId=$_userId'), headers: _authHeaders);
+      _invalidateItem(itemId);
     } catch (e) {
       debugPrint('[Jellyfin] Mark unplayed error: $e');
     }
@@ -1112,18 +1279,25 @@ class JellyfinService {
   Future<void> toggleFavorite(String itemId, bool isFavorite) async {
     try {
       if (isFavorite) {
-        await _delete(
-          Uri.parse('$_base/UserFavoriteItems/$itemId?userId=$_userId'),
-          headers: _authHeaders,
-        );
+        await _delete(Uri.parse('$_base/UserFavoriteItems/$itemId?userId=$_userId'), headers: _authHeaders);
       } else {
-        await _post(
-          Uri.parse('$_base/UserFavoriteItems/$itemId?userId=$_userId'),
-          headers: _authHeaders,
-        );
+        await _post(Uri.parse('$_base/UserFavoriteItems/$itemId?userId=$_userId'), headers: _authHeaders);
       }
+      _invalidateItem(itemId);
     } catch (e) {
       debugPrint('[Jellyfin] Toggle favorite error: $e');
     }
+  }
+
+  /// Removes cached data for a specific item so the next fetch returns fresh state.
+  void _invalidateItem(String itemId) {
+    _cache.removeWhere((key, _) => key.contains(itemId));
+  }
+
+  /// Clears playback-related cache (resume, nextUp) so the home screen
+  /// shows fresh data after returning from the player.
+  void invalidatePlaybackCache() {
+    _cache.removeWhere((key, _) =>
+        key.contains('/UserItems/Resume') || key.contains('/Shows/NextUp'));
   }
 }
