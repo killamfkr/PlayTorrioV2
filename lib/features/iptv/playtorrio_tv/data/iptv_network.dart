@@ -551,12 +551,13 @@ class IptvScraper {
   // Googlebot UA for direct Reddit JSON when they allow crawlers.
   static const _catalogDirectUa =
       'Googlebot/2.1 (+http://www.google.com/bot.html)';
-  // Public fetch proxies ordered by observed reliability (corsproxy.io has
-  // worked in practice; others are fallbacks). `{URL}` = URL-encoded target.
+  // Public fetch proxies. `{URL}` = URL-encoded target. corsproxy.io now expects
+  // `?url=` (legacy `?{URL}` kept as a fallback for older clients).
   static const _fetchProxies = <String>[
+    'https://corsproxy.io/?url={URL}',
     'https://corsproxy.io/?{URL}',
-    'https://api.codetabs.com/v1/proxy?quest={URL}',
     'https://api.allorigins.win/raw?url={URL}',
+    'https://api.codetabs.com/v1/proxy?quest={URL}',
   ];
   /// Third-party wrapper for Reddit RSS when all direct/proxy fetches return non-200.
   static const _rss2Json =
@@ -607,41 +608,67 @@ class IptvScraper {
     final m3uSnippets = <IptvScrapedM3uSnippet>[];
     final out = <String, IptvPortal>{};
 
-    // 1) Standard subreddit .json listing (old + new reddit, proxies, jina mirror).
     var listingJsonFailed = false;
     var feedReached = false;
-    String? catalogJson = await _tryFetchSubredditJson(after: after);
-    if (catalogJson == null) listingJsonFailed = true;
-    if (catalogJson != null) {
-      final r = await _parseAndProcessListing(
-        catalogJson, out, m3uSnippets, maxResults);
-      if (r.parsed) {
-        if (out.isNotEmpty) {
-          debugPrint('[Catalog] DONE — ${out.length} (listing API)');
+
+    // 1) rss2json first — Reddit blocks direct JSON/RSS from most networks;
+    // CORS proxies (corsproxy.io, allorigins) often fail too. rss2json still
+    // works and posts link to encrypted paste.sh blobs we decrypt below.
+    final paging = after != null && after.isNotEmpty;
+    if (!paging) {
+      debugPrint('[Catalog] trying rss2json (fast path)');
+      final rssFast = await _tryFetchRss2Json();
+      if (rssFast != null) {
+        feedReached = true;
+        await _scrapeFromRss(rssFast, out, m3uSnippets, maxResults);
+        if (out.length >= maxResults) {
+          debugPrint('[Catalog] DONE — ${out.length} (rss2json)');
           return ScrapePage(
             portals: out.values.toList(),
-            nextAfter: r.nextAfter,
+            nextAfter: null,
             m3uSnippets: m3uSnippets,
           );
         }
+      }
+    }
+
+    // 2) Subreddit .json listing (pagination via after + full selftext when reachable).
+    String? catalogJson = await _tryFetchSubredditJson(after: after);
+    if (catalogJson == null) listingJsonFailed = true;
+    String? nextAfter;
+    if (catalogJson != null) {
+      final r = await _parseAndProcessListing(
+        catalogJson, out, m3uSnippets, maxResults);
+      nextAfter = r.nextAfter;
+      if (r.parsed && out.isNotEmpty) {
+        debugPrint('[Catalog] DONE — ${out.length} (listing API)');
+        return ScrapePage(
+          portals: out.values.toList(),
+          nextAfter: nextAfter,
+          m3uSnippets: m3uSnippets,
+        );
+      }
+      if (r.parsed) {
         debugPrint(
             '[Catalog] JSON listing parsed but 0 portal lines; will try RSS');
       }
     }
 
-    // 2) RSS: listing API often 403/429; RSS and per-post .json may still work.
-    debugPrint('[Catalog] falling back to RSS + per-post JSON');
-    final rss = await _fetchRss();
-    if (rss != null) {
-      feedReached = true;
-      await _scrapeFromRss(rss, out, m3uSnippets, maxResults);
+    // 3) RSS (+ per-post JSON) when JSON is blocked or posts only link pastes.
+    if (out.length < maxResults) {
+      debugPrint('[Catalog] RSS + per-post JSON (have ${out.length} so far)');
+      final rss = await _fetchRss();
+      if (rss != null) {
+        feedReached = true;
+        await _scrapeFromRss(rss, out, m3uSnippets, maxResults);
+      }
     }
 
     debugPrint(
         '[Catalog] DONE — ${out.length} (feed=$feedReached, M3U: ${m3uSnippets.length})');
     return ScrapePage(
       portals: out.values.toList(),
-      nextAfter: null,
+      nextAfter: nextAfter,
       catalogError: out.isNotEmpty
           ? null
           : _catalogErrorWhenEmpty(
@@ -655,11 +682,11 @@ class IptvScraper {
     required bool feedOk,
   }) {
     if (listingJsonFailed && !feedOk) {
-      return 'Reddit is blocking this network (JSON and RSS). '
-          'Try another Wi-Fi, mobile data, or a VPN, or add a portal with +.';
+      return 'Could not reach r/IPTV_ZONENEW (Reddit and rss2json blocked). '
+          'Try mobile data, a VPN, or add a portal manually with +.';
     }
     if (feedOk) {
-      return 'Feed loaded from Reddit, but no portal lines were found in recent posts. '
+      return 'Feed loaded, but paste.sh decrypt or portal parse failed (or posts had no creds). '
           'Try again later or add a portal with +.';
     }
     if (listingJsonFailed) {
@@ -670,7 +697,7 @@ class IptvScraper {
 
   static Future<String?> _tryFetchSubredditJson(
       {String? after}) async {
-    for (final host in _redditListHosts) {
+    for (final host in _redditListHosts.take(2)) {
       final j = await _fetchCatalogJson(host: host, after: after);
       if (j != null) return j;
     }
@@ -782,37 +809,39 @@ class IptvScraper {
     return (parsed: true, nextAfter: nextAfter);
   }
 
-  static const _rssPath = '/r/IPTV_ZONENEW/new/.rss?limit=50';
+  static const _rssPath = '/r/IPTV_ZONENEW/new/.rss?limit=100';
   static Future<String?> _fetchRss() async {
-    for (final host in _redditListHosts) {
+    // rss2json is the most reliable path when Reddit blocks the client.
+    var t = await _tryFetchRss2Json();
+    if (t != null) return t;
+
+    for (final host in _redditListHosts.take(2)) {
       final u = '$host$_rssPath';
-      var t = await _httpGetText(
+      t = await _httpGetText(
         u,
-        timeout: const Duration(seconds: 20),
+        timeout: const Duration(seconds: 10),
         require2xx: true,
       );
       t = _asRssIfValid(t);
       if (t != null) return t;
     }
-    for (final host in _redditListHosts) {
+    for (final host in _redditListHosts.take(2)) {
       final u = '$host$_rssPath';
-      var t = await _tryFetchJinaText(u);
+      t = await _tryFetchJinaText(u);
       t = _asRssIfValid(t);
       if (t != null) return t;
     }
-    for (final host in _redditListHosts) {
+    for (final host in _redditListHosts.take(2)) {
       final u = '$host$_rssPath';
-      var t = await _fetchTextViaProxy(u, timeout: const Duration(seconds: 25));
+      t = await _fetchTextViaProxy(u, timeout: const Duration(seconds: 12));
       t = _asRssIfValid(t);
       if (t != null) return t;
     }
-    // Last resort: third-party fetches the RSS on their server (works when
-    // Reddit or all CORS proxies are blocked on the device).
-    return _tryFetchRss2Json();
+    return null;
   }
 
   static Future<String?> _tryFetchRss2Json() async {
-    const redditRss = 'https://www.reddit.com/r/IPTV_ZONENEW/new/.rss?limit=50';
+    const redditRss = 'https://www.reddit.com/r/IPTV_ZONENEW/new/.rss?limit=100';
     final u = _rss2Json.replaceFirst(
         '{URL}', Uri.encodeComponent(redditRss));
     debugPrint('[Catalog] rss2json try');
@@ -1104,8 +1133,12 @@ class IptvScraper {
     }
 
     final unique = deepLinks.toSet().take(4);
+    var pasteIdx = 0;
     for (final dl in unique) {
       if (out.length >= maxResults) break;
+      if (pasteIdx++ > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
       debugPrint('[Catalog]   deep: ${_redact(dl)}');
       final text = await _fetchPaste(dl);
       if (text == null || text.isEmpty) {
@@ -1333,7 +1366,7 @@ class IptvScraper {
       final resp = await http.get(Uri.parse(target), headers: {
         'User-Agent': _catalogDirectUa,
         'Accept': 'application/json',
-      }).timeout(const Duration(seconds: 12));
+      }).timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200) {
         final t = resp.body.trimLeft();
         if (t.startsWith('{') || t.startsWith('[')) return resp.body;
@@ -1353,7 +1386,7 @@ class IptvScraper {
         final resp = await http.get(Uri.parse(proxyUrl), headers: {
           'User-Agent': _ua,
           'Accept': 'application/json, text/plain, */*',
-        }).timeout(const Duration(seconds: 20));
+        }).timeout(const Duration(seconds: 12));
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
           debugPrint('[Catalog]   proxy ${resp.statusCode}');
           continue;
