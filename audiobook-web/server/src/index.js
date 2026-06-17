@@ -1,17 +1,23 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getAudiobooks, searchAudiobooks, getChapters } from './audiobookService.js';
 import { handleTokyProxy, handleAudioProxy } from './proxy.js';
 import { streamTorrentFile, getTorrentStatus } from './torrentStream.js';
+import { optionalAuth } from './auth.js';
+import authRoutes from './authRoutes.js';
+import userRoutes from './userRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
+app.use(optionalAuth);
 
 function getBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol;
@@ -99,6 +105,9 @@ app.get('/abb-stream/:bookId/:fileIndex', (req, res) => {
 app.get('/api/abb/status/:bookId', (req, res) => {
   res.json(getTorrentStatus(decodeURIComponent(req.params.bookId)));
 });
+
+app.use('/api/auth', authRoutes);
+app.use('/api/user', userRoutes);
 
 const clientDist = path.join(__dirname, '../../client/dist');
 app.use(express.static(clientDist));

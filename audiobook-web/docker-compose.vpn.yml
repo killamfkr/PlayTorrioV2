@@ -41,9 +41,14 @@ services:
     depends_on:
       gluetun:
         condition: service_healthy
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
     environment:
       - PORT=3000
       - TZ=${TZ:-America/New_York}
+      - DATA_DIR=/app/data
+      - JWT_SECRET=${JWT_SECRET:-}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
       - VPN_ENABLED=1
       - VPN_PROVIDER=PIA
     ports: !reset []

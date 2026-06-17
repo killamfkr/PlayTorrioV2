@@ -76,6 +76,25 @@ docker compose up -d --build
 | `PORT`   | `3000`  | Web server port |
 | `TZ`     | `America/New_York` | Container timezone |
 
+| `ALLOW_REGISTRATION` | `true` | Allow new user sign-ups |
+| `JWT_SECRET` | auto-generated | Session signing key (set to persist across rebuilds) |
+| `DATA_DIR` | `./data` | SQLite database location |
+
+## User accounts
+
+Built-in **SQLite database** stores user accounts, continue listening progress, and bookmarks per user.
+
+- Click **Sign in** to register or log in
+- **Guests** can still use the app — progress is saved in the browser only
+- On login, any guest progress in the browser is **merged** into your account
+- Data is stored in `DATA_DIR` (default `./data/audiobooks.db`) and persists across restarts
+
+To disable public registration (e.g. family server):
+
+```env
+ALLOW_REGISTRATION=false
+```
+
 ## Built-in PIA VPN (optional)
 
 Route **all traffic** (including AudioBookBay torrents) through **Private Internet Access** so your home IP is not exposed to peers or your ISP.

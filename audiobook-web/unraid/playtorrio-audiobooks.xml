@@ -10,7 +10,7 @@
   <Support>https://github.com/killamfkr/PlayTorrioV2/issues</Support>
   <Project>https://github.com/killamfkr/PlayTorrioV2</Project>
   <Overview>
-    PlayTorrio Audiobooks is a self-hosted web app for browsing and streaming audiobooks from multiple sources (Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks). Extracted from the PlayTorrio media hub, it includes search, continue listening, liked books, chapter navigation, playback speed control, and HLS streaming support.
+    PlayTorrio Audiobooks is a self-hosted web app for browsing and streaming audiobooks from multiple sources (Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks, AudioBookBay). Includes per-user accounts with SQLite database for continue listening and bookmarks, optional PIA VPN, search, chapter navigation, and playback speed control.
   </Overview>
   <Category>MediaApp:Books</Category>
   <WebUI>http://[IP]:[PORT]/</WebUI>

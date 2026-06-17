@@ -4,6 +4,8 @@ import {
   searchAudiobooks,
   fetchChapters,
   fetchVpnStatus,
+  fetchMe,
+  logout,
   getHistory,
   removeFromHistory,
   getLikedBooks,
@@ -11,6 +13,7 @@ import {
   isBookLiked,
 } from './api';
 import Player from './Player';
+import AuthModal from './AuthModal';
 
 const PAGE_SIZE = 12;
 
@@ -74,6 +77,15 @@ export default function App() {
   const [loadingBook, setLoadingBook] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [vpn, setVpn] = useState(null);
+  const [user, setUser] = useState(null);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  const refreshUserData = useCallback(async () => {
+    const [h, liked] = await Promise.all([getHistory(), getLikedBooks()]);
+    setHistory(h);
+    setLikedBooks(liked);
+  }, []);
 
   const loadBooks = useCallback(async () => {
     setLoading(true);
@@ -93,10 +105,13 @@ export default function App() {
   }, [loadBooks, searching]);
 
   useEffect(() => {
-    setHistory(getHistory());
-    setLikedBooks(getLikedBooks());
-    fetchVpnStatus().then(setVpn);
-  }, []);
+    Promise.all([fetchMe(), fetchVpnStatus()]).then(([u, v]) => {
+      setUser(u);
+      setVpn(v);
+      setAuthChecked(true);
+    });
+    refreshUserData();
+  }, [refreshUserData]);
 
   const handleSearch = async (query) => {
     setSearchQuery(query);
@@ -145,18 +160,38 @@ export default function App() {
     openBook(entry.book, entry.chapterIndex, entry.positionMs);
   };
 
-  const handleLikeToggle = (book) => {
-    const updated = toggleLikeBook(book);
+  const handleLikeToggle = async (book) => {
+    const updated = await toggleLikeBook(book);
     setLikedBooks(updated);
   };
 
-  const handleRemoveHistory = (audioBookId, e) => {
+  const handleRemoveHistory = async (audioBookId, e) => {
     e.stopPropagation();
-    setHistory(removeFromHistory(audioBookId));
+    const updated = await removeFromHistory(audioBookId);
+    setHistory(updated);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setUser(null);
+    await refreshUserData();
+  };
+
+  const handleAuthSuccess = async (u) => {
+    setUser(u);
+    await refreshUserData();
   };
 
   const displayBooks = showLiked ? likedBooks : books;
   const page = Math.floor(offset / PAGE_SIZE) + 1;
+
+  if (!authChecked) {
+    return (
+      <div className="loading" style={{ minHeight: '100vh' }}>
+        <div className="spinner" />
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -171,16 +206,28 @@ export default function App() {
               🔒 PIA
             </span>
           )}
+          {user ? (
+            <div className="user-menu">
+              <span className="user-name">{user.username}</span>
+              <button className="auth-btn" onClick={handleLogout}>
+                Log out
+              </button>
+            </div>
+          ) : (
+            <button className="auth-btn" onClick={() => setShowAuth(true)}>
+              Sign in
+            </button>
+          )}
           <button
             className={`icon-btn ${showLiked ? 'active' : ''}`}
-            onClick={() => {
+            onClick={async () => {
               setShowLiked(!showLiked);
               setSearching(false);
               setSearchQuery('');
-              if (!showLiked) setLikedBooks(getLikedBooks());
+              if (!showLiked) setLikedBooks(await getLikedBooks());
             }}
-            aria-label="Liked audiobooks"
-            title="Liked"
+            aria-label="Bookmarked audiobooks"
+            title="Bookmarks"
           >
             {showLiked ? '❤️' : '🤍'}
           </button>
@@ -263,7 +310,7 @@ export default function App() {
         </div>
       ) : displayBooks.length === 0 ? (
         <div className="empty">
-          {showLiked ? 'No liked audiobooks' : 'No audiobooks found'}
+          {showLiked ? 'No bookmarked audiobooks' : 'No audiobooks found'}
         </div>
       ) : (
         <div className="book-grid">
@@ -273,7 +320,7 @@ export default function App() {
               book={book}
               onOpen={openBook}
               onLikeToggle={handleLikeToggle}
-              liked={isBookLiked(book.audioBookId)}
+              liked={isBookLiked(book.audioBookId, likedBooks)}
             />
           ))}
         </div>
@@ -302,15 +349,19 @@ export default function App() {
         </div>
       )}
 
+      {showAuth && (
+        <AuthModal onClose={() => setShowAuth(false)} onSuccess={handleAuthSuccess} />
+      )}
+
       {player && (
         <Player
           book={player.book}
           chapters={player.chapters}
           initialChapter={player.initialChapter}
           initialPosition={player.initialPosition}
-          onClose={() => {
+          onClose={async () => {
             setPlayer(null);
-            setHistory(getHistory());
+            await refreshUserData();
           }}
         />
       )}
