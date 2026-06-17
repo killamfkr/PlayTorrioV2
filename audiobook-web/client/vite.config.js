@@ -9,6 +9,7 @@ export default defineConfig({
       '/api': 'http://localhost:3000',
       '/toky-proxy': 'http://localhost:3000',
       '/audio-proxy': 'http://localhost:3000',
+      '/abb-stream': 'http://localhost:3000',
     },
   },
   build: {

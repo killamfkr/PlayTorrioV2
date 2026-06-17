@@ -13,6 +13,11 @@ import Player from './Player';
 
 const PAGE_SIZE = 12;
 
+const SOURCES = [
+  { id: 'tokybook', label: 'Tokybook' },
+  { id: 'audiobookbay', label: 'AudioBookBay' },
+];
+
 function BookCard({ book, onOpen, onLikeToggle, liked }) {
   const coverUrl = book.thumbUrl || book.coverImage;
 
@@ -63,13 +68,15 @@ export default function App() {
   const [showLiked, setShowLiked] = useState(false);
   const [offset, setOffset] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [source, setSource] = useState('tokybook');
   const [player, setPlayer] = useState(null);
   const [loadingBook, setLoadingBook] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
 
   const loadBooks = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchAudiobooks(offset, PAGE_SIZE);
+      const data = await fetchAudiobooks(offset, PAGE_SIZE, source);
       setBooks(data);
     } catch (err) {
       console.error(err);
@@ -77,7 +84,7 @@ export default function App() {
     }
     setLoading(false);
     setSearching(false);
-  }, [offset]);
+  }, [offset, source]);
 
   useEffect(() => {
     if (!searching) loadBooks();
@@ -99,7 +106,7 @@ export default function App() {
     setShowLiked(false);
     setLoading(true);
     try {
-      const results = await searchAudiobooks(query.trim());
+      const results = await searchAudiobooks(query.trim(), source === 'audiobookbay' ? 'audiobookbay' : 'all');
       setBooks(results);
     } catch (err) {
       console.error(err);
@@ -110,18 +117,24 @@ export default function App() {
 
   const openBook = async (book, initialChapter = 0, initialPosition = 0) => {
     setLoadingBook(true);
+    setLoadingMessage(
+      book.source === 'audiobookbay'
+        ? 'Connecting to torrent peers… this may take a minute'
+        : 'Loading audiobook…'
+    );
     try {
       const chapters = await fetchChapters(book);
       if (chapters.length === 0) {
-        alert('Failed to load audio tracks. This book may be restricted.');
+        alert('Failed to load audio tracks. This book may be restricted or have no seeders.');
         return;
       }
       setPlayer({ book, chapters, initialChapter, initialPosition: initialPosition / 1000 });
     } catch (err) {
       console.error(err);
-      alert('Failed to load audiobook.');
+      alert(err.message || 'Failed to load audiobook.');
     } finally {
       setLoadingBook(false);
+      setLoadingMessage('');
     }
   };
 
@@ -162,6 +175,24 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      <div className="source-tabs">
+        {SOURCES.map((s) => (
+          <button
+            key={s.id}
+            className={`source-tab ${source === s.id ? 'active' : ''}`}
+            onClick={() => {
+              setSource(s.id);
+              setSearching(false);
+              setSearchQuery('');
+              setOffset(0);
+              setShowLiked(false);
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
 
       <div className="search-bar">
         <div className="search-wrapper">
@@ -256,6 +287,7 @@ export default function App() {
       {loadingBook && (
         <div className="modal-loading">
           <div className="spinner" />
+          {loadingMessage && <p className="loading-message">{loadingMessage}</p>}
         </div>
       )}
 

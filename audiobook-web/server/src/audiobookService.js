@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { browseAudiobookBay, searchAudiobookBay, getAudiobookBayChapters } from './audiobookBayService.js';
 
 const TOKY_BASE = 'https://tokybook.com/api/v1';
 const USER_AGENT =
@@ -53,7 +54,8 @@ function relevanceScore(title, query) {
 }
 
 function thumbUrl(book) {
-  if (['audiozaic', 'goldenaudiobook', 'appaudiobooks'].includes(book.source)) {
+  if (book.thumbUrl) return book.thumbUrl;
+  if (['audiozaic', 'goldenaudiobook', 'appaudiobooks', 'audiobookbay'].includes(book.source)) {
     return book.coverImage;
   }
   return `https://tokybook.com/images/${book.audioBookId}`;
@@ -63,7 +65,12 @@ export function formatBook(book) {
   return { ...book, thumbUrl: thumbUrl(book) };
 }
 
-export async function getAudiobooks(offset = 0, limit = 12) {
+export async function getAudiobooks(offset = 0, limit = 12, source = 'tokybook') {
+  if (source === 'audiobookbay') {
+    const page = Math.floor(offset / limit) + 1;
+    return browseAudiobookBay(page);
+  }
+
   const payload = {
     offset,
     limit,
@@ -282,13 +289,27 @@ async function searchAppAudiobooks(query) {
   return withCovers;
 }
 
-export async function searchAudiobooks(query) {
-  const [goldenResults, appAudioResults, tokyResults, audiozaicResults] = await Promise.all([
+export async function searchAudiobooks(query, source = 'all') {
+  if (source === 'audiobookbay') {
+    return searchAudiobookBay(query);
+  }
+
+  const searchTasks = [
     searchGoldenAudiobook(query),
     searchAppAudiobooks(query),
     searchTokybook(query),
     searchAudiozaic(query),
-  ]);
+  ];
+  if (source === 'all') {
+    searchTasks.push(searchAudiobookBay(query));
+  }
+
+  const results = await Promise.all(searchTasks);
+  const goldenResults = results[0];
+  const appAudioResults = results[1];
+  const tokyResults = results[2];
+  const audiozaicResults = results[3];
+  const abbResults = source === 'all' ? results[4] : [];
 
   const uniqueBooks = new Map();
 
@@ -305,6 +326,10 @@ export async function searchAudiobooks(query) {
     if (key && !uniqueBooks.has(key)) uniqueBooks.set(key, book);
   }
   for (const book of audiozaicResults) {
+    const key = normalizeTitle(book.title);
+    if (key && !uniqueBooks.has(key)) uniqueBooks.set(key, book);
+  }
+  for (const book of abbResults) {
     const key = normalizeTitle(book.title);
     if (key && !uniqueBooks.has(key)) uniqueBooks.set(key, book);
   }
@@ -487,6 +512,8 @@ async function getAppAudiobooksChapters(book, baseUrl) {
 
 export async function getChapters(book, baseUrl) {
   switch (book.source) {
+    case 'audiobookbay':
+      return getAudiobookBayChapters(book, baseUrl);
     case 'goldenaudiobook':
       return getGoldenChapters(book, baseUrl);
     case 'audiozaic':

@@ -5,7 +5,7 @@ A self-hosted web application for browsing and streaming audiobooks. This is ext
 ## Features
 
 - Browse audiobook catalog (Tokybook)
-- Search across 4 sources: Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks
+- Search across 5 sources: Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks, and **AudioBookBay** (audiobookbay.lu)
 - Full audiobook player with chapter navigation
 - Playback speed control (0.5x – 3x)
 - Continue listening / listening history
@@ -76,6 +76,20 @@ docker compose up -d --build
 | `PORT`   | `3000`  | Web server port |
 | `TZ`     | `America/New_York` | Container timezone |
 
+## AudioBookBay
+
+Switch to the **AudioBookBay** tab in the web UI to browse and search [audiobookbay.lu](https://audiobookbay.lu).
+
+AudioBookBay books are streamed via **torrent** on the server (WebTorrent). The first time you open a book, the server connects to peers to fetch metadata and begin buffering — this can take 30–60 seconds depending on seeders.
+
+If torrent playback is slow or fails to connect, try:
+
+- Ensuring your server has outbound UDP access (for BitTorrent DHT)
+- Adding `network_mode: host` to `docker-compose.yml` for better peer connectivity on Unraid
+- Books with no seeders may only play the Audible preview sample (when available)
+
+AudioBookBay results also appear in global search alongside other sources.
+
 ## Development
 
 ### Backend only
@@ -113,10 +127,11 @@ Browser (React)
 
 Node.js Express Server
   ├── /api/audiobooks          — catalog
-  ├── /api/audiobooks/search   — multi-source search
+  ├── /api/audiobooks/search   — multi-source search (incl. AudioBookBay)
   ├── /api/audiobooks/chapters — chapter resolution
   ├── /toky-proxy              — HLS proxy for Tokybook
-  └── /audio-proxy             — audio proxy for scraped sources
+  ├── /audio-proxy             — audio proxy for scraped sources
+  └── /abb-stream              — torrent stream proxy for AudioBookBay
 ```
 
 ## Updating

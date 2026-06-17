@@ -6,8 +6,10 @@ RUN npm install
 COPY client/ ./
 RUN npm run build
 
-FROM node:20-alpine AS server
+FROM node:20-bookworm-slim AS server
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY server/package.json server/package-lock.json* ./
 RUN npm install --omit=dev
 COPY server/src ./src

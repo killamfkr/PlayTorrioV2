@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getAudiobooks, searchAudiobooks, getChapters } from './audiobookService.js';
 import { handleTokyProxy, handleAudioProxy } from './proxy.js';
+import { streamTorrentFile, getTorrentStatus } from './torrentStream.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -26,7 +27,8 @@ app.get('/api/audiobooks', async (req, res) => {
   try {
     const offset = parseInt(req.query.offset ?? '0', 10);
     const limit = parseInt(req.query.limit ?? '12', 10);
-    const books = await getAudiobooks(offset, limit);
+    const source = req.query.source ?? 'tokybook';
+    const books = await getAudiobooks(offset, limit, source);
     res.json(books);
   } catch (err) {
     console.error('[API] getAudiobooks:', err);
@@ -37,10 +39,11 @@ app.get('/api/audiobooks', async (req, res) => {
 app.get('/api/audiobooks/search', async (req, res) => {
   try {
     const query = req.query.q ?? '';
+    const source = req.query.source ?? 'all';
     if (!query.trim()) {
       return res.json([]);
     }
-    const books = await searchAudiobooks(query.trim());
+    const books = await searchAudiobooks(query.trim(), source);
     res.json(books);
   } catch (err) {
     console.error('[API] search:', err);
@@ -69,6 +72,14 @@ app.get('/toky-proxy', async (req, res) => {
 });
 
 app.get('/audio-proxy', handleAudioProxy);
+
+app.get('/abb-stream/:bookId/:fileIndex', (req, res) => {
+  streamTorrentFile(decodeURIComponent(req.params.bookId), parseInt(req.params.fileIndex, 10), req, res);
+});
+
+app.get('/api/abb/status/:bookId', (req, res) => {
+  res.json(getTorrentStatus(decodeURIComponent(req.params.bookId)));
+});
 
 const clientDist = path.join(__dirname, '../../client/dist');
 app.use(express.static(clientDist));

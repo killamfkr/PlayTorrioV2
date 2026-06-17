@@ -1,14 +1,16 @@
 const HISTORY_KEY = 'audiobook_history';
 const LIKED_KEY = 'audiobook_liked';
 
-export async function fetchAudiobooks(offset = 0, limit = 12) {
-  const res = await fetch(`/api/audiobooks?offset=${offset}&limit=${limit}`);
+export async function fetchAudiobooks(offset = 0, limit = 12, source = 'tokybook') {
+  const res = await fetch(`/api/audiobooks?offset=${offset}&limit=${limit}&source=${source}`);
   if (!res.ok) throw new Error('Failed to load audiobooks');
   return res.json();
 }
 
-export async function searchAudiobooks(query) {
-  const res = await fetch(`/api/audiobooks/search?q=${encodeURIComponent(query)}`);
+export async function searchAudiobooks(query, source = 'all') {
+  const res = await fetch(
+    `/api/audiobooks/search?q=${encodeURIComponent(query)}&source=${source}`
+  );
   if (!res.ok) throw new Error('Search failed');
   return res.json();
 }

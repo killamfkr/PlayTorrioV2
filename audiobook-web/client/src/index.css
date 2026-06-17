@@ -81,6 +81,39 @@ img {
   color: #ff6b8a;
 }
 
+.source-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.source-tab {
+  padding: 8px 18px;
+  border-radius: 20px;
+  background: var(--surface);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+
+.source-tab.active {
+  background: var(--primary);
+  color: white;
+}
+
+.source-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.loading-message {
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  max-width: 280px;
+  text-align: center;
+}
+
 .search-bar {
   margin: 8px 0 24px;
 }
@@ -511,6 +544,7 @@ img {
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   z-index: 200;
