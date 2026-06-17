@@ -1,228 +1,98 @@
 # PlayTorrio Audiobooks Web App
 
-A self-hosted web application for browsing and streaming audiobooks. Extracted from the [PlayTorrio](https://github.com/killamfkr/PlayTorrioV2) audiobook feature and runs as a single Docker Compose stack.
+A self-hosted web application for browsing and streaming audiobooks. Runs as a single Docker Compose stack — **no `.env` file required**. All settings are variables in `docker-compose.yml` or the CasaOS UI.
 
 ## Features
 
-- Browse audiobook catalog (Tokybook)
-- Search across 5 sources: Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks, and **AudioBookBay** (audiobookbay.lu)
-- Full audiobook player with chapter navigation
-- Playback speed control (0.5x – 3x)
-- **User accounts** with SQLite — continue listening and bookmarks per user
-- Optional **PIA VPN sidecar** for AudioBookBay torrent privacy
-- **CasaOS** compatible — single `docker-compose.yml` with `x-casaos` metadata
+- Browse/search: Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks, AudioBookBay
+- Full player with chapters, speed control, continue listening
+- **User accounts** with SQLite — bookmarks and progress per user
+- Optional **PIA VPN sidecar**
+- **CasaOS** ready with `x-casaos` variable definitions
 
 ## Quick Start
 
 ```bash
 cd audiobook-web
-cp .env.example .env
-docker compose up -d --build
+COMPOSE_PROFILES=standard docker compose up -d --build
 ```
 
 Open **http://localhost:3000**.
 
-Uses profile `standard` by default (set `COMPOSE_PROFILES=standard` in `.env`).
+## Variables (no .env file)
+
+Edit directly in `docker-compose.yml` or set in the **CasaOS UI** under each service's environment:
+
+| Variable | Default | Service | Description |
+|----------|---------|---------|-------------|
+| `COMPOSE_PROFILES` | `standard` | *(compose)* | `standard` or `pia` |
+| `TZ` | `America/New_York` | audiobooks | Timezone |
+| `ALLOW_REGISTRATION` | `true` | audiobooks | Allow new sign-ups |
+| `JWT_SECRET` | *(empty)* | audiobooks | Session secret (auto-generated) |
+| `OPENVPN_USER` | *(empty)* | gluetun | PIA username |
+| `OPENVPN_PASSWORD` | *(empty)* | gluetun | PIA password |
+| `SERVER_REGIONS` | `Netherlands` | gluetun | PIA region |
+
+Data volume: `/DATA/AppData/$AppID/data` (CasaOS) — SQLite database.
 
 ## CasaOS (Ubuntu)
 
-See **[casaos/README.md](casaos/README.md)** for step-by-step CasaOS import instructions.
+See **[casaos/README.md](casaos/README.md)**.
 
-Summary:
-
-1. Clone repo to `/DATA/AppData/playtorrio-audiobooks/src`
-2. Copy `.env.example` → `.env`
-3. CasaOS → App Store → Custom install → import `audiobook-web` folder
+1. Import `audiobook-web` folder via Custom install
+2. Set `COMPOSE_PROFILES=standard` in app variables
+3. Edit other variables in the CasaOS UI
 4. Open port **3000**
 
 ## Compose profiles
 
-One `docker-compose.yml` — pick a profile via `COMPOSE_PROFILES` in `.env`:
+| `COMPOSE_PROFILES` | Containers |
+|--------------------|------------|
+| `standard` | `audiobooks` |
+| `pia` | `gluetun` + `audiobooks-pia` |
 
-| Profile | Containers | Command |
-|---------|------------|---------|
-| `standard` | `audiobooks` | `docker compose up -d --build` |
-| `pia` | `gluetun` + `audiobooks-pia` | `bash start-with-vpn.sh` |
+```bash
+# Standard
+COMPOSE_PROFILES=standard docker compose up -d --build
 
-## Unraid Installation
+# PIA VPN
+COMPOSE_PROFILES=pia OPENVPN_USER=p1234567 OPENVPN_PASSWORD=secret docker compose up -d --build
+```
 
-### Option 1: One-click script
-
-SSH into your Unraid server and run:
+## Unraid
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/audiobook-web/install.sh | bash
 ```
 
-Or clone the repo and run locally:
+With PIA:
 
 ```bash
-git clone https://github.com/killamfkr/PlayTorrioV2.git
-cd PlayTorrioV2/audiobook-web
-bash install.sh
+VPN=1 OPENVPN_USER=p1234567 OPENVPN_PASSWORD=secret bash install.sh
 ```
-
-Custom port:
-
-```bash
-PORT=8080 bash install.sh
-```
-
-### Option 2: Unraid Docker template
-
-1. In Unraid, go to **Docker** → **Add Container**
-2. Set **Template URL** to:
-   ```
-   https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/audiobook-web/unraid/playtorrio-audiobooks.xml
-   ```
-3. Set the **Repository** to build from source, or use docker-compose:
-   - **Repository**: `playtorrio-audiobooks:latest`
-   - Build first on the server: `cd /path/to/audiobook-web && docker compose build`
-4. Set your desired **Web Port** (default: 3000)
-5. Click **Apply**
-
-### Option 3: Manual docker-compose on Unraid
-
-1. Copy the `audiobook-web` folder to `/mnt/user/appdata/playtorrio-audiobooks/`
-2. SSH in and run:
-
-```bash
-cd /mnt/user/appdata/playtorrio-audiobooks/audiobook-web
-docker compose up -d --build
-```
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT`   | `3000`  | Web server port |
-| `TZ`     | `America/New_York` | Container timezone |
-
-| `ALLOW_REGISTRATION` | `true` | Allow new user sign-ups |
-| `JWT_SECRET` | auto-generated | Session signing key (set to persist across rebuilds) |
-| `DATA_DIR` | `./data` | SQLite database location |
 
 ## User accounts
 
-Built-in **SQLite database** stores user accounts, continue listening progress, and bookmarks per user.
+- **Sign in** to register — progress and bookmarks save to the server database
+- **Guests** use browser storage until they log in (then data merges)
+- Set `ALLOW_REGISTRATION=false` in compose to lock down a family server
 
-- Click **Sign in** to register or log in
-- **Guests** can still use the app — progress is saved in the browser only
-- On login, any guest progress in the browser is **merged** into your account
-- Data is stored in `DATA_DIR` (default `./data/audiobooks.db`) and persists across restarts
+## PIA VPN
 
-To disable public registration (e.g. family server):
-
-```env
-ALLOW_REGISTRATION=false
-```
-
-## Built-in PIA VPN (optional)
-
-Route **all traffic** (including AudioBookBay torrents) through **Private Internet Access** so your home IP is not exposed to peers or your ISP.
-
-### Quick setup
+Set `COMPOSE_PROFILES=pia` and fill in `OPENVPN_USER` / `OPENVPN_PASSWORD` on the **gluetun** service (CasaOS UI or compose file).
 
 ```bash
-cd audiobook-web
-cp .env.example .env
-# Edit .env — set OPENVPN_USER and OPENVPN_PASSWORD (your PIA login)
-bash start-with-vpn.sh
-```
-
-### Unraid with PIA
-
-```bash
-VPN=1 bash install.sh
-```
-
-On first run this creates `.env` — add your PIA credentials, then run again.
-
-### What to put in `.env`
-
-```env
-OPENVPN_USER=p1234567          # PIA username from client control panel
-OPENVPN_PASSWORD=your_password
-SERVER_REGIONS=Netherlands     # any PIA region (Netherlands is good for P2P)
-PORT_FORWARD_ONLY=true         # use P2P servers (recommended for torrents)
-VPN_PORT_FORWARDING=on
-GLUETUN_DATA=./gluetun         # persists port-forward assignment
+OPENVPN_USER=p1234567 OPENVPN_PASSWORD=secret bash start-with-vpn.sh
 ```
 
 PIA credentials: https://www.privateinternetaccess.com/account/client-control-panel
-
-When VPN is active, a **🔒 PIA** badge appears in the web UI header showing your VPN exit IP on hover.
-
-### Without VPN
-
-```bash
-docker compose up -d --build
-```
-
-## AudioBookBay
-
-Switch to the **AudioBookBay** tab in the web UI to browse and search [audiobookbay.lu](https://audiobookbay.lu).
-
-AudioBookBay books are streamed via **torrent** on the server (WebTorrent). The first time you open a book, the server connects to peers to fetch metadata and begin buffering — this can take 30–60 seconds depending on seeders.
-
-If torrent playback is slow or fails to connect, try:
-
-- Enabling the **built-in PIA VPN** (recommended — hides torrent traffic from your ISP)
-- Ensuring your server has outbound UDP access (for BitTorrent DHT)
-- Books with no seeders may only play the Audible preview sample (when available)
-
-AudioBookBay results also appear in global search alongside other sources.
-
-## Development
-
-### Backend only
-
-```bash
-cd server
-npm install
-npm run dev
-```
-
-### Frontend with hot reload
-
-```bash
-cd client
-npm install
-npm run dev
-```
-
-The Vite dev server proxies API requests to `localhost:3000`.
-
-### Production build
-
-```bash
-cd client && npm install && npm run build
-cd ../server && npm install && npm start
-```
-
-## Architecture
-
-```
-Browser (React)
-  ├── Browse / Search UI
-  ├── HLS.js + HTML5 audio player
-  └── localStorage (history, likes)
-
-Node.js Express Server
-  ├── /api/audiobooks          — catalog
-  ├── /api/audiobooks/search   — multi-source search (incl. AudioBookBay)
-  ├── /api/audiobooks/chapters — chapter resolution
-  ├── /toky-proxy              — HLS proxy for Tokybook
-  ├── /audio-proxy             — audio proxy for scraped sources
-  └── /abb-stream              — torrent stream proxy for AudioBookBay
-```
 
 ## Updating
 
 ```bash
 cd audiobook-web
 git pull
-docker compose up -d --build
+COMPOSE_PROFILES=standard docker compose up -d --build
 ```
 
 ## License
