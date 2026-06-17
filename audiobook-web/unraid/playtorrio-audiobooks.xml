@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>PlayTorrio-Audiobooks</Name>
+  <Repository>playtorrio-audiobooks:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/playtorrio/play_torrio_native/issues</Support>
+  <Project>https://github.com/playtorrio/play_torrio_native</Project>
+  <Overview>
+    PlayTorrio Audiobooks is a self-hosted web app for browsing and streaming audiobooks from multiple sources (Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks). Extracted from the PlayTorrio media hub, it includes search, continue listening, liked books, chapter navigation, playback speed control, and HLS streaming support.
+  </Overview>
+  <Category>MediaApp:Books</Category>
+  <WebUI>http://[IP]:[PORT]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/playtorrio/play_torrio_native/main/assets/icon/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Docker</Requires>
+  <Config Name="Web Port" Target="3000" Default="3000" Mode="tcp" Description="Web UI port" Type="Port" Display="always" Required="true" Mask="false">3000</Config>
+  <Config Name="Timezone" Target="TZ" Default="America/New_York" Mode="" Description="Container timezone" Type="Variable" Display="always" Required="false" Mask="false">America/New_York</Config>
+  <Config Name="AppData" Target="/app/data" Default="/mnt/user/appdata/playtorrio-audiobooks" Mode="rw" Description="App data directory (optional, for future use)" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/playtorrio-audiobooks</Config>
+</Container>
