@@ -23,6 +23,25 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/api/vpn/status', async (_req, res) => {
+  const enabled =
+    process.env.VPN_ENABLED === '1' || process.env.VPN_ENABLED === 'true';
+  const provider = process.env.VPN_PROVIDER ?? null;
+  let publicIp = null;
+  try {
+    const r = await fetch('https://api.ipify.org?format=json', {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      publicIp = data.ip;
+    }
+  } catch {
+    /* ignore */
+  }
+  res.json({ enabled, provider, publicIp });
+});
+
 app.get('/api/audiobooks', async (req, res) => {
   try {
     const offset = parseInt(req.query.offset ?? '0', 10);

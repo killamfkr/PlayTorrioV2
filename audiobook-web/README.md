@@ -76,6 +76,48 @@ docker compose up -d --build
 | `PORT`   | `3000`  | Web server port |
 | `TZ`     | `America/New_York` | Container timezone |
 
+## Built-in PIA VPN (optional)
+
+Route **all traffic** (including AudioBookBay torrents) through **Private Internet Access** so your home IP is not exposed to peers or your ISP.
+
+### Quick setup
+
+```bash
+cd audiobook-web
+cp .env.example .env
+# Edit .env — set OPENVPN_USER and OPENVPN_PASSWORD (your PIA login)
+bash start-with-vpn.sh
+```
+
+### Unraid with PIA
+
+```bash
+VPN=1 bash install.sh
+```
+
+On first run this creates `.env` — add your PIA credentials, then run again.
+
+### What to put in `.env`
+
+```env
+OPENVPN_USER=p1234567          # PIA username from client control panel
+OPENVPN_PASSWORD=your_password
+SERVER_REGIONS=Netherlands     # any PIA region (Netherlands is good for P2P)
+PORT_FORWARD_ONLY=true         # use P2P servers (recommended for torrents)
+VPN_PORT_FORWARDING=on
+GLUETUN_DATA=./gluetun         # persists port-forward assignment
+```
+
+PIA credentials: https://www.privateinternetaccess.com/account/client-control-panel
+
+When VPN is active, a **🔒 PIA** badge appears in the web UI header showing your VPN exit IP on hover.
+
+### Without VPN
+
+```bash
+docker compose up -d --build
+```
+
 ## AudioBookBay
 
 Switch to the **AudioBookBay** tab in the web UI to browse and search [audiobookbay.lu](https://audiobookbay.lu).
@@ -84,8 +126,8 @@ AudioBookBay books are streamed via **torrent** on the server (WebTorrent). The 
 
 If torrent playback is slow or fails to connect, try:
 
+- Enabling the **built-in PIA VPN** (recommended — hides torrent traffic from your ISP)
 - Ensuring your server has outbound UDP access (for BitTorrent DHT)
-- Adding `network_mode: host` to `docker-compose.yml` for better peer connectivity on Unraid
 - Books with no seeders may only play the Audible preview sample (when available)
 
 AudioBookBay results also appear in global search alongside other sources.

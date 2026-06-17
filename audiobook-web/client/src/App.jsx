@@ -3,6 +3,7 @@ import {
   fetchAudiobooks,
   searchAudiobooks,
   fetchChapters,
+  fetchVpnStatus,
   getHistory,
   removeFromHistory,
   getLikedBooks,
@@ -72,6 +73,7 @@ export default function App() {
   const [player, setPlayer] = useState(null);
   const [loadingBook, setLoadingBook] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const [vpn, setVpn] = useState(null);
 
   const loadBooks = useCallback(async () => {
     setLoading(true);
@@ -93,6 +95,7 @@ export default function App() {
   useEffect(() => {
     setHistory(getHistory());
     setLikedBooks(getLikedBooks());
+    fetchVpnStatus().then(setVpn);
   }, []);
 
   const handleSearch = async (query) => {
@@ -160,6 +163,14 @@ export default function App() {
       <header className="header">
         <h1>Audiobooks</h1>
         <div className="header-actions">
+          {vpn?.enabled && (
+            <span
+              className="vpn-badge"
+              title={vpn.publicIp ? `PIA VPN active — exit IP ${vpn.publicIp}` : 'PIA VPN active'}
+            >
+              🔒 PIA
+            </span>
+          )}
           <button
             className={`icon-btn ${showLiked ? 'active' : ''}`}
             onClick={() => {

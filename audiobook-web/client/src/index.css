@@ -60,6 +60,17 @@ img {
 .header-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.vpn-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.35);
 }
 
 .icon-btn {

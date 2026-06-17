@@ -15,6 +15,16 @@ export async function searchAudiobooks(query, source = 'all') {
   return res.json();
 }
 
+export async function fetchVpnStatus() {
+  try {
+    const res = await fetch('/api/vpn/status');
+    if (!res.ok) return { enabled: false };
+    return res.json();
+  } catch {
+    return { enabled: false };
+  }
+}
+
 export async function fetchChapters(book) {
   const res = await fetch('/api/audiobooks/chapters', {
     method: 'POST',
