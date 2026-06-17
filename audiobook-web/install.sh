@@ -7,7 +7,7 @@ set -e
 APP_NAME="playtorrio-audiobooks"
 INSTALL_DIR="${INSTALL_DIR:-/mnt/user/appdata/${APP_NAME}}"
 PORT="${PORT:-3000}"
-REPO_URL="${REPO_URL:-https://github.com/playtorrio/play_torrio_native.git}"
+REPO_URL="${REPO_URL:-https://github.com/killamfkr/PlayTorrioV2.git}"
 BRANCH="${BRANCH:-main}"
 
 echo "============================================"

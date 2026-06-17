@@ -1,6 +1,6 @@
 # PlayTorrio Audiobooks Web App
 
-A self-hosted web application for browsing and streaming audiobooks. This is extracted from the [PlayTorrio](https://github.com/playtorrio/play_torrio_native) audiobook feature and runs as a standalone Docker container.
+A self-hosted web application for browsing and streaming audiobooks. This is extracted from the [PlayTorrio](https://github.com/killamfkr/PlayTorrioV2) audiobook feature and runs as a standalone Docker container.
 
 ## Features
 
@@ -29,14 +29,14 @@ Open **http://localhost:3000** in your browser.
 SSH into your Unraid server and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/playtorrio/play_torrio_native/main/audiobook-web/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/audiobook-web/install.sh | bash
 ```
 
 Or clone the repo and run locally:
 
 ```bash
-git clone https://github.com/playtorrio/play_torrio_native.git
-cd play_torrio_native/audiobook-web
+git clone https://github.com/killamfkr/PlayTorrioV2.git
+cd PlayTorrioV2/audiobook-web
 bash install.sh
 ```
 
@@ -51,7 +51,7 @@ PORT=8080 bash install.sh
 1. In Unraid, go to **Docker** → **Add Container**
 2. Set **Template URL** to:
    ```
-   https://raw.githubusercontent.com/playtorrio/play_torrio_native/main/audiobook-web/unraid/playtorrio-audiobooks.xml
+   https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/audiobook-web/unraid/playtorrio-audiobooks.xml
    ```
 3. Set the **Repository** to build from source, or use docker-compose:
    - **Repository**: `playtorrio-audiobooks:latest`

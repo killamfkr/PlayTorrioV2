@@ -7,15 +7,15 @@
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/playtorrio/play_torrio_native/issues</Support>
-  <Project>https://github.com/playtorrio/play_torrio_native</Project>
+  <Support>https://github.com/killamfkr/PlayTorrioV2/issues</Support>
+  <Project>https://github.com/killamfkr/PlayTorrioV2</Project>
   <Overview>
     PlayTorrio Audiobooks is a self-hosted web app for browsing and streaming audiobooks from multiple sources (Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks). Extracted from the PlayTorrio media hub, it includes search, continue listening, liked books, chapter navigation, playback speed control, and HLS streaming support.
   </Overview>
   <Category>MediaApp:Books</Category>
   <WebUI>http://[IP]:[PORT]/</WebUI>
   <TemplateURL/>
-  <Icon>https://raw.githubusercontent.com/playtorrio/play_torrio_native/main/assets/icon/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/assets/icon/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
