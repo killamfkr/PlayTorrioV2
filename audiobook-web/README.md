@@ -1,6 +1,6 @@
 # PlayTorrio Audiobooks Web App
 
-A self-hosted web application for browsing and streaming audiobooks. This is extracted from the [PlayTorrio](https://github.com/killamfkr/PlayTorrioV2) audiobook feature and runs as a standalone Docker container.
+A self-hosted web application for browsing and streaming audiobooks. Extracted from the [PlayTorrio](https://github.com/killamfkr/PlayTorrioV2) audiobook feature and runs as a single Docker Compose stack.
 
 ## Features
 
@@ -8,19 +8,41 @@ A self-hosted web application for browsing and streaming audiobooks. This is ext
 - Search across 5 sources: Tokybook, GoldenAudiobook, Audiozaic, AppAudiobooks, and **AudioBookBay** (audiobookbay.lu)
 - Full audiobook player with chapter navigation
 - Playback speed control (0.5x – 3x)
-- Continue listening / listening history
-- Liked books
-- HLS streaming support for Tokybook sources
-- Media Session API for lock-screen controls (mobile/desktop browsers)
+- **User accounts** with SQLite — continue listening and bookmarks per user
+- Optional **PIA VPN sidecar** for AudioBookBay torrent privacy
+- **CasaOS** compatible — single `docker-compose.yml` with `x-casaos` metadata
 
-## Quick Start (Docker)
+## Quick Start
 
 ```bash
 cd audiobook-web
+cp .env.example .env
 docker compose up -d --build
 ```
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:3000**.
+
+Uses profile `standard` by default (set `COMPOSE_PROFILES=standard` in `.env`).
+
+## CasaOS (Ubuntu)
+
+See **[casaos/README.md](casaos/README.md)** for step-by-step CasaOS import instructions.
+
+Summary:
+
+1. Clone repo to `/DATA/AppData/playtorrio-audiobooks/src`
+2. Copy `.env.example` → `.env`
+3. CasaOS → App Store → Custom install → import `audiobook-web` folder
+4. Open port **3000**
+
+## Compose profiles
+
+One `docker-compose.yml` — pick a profile via `COMPOSE_PROFILES` in `.env`:
+
+| Profile | Containers | Command |
+|---------|------------|---------|
+| `standard` | `audiobooks` | `docker compose up -d --build` |
+| `pia` | `gluetun` + `audiobooks-pia` | `bash start-with-vpn.sh` |
 
 ## Unraid Installation
 

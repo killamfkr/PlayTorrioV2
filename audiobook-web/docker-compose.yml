@@ -1,22 +1,154 @@
+name: playtorrio-audiobooks
+
+# Single compose for CasaOS / Docker / Unraid.
+# ─────────────────────────────────────────────────────────────────────────────
+# Standard (no VPN):  COMPOSE_PROFILES=standard  docker compose up -d --build
+# With PIA VPN:       COMPOSE_PROFILES=pia        docker compose up -d --build
+#                     (requires OPENVPN_USER + OPENVPN_PASSWORD in .env)
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-env-common: &env-common
+  PORT: "3000"
+  TZ: ${TZ:-America/New_York}
+  DATA_DIR: /app/data
+  JWT_SECRET: ${JWT_SECRET:-}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+
+x-volumes-common: &volumes-common
+  - ${DATA_DIR:-/DATA/AppData/${AppID:-playtorrio-audiobooks}/data}:/app/data
+
 services:
+  # ── Standard stack (no VPN) ──────────────────────────────────────────────
   audiobooks:
+    profiles: [standard]
     build: .
     image: playtorrio-audiobooks:latest
     container_name: playtorrio-audiobooks
-    ports:
-      - "${PORT:-3000}:3000"
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data
-    environment:
-      - PORT=3000
-      - TZ=${TZ:-America/New_York}
-      - DATA_DIR=/app/data
-      - JWT_SECRET=${JWT_SECRET:-}
-      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
     restart: unless-stopped
+    ports:
+      - target: 3000
+        published: ${PORT:-3000}
+        protocol: tcp
+    environment:
+      <<: *env-common
+    volumes: *volumes-common
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    x-casaos:
+      envs:
+        - container: TZ
+          description:
+            en_us: Timezone
+        - container: ALLOW_REGISTRATION
+          description:
+            en_us: Allow new user registration (true/false)
+        - container: JWT_SECRET
+          description:
+            en_us: Session secret (optional, auto-generated if empty)
+      ports:
+        - container: "3000"
+          description:
+            en_us: Web UI port
+      volumes:
+        - container: /app/data
+          description:
+            en_us: SQLite database and user data
+
+  # ── PIA VPN sidecar (profile: pia) ─────────────────────────────────────────
+  gluetun:
+    profiles: [pia]
+    image: qmcgaw/gluetun:latest
+    container_name: playtorrio-audiobooks-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ${GLUETUN_DATA:-/DATA/AppData/${AppID:-playtorrio-audiobooks}/gluetun}:/gluetun
+    environment:
+      VPN_SERVICE_PROVIDER: private internet access
+      OPENVPN_USER: ${OPENVPN_USER}
+      OPENVPN_PASSWORD: ${OPENVPN_PASSWORD}
+      SERVER_REGIONS: ${SERVER_REGIONS:-Netherlands}
+      PORT_FORWARD_ONLY: ${PORT_FORWARD_ONLY:-true}
+      VPN_PORT_FORWARDING: ${VPN_PORT_FORWARDING:-on}
+      TZ: ${TZ:-America/New_York}
+      FIREWALL_OUTBOUND_SUBNETS: ${FIREWALL_OUTBOUND_SUBNETS:-192.168.0.0/16,10.0.0.0/8,172.16.0.0/12}
+    ports:
+      - target: 3000
+        published: ${PORT:-3000}
+        protocol: tcp
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    x-casaos:
+      envs:
+        - container: OPENVPN_USER
+          description:
+            en_us: PIA username (p1234567)
+        - container: OPENVPN_PASSWORD
+          description:
+            en_us: PIA password
+        - container: SERVER_REGIONS
+          description:
+            en_us: PIA server region (e.g. Netherlands, US East)
+      ports:
+        - container: "3000"
+          description:
+            en_us: Web UI port (proxied through VPN container)
+
+  audiobooks-pia:
+    profiles: [pia]
+    build: .
+    image: playtorrio-audiobooks:latest
+    container_name: playtorrio-audiobooks-app
+    restart: unless-stopped
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      <<: *env-common
+      VPN_ENABLED: "1"
+      VPN_PROVIDER: PIA
+    volumes: *volumes-common
+    x-casaos:
+      envs:
+        - container: ALLOW_REGISTRATION
+          description:
+            en_us: Allow new user registration (true/false)
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: audiobooks
+  author: PlayTorrio
+  category: Media
+  title:
+    en_us: PlayTorrio Audiobooks
+  tagline:
+    en_us: Self-hosted audiobook streaming with user accounts and optional PIA VPN
+  description:
+    en_us: |
+      Stream audiobooks from Tokybook, AudioBookBay, and more.
+      Includes per-user continue listening, bookmarks, and optional PIA VPN for torrent privacy.
+      Set COMPOSE_PROFILES=standard (default) or pia (VPN) in environment.
+  icon: https://raw.githubusercontent.com/killamfkr/PlayTorrioV2/main/assets/icon/icon.png
+  port_map: "3000"
+  scheme: http
+  index: /
