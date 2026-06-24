@@ -4,7 +4,7 @@ Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, l
 
 **Current version:** 1.2.2
 
-Made by me. If you like it, star it or whatever.
+Made by [ayman708-UX](https://github.com/ayman708-UX), updates made by [killamfkr](https://github.com/killamfkr) with the assistance of Cursor AI. If you like it, star it or whatever.
 
 ## What it does
 
