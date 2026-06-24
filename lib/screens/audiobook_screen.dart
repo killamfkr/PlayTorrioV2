@@ -3,6 +3,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/music_player_service.dart';
+import '../api/settings_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/audiobook_thumb.dart';
 import '../platform_flags.dart';
@@ -36,22 +38,54 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   _AudiobookShelf _shelf = _AudiobookShelf.browse;
   List<Map<String, dynamic>> _bookmarks = [];
   Set<String> _bookmarkIds = {};
+  VoidCallback? _audiobookPrefsListener;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _audiobookPrefsListener = () {
+      if (!mounted) return;
+      _reloadCloudBackedShelves();
+    };
+    SettingsService.audiobookPrefsChangeNotifier
+        .addListener(_audiobookPrefsListener!);
     _loadBooks();
-    _loadHistory();
-    _loadLikedBooks();
-    _loadBookmarkIds();
-    _loadBookmarks();
+    _reloadCloudBackedShelves();
   }
 
   @override
   void dispose() {
+    if (_audiobookPrefsListener != null) {
+      SettingsService.audiobookPrefsChangeNotifier
+          .removeListener(_audiobookPrefsListener!);
+    }
+    _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _pullCloudAudiobookPrefs();
+    }
+  }
+
+  Future<void> _pullCloudAudiobookPrefs() async {
+    try {
+      await PlaytorrioCloudSyncService.instance.pullUserSettings();
+    } catch (_) {}
+    if (mounted) await _reloadCloudBackedShelves();
+  }
+
+  Future<void> _reloadCloudBackedShelves() async {
+    await Future.wait([
+      _loadHistory(),
+      _loadLikedBooks(),
+      _loadBookmarkIds(),
+      _loadBookmarks(),
+    ]);
   }
 
   @override
@@ -284,10 +318,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             Expanded(
               child: RefreshIndicator(
                 onRefresh: () async {
+                  await _pullCloudAudiobookPrefs();
                   await _loadBooks();
-                  await _loadHistory();
-                  await _loadBookmarkIds();
-                  await _loadBookmarks();
                 },
                 color: AppTheme.primaryColor,
                 child: SingleChildScrollView(
@@ -726,9 +758,20 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                   : TvGestureTap(
                       onTap: () async {
                         await _playerService.removeBookmark(book.audioBookId);
-                        await _loadBookmarks();
-                        await _loadBookmarkIds();
+                        await _reloadCloudBackedShelves();
                         if (mounted) setState(() {});
+                      },
+                      onLongPress: () async {
+                        await _playerService.removeBookmark(book.audioBookId);
+                        await _reloadCloudBackedShelves();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Bookmark removed'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
                       },
                       child: Container(
                         padding: const EdgeInsets.all(6),

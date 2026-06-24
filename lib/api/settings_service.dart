@@ -7,6 +7,97 @@ import '../features/iptv/playtorrio_tv/data/iptv_cloud_bundle.dart';
 import 'music_storage_service.dart';
 import 'trakt_service.dart';
 
+String _audiobookEntryId(String raw) {
+  try {
+    final m = json.decode(raw) as Map<String, dynamic>;
+    final b = m['book'];
+    if (b is Map) return '${b['audioBookId']}';
+  } catch (_) {}
+  return '';
+}
+
+int _audiobookHistoryTs(String raw) {
+  try {
+    return (json.decode(raw) as Map)['timestamp'] as int? ?? 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+int _audiobookBookmarkTs(String raw) {
+  try {
+    final m = json.decode(raw) as Map;
+    return (m['savedAt'] as num?)?.toInt() ??
+        (m['timestamp'] as num?)?.toInt() ??
+        0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/// Continue listening: keep the newest chapter/position per title across devices.
+List<String> _mergeAudiobookHistoryLists(List<String> local, List<String> remote) {
+  final map = <String, String>{};
+  void ingest(String x) {
+    final id = _audiobookEntryId(x);
+    if (id.isEmpty) return;
+    final prev = map[id];
+    if (prev == null || _audiobookHistoryTs(x) >= _audiobookHistoryTs(prev)) {
+      map[id] = x;
+    }
+  }
+
+  for (final x in remote) {
+    ingest(x);
+  }
+  for (final x in local) {
+    ingest(x);
+  }
+  final out = map.values.toList()
+    ..sort((a, b) => _audiobookHistoryTs(b).compareTo(_audiobookHistoryTs(a)));
+  if (out.length > 10) return out.sublist(0, 10);
+  return out;
+}
+
+/// Bookmarks: cloud list defines membership (removals sync); newer savedAt wins per title.
+List<String> _mergeAudiobookBookmarkLists(List<String> local, List<String> remote) {
+  if (remote.isEmpty) return List<String>.from(local);
+
+  final localById = <String, String>{};
+  for (final x in local) {
+    final id = _audiobookEntryId(x);
+    if (id.isNotEmpty) localById[id] = x;
+  }
+
+  final out = <String>[];
+  for (final x in remote) {
+    final id = _audiobookEntryId(x);
+    if (id.isEmpty) continue;
+    final localRow = localById[id];
+    if (localRow != null &&
+        _audiobookBookmarkTs(localRow) > _audiobookBookmarkTs(x)) {
+      out.add(localRow);
+    } else {
+      out.add(x);
+    }
+  }
+  out.sort((a, b) => _audiobookBookmarkTs(b).compareTo(_audiobookBookmarkTs(a)));
+  return out;
+}
+
+List<String> _mergeAudiobookLikedLists(List<String> local, List<String> remote) {
+  final map = <String, String>{};
+  for (final x in remote) {
+    final id = _audiobookEntryId(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  for (final x in local) {
+    final id = _audiobookEntryId(x);
+    if (id.isNotEmpty) map[id] = x;
+  }
+  return map.values.toList();
+}
+
 class SettingsService {
   static final SettingsService _instance = SettingsService._internal();
   factory SettingsService() => _instance;
@@ -15,6 +106,14 @@ class SettingsService {
   /// Fires whenever Stremio addons are added or removed.
   /// Listeners can compare the value to detect changes.
   static final ValueNotifier<int> addonChangeNotifier = ValueNotifier<int>(0);
+
+  /// Fires when audiobook continue / bookmarks / liked prefs change (local or cloud).
+  static final ValueNotifier<int> audiobookPrefsChangeNotifier =
+      ValueNotifier<int>(0);
+
+  static void notifyAudiobookPrefsChanged() {
+    audiobookPrefsChangeNotifier.value++;
+  }
 
   static const String _streamingModeKey = 'streaming_mode';
   static const String _sortPreferenceKey = 'sort_preference';
@@ -866,24 +965,33 @@ class SettingsService {
         continue;
       }
       if (k == AudiobookPrefsKeys.history && v is List) {
+        final local = p.getStringList(AudiobookPrefsKeys.history) ?? [];
+        final remote = (v as List<dynamic>).map((x) => x.toString()).toList();
         await p.setStringList(
           AudiobookPrefsKeys.history,
-          (v as List<dynamic>).map((x) => x.toString()).toList(),
+          _mergeAudiobookHistoryLists(local, remote),
         );
+        notifyAudiobookPrefsChanged();
         continue;
       }
       if (k == AudiobookPrefsKeys.liked && v is List) {
+        final local = p.getStringList(AudiobookPrefsKeys.liked) ?? [];
+        final remote = (v as List<dynamic>).map((x) => x.toString()).toList();
         await p.setStringList(
           AudiobookPrefsKeys.liked,
-          (v as List<dynamic>).map((x) => x.toString()).toList(),
+          _mergeAudiobookLikedLists(local, remote),
         );
+        notifyAudiobookPrefsChanged();
         continue;
       }
       if (k == AudiobookPrefsKeys.bookmarks && v is List) {
+        final local = p.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+        final remote = (v as List<dynamic>).map((x) => x.toString()).toList();
         await p.setStringList(
           AudiobookPrefsKeys.bookmarks,
-          (v as List<dynamic>).map((x) => x.toString()).toList(),
+          _mergeAudiobookBookmarkLists(local, remote),
         );
+        notifyAudiobookPrefsChanged();
         continue;
       }
       if (k == IptvCloudBundle.prefsKey && v is Map) {

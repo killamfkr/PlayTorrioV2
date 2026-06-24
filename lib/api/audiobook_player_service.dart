@@ -9,6 +9,7 @@ import 'audiobook_prefs_keys.dart';
 import 'audio_handler.dart';
 import 'torrent_stream_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
+import 'settings_service.dart';
 
 class AudiobookPlayerService {
   static final AudiobookPlayerService _instance = AudiobookPlayerService._internal();
@@ -426,6 +427,7 @@ class AudiobookPlayerService {
       history.map((e) => json.encode(e)).toList(),
     );
     PlaytorrioCloudSyncService.instance.scheduleDebouncedSettingsPush();
+    SettingsService.notifyAudiobookPrefsChanged();
   }
 
   Future<void> saveManualProgress() async {
@@ -447,6 +449,7 @@ class AudiobookPlayerService {
     });
     await prefs.setStringList(AudiobookPrefsKeys.history, historyStrings);
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    SettingsService.notifyAudiobookPrefsChanged();
   }
 
   // --- Liked Books ---
@@ -477,6 +480,7 @@ class AudiobookPlayerService {
     
     await prefs.setStringList(AudiobookPrefsKeys.liked, likedStrings);
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    SettingsService.notifyAudiobookPrefsChanged();
   }
 
   // --- Bookmarks (synced via SettingsService → cloud when logged in) ---
@@ -530,6 +534,7 @@ class AudiobookPlayerService {
     });
     await prefs.setStringList(AudiobookPrefsKeys.bookmarks, strings);
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    SettingsService.notifyAudiobookPrefsChanged();
   }
 
   /// Replace or insert bookmark for [book] (most recent first).
@@ -561,6 +566,7 @@ class AudiobookPlayerService {
     );
     await prefs.setStringList(AudiobookPrefsKeys.bookmarks, strings);
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    SettingsService.notifyAudiobookPrefsChanged();
   }
 
   /// From grid: add bookmark without a saved position, or remove if already present.
