@@ -3,10 +3,18 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../api/audiobook_service.dart';
 import '../api/audiobook_player_service.dart';
 import '../api/music_player_service.dart';
+import '../api/settings_service.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/audiobook_thumb.dart';
 import '../platform_flags.dart';
 import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
+import 'generate_audiobook_screen.dart';
+import '../widgets/tv_interactive.dart';
+import 'audiobook_magnet_screen.dart';
+
+enum _AudiobookShelf { browse, liked, bookmarks }
 
 class AudiobookScreen extends StatefulWidget {
   const AudiobookScreen({super.key});
@@ -27,21 +35,57 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   int _currentOffset = 0;
   final int _limit = 12;
   bool _isSearching = false;
-  bool _showLiked = false;
+  _AudiobookShelf _shelf = _AudiobookShelf.browse;
+  List<Map<String, dynamic>> _bookmarks = [];
+  Set<String> _bookmarkIds = {};
+  VoidCallback? _audiobookPrefsListener;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _audiobookPrefsListener = () {
+      if (!mounted) return;
+      _reloadCloudBackedShelves();
+    };
+    SettingsService.audiobookPrefsChangeNotifier
+        .addListener(_audiobookPrefsListener!);
     _loadBooks();
-    _loadHistory();
-    _loadLikedBooks();
+    _reloadCloudBackedShelves();
   }
 
   @override
   void dispose() {
+    if (_audiobookPrefsListener != null) {
+      SettingsService.audiobookPrefsChangeNotifier
+          .removeListener(_audiobookPrefsListener!);
+    }
+    _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _pullCloudAudiobookPrefs();
+    }
+  }
+
+  Future<void> _pullCloudAudiobookPrefs() async {
+    try {
+      await PlaytorrioCloudSyncService.instance.pullUserSettings();
+    } catch (_) {}
+    if (mounted) await _reloadCloudBackedShelves();
+  }
+
+  Future<void> _reloadCloudBackedShelves() async {
+    await Future.wait([
+      _loadHistory(),
+      _loadLikedBooks(),
+      _loadBookmarkIds(),
+      _loadBookmarks(),
+    ]);
   }
 
   @override
@@ -63,12 +107,23 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     }
   }
 
+  Future<void> _loadBookmarkIds() async {
+    final ids = await _playerService.getBookmarkedAudioBookIds();
+    if (mounted) setState(() => _bookmarkIds = ids);
+  }
+
+  Future<void> _loadBookmarks() async {
+    final list = await _playerService.getBookmarks();
+    if (mounted) setState(() => _bookmarks = list);
+  }
+
   Future<void> _loadBooks() async {
     setState(() {
       _isLoading = true;
-      _showLiked = false;
+      _shelf = _AudiobookShelf.browse;
     });
     final books = await _service.getAudiobooks(offset: _currentOffset, limit: _limit);
+    if (!mounted) return;
     setState(() {
       _books = books;
       _isLoading = false;
@@ -85,7 +140,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     setState(() {
       _isLoading = true;
       _isSearching = true;
-      _showLiked = false;
+      _shelf = _AudiobookShelf.browse;
     });
     final results = await _service.searchAudiobooks(query);
     setState(() {
@@ -94,16 +149,28 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     });
   }
 
-  void _toggleLikedView() {
+  void _toggleLikedShelf() {
     setState(() {
-      _showLiked = !_showLiked;
-      if (_showLiked) {
+      if (_shelf == _AudiobookShelf.liked) {
+        _shelf = _AudiobookShelf.browse;
+      } else {
+        _shelf = _AudiobookShelf.liked;
         _isSearching = false;
       }
     });
-    if (_showLiked) {
-      _loadLikedBooks();
-    }
+    if (_shelf == _AudiobookShelf.liked) _loadLikedBooks();
+  }
+
+  void _toggleBookmarkShelf() {
+    setState(() {
+      if (_shelf == _AudiobookShelf.bookmarks) {
+        _shelf = _AudiobookShelf.browse;
+      } else {
+        _shelf = _AudiobookShelf.bookmarks;
+        _isSearching = false;
+      }
+    });
+    if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
   }
 
   void _nextPage() {
@@ -123,12 +190,45 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   void _resumeAudiobook(Map<String, dynamic> progress) async {
-    final book = Audiobook.fromJson(progress['book']);
-    
+    final rawBook = progress['book'];
+    if (rawBook is! Map) return;
+    final book =
+        Audiobook.fromJson(Map<String, dynamic>.from(rawBook as Map));
+
+    final ciRaw = progress['chapterIndex'];
+    var chapterIndex = ciRaw is int
+        ? ciRaw
+        : (ciRaw is num ? ciRaw.toInt() : int.tryParse('$ciRaw') ?? 0);
+
+    final pmRaw = progress['positionMs'];
+    var positionMs = pmRaw is int
+        ? pmRaw
+        : (pmRaw is num ? pmRaw.toInt() : int.tryParse('$pmRaw') ?? 0);
+
+    // Grid "title only" bookmarks merge Continue Listening when present.
+    if (progress['placeholderBookmark'] == true) {
+      final hist = await _playerService.getHistory();
+      for (final h in hist) {
+        final b = h['book'];
+        if (b is! Map) continue;
+        if ('${b['audioBookId']}' != book.audioBookId) continue;
+        final hciRaw = h['chapterIndex'];
+        final hpmRaw = h['positionMs'];
+        chapterIndex = hciRaw is int
+            ? hciRaw
+            : (hciRaw is num ? hciRaw.toInt() : int.tryParse('$hciRaw') ?? 0);
+        positionMs = hpmRaw is int
+            ? hpmRaw
+            : (hpmRaw is num ? hpmRaw.toInt() : int.tryParse('$hpmRaw') ?? 0);
+        break;
+      }
+    }
+
     _openAudiobook(
-      book, 
-      initialChapter: progress['chapterIndex'], 
-      initialPosition: Duration(milliseconds: progress['positionMs']),
+      book,
+      initialChapter: chapterIndex,
+      initialPosition:
+          positionMs > 0 ? Duration(milliseconds: positionMs) : null,
     );
   }
 
@@ -144,8 +244,10 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       builder: (context) => const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
     );
 
-    final chapters = await _service.getChapters(book);
-    
+    final prepared = await _service.prepareAudiobookPlayback(book);
+    final playbackBook = prepared.book;
+    final chapters = prepared.chapters;
+
     if (mounted) {
       Navigator.pop(context); 
       final musicService = MusicPlayerService();
@@ -162,7 +264,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(24),
                   child: AudiobookPlayerScreen(
-                    audiobook: book,
+                    audiobook: playbackBook,
                     chapters: chapters,
                     initialChapterIndex: initialChapter,
                     initialPosition: initialPosition,
@@ -173,6 +275,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           ).then((_) {
             musicService.isFullScreenVisible.value = false;
             _loadHistory();
+            _loadBookmarkIds();
+            if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
           });
         } else {
           musicService.isFullScreenVisible.value = true;
@@ -180,7 +284,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             context,
             MaterialPageRoute(
               builder: (context) => AudiobookPlayerScreen(
-                audiobook: book,
+                audiobook: playbackBook,
                 chapters: chapters,
                 initialChapterIndex: initialChapter,
                 initialPosition: initialPosition,
@@ -189,6 +293,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           ).then((_) {
             musicService.isFullScreenVisible.value = false;
             _loadHistory();
+            _loadBookmarkIds();
+            if (_shelf == _AudiobookShelf.bookmarks) _loadBookmarks();
           }); 
         }
       } else {
@@ -212,8 +318,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             Expanded(
               child: RefreshIndicator(
                 onRefresh: () async {
+                  await _pullCloudAudiobookPrefs();
                   await _loadBooks();
-                  await _loadHistory();
                 },
                 color: AppTheme.primaryColor,
                 child: SingleChildScrollView(
@@ -227,7 +333,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                 ),
               ),
             ),
-            if (!_isSearching) _buildPagination(),
+            if (!_isSearching && _shelf == _AudiobookShelf.browse) _buildPagination(),
           ],
         ),
       ),
@@ -248,6 +354,35 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
+                icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 24),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const GenerateAudiobookScreen()),
+                  ).then((_) => _loadHistory());
+                },
+                tooltip: 'Generate your own audiobook',
+              ),
+              if (!platformIsWeb)
+                IconButton(
+                  icon: const Icon(Icons.link_rounded, color: Colors.white, size: 24),
+                  tooltip: 'Add audiobook from magnet link',
+                  onPressed: () async {
+                    final book = await Navigator.push<Audiobook>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const AudiobookMagnetScreen()),
+                    );
+                    if (book != null && mounted) {
+                      setState(() {
+                        _books.removeWhere((b) => b.audioBookId == book.audioBookId);
+                        _books.insert(0, book);
+                      });
+                      _openAudiobook(book);
+                    }
+                  },
+                ),
+              IconButton(
                 icon: const Icon(Icons.download_rounded, color: Colors.white, size: 26),
                 onPressed: () {
                   Navigator.push(
@@ -259,12 +394,25 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ),
               IconButton(
                 icon: Icon(
-                  _showLiked ? Icons.favorite : Icons.favorite_border,
-                  color: _showLiked ? Colors.redAccent : Colors.white,
+                  _shelf == _AudiobookShelf.liked ? Icons.favorite : Icons.favorite_border,
+                  color: _shelf == _AudiobookShelf.liked ? Colors.redAccent : Colors.white,
                   size: 28,
                 ),
-                onPressed: _toggleLikedView,
-                tooltip: 'Liked Audiobooks',
+                onPressed: _toggleLikedShelf,
+                tooltip: 'Liked audiobooks',
+              ),
+              IconButton(
+                icon: Icon(
+                  _shelf == _AudiobookShelf.bookmarks
+                      ? Icons.bookmark
+                      : Icons.bookmark_border,
+                  color: _shelf == _AudiobookShelf.bookmarks
+                      ? Colors.amberAccent
+                      : Colors.white,
+                  size: 28,
+                ),
+                onPressed: _toggleBookmarkShelf,
+                tooltip: 'Bookmarked (syncs with account)',
               ),
             ],
           ),
@@ -361,11 +509,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                           children: [
                             ClipRRect(
                               borderRadius: BorderRadius.circular(8),
-                              child: CachedNetworkImage(
-                                imageUrl: book.thumbUrl,
-                                width: 60, height: 60, fit: BoxFit.cover,
-                                errorWidget: (c, u, e) => const Icon(Icons.book),
-                              ),
+                              child: audiobookThumb(book.thumbUrl),
                             ),
                             const SizedBox(width: 16),
                             Expanded(
@@ -386,7 +530,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                     ),
                     Positioned(
                       top: 4, right: 4,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromHistory(book.audioBookId),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -406,10 +550,70 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   Widget _buildBody() {
-    final displayBooks = _showLiked ? _likedBooks : _books;
-    
-    if (_isLoading && !_showLiked) return const Padding(padding: EdgeInsets.only(top: 100), child: Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)));
-    if (displayBooks.isEmpty) return Padding(padding: const EdgeInsets.only(top: 100), child: Center(child: Text(_showLiked ? 'No liked audiobooks' : 'No audiobooks found', style: const TextStyle(color: Colors.white54))));
+    if (_shelf == _AudiobookShelf.bookmarks) {
+      if (_bookmarks.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 100),
+          child: Center(
+            child: Text(
+              'No bookmarks yet\nOpen a title and tap the bookmark icon to save your place (syncs when logged in).',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white54, height: 1.35),
+            ),
+          ),
+        );
+      }
+      final screenWidth = MediaQuery.of(context).size.width;
+      int crossAxisCount = 2;
+      if (screenWidth > 1200) {
+        crossAxisCount = 6;
+      } else if (screenWidth > 900) {
+        crossAxisCount = 4;
+      } else if (screenWidth > 600) {
+        crossAxisCount = 3;
+      }
+      return GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 150),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          childAspectRatio: 0.7,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+        ),
+        itemCount: _bookmarks.length,
+        itemBuilder: (context, index) {
+          final entry = _bookmarks[index];
+          final rawBook = entry['book'];
+          if (rawBook is! Map) return const SizedBox.shrink();
+          final book =
+              Audiobook.fromJson(Map<String, dynamic>.from(rawBook));
+          return _buildBookCard(book, bookmarkResume: entry);
+        },
+      );
+    }
+
+    final displayBooks =
+        _shelf == _AudiobookShelf.liked ? _likedBooks : _books;
+
+    if (_isLoading && _shelf == _AudiobookShelf.browse) {
+      return const Padding(
+          padding: EdgeInsets.only(top: 100),
+          child: Center(
+              child:
+                  CircularProgressIndicator(color: AppTheme.primaryColor)));
+    }
+    if (displayBooks.isEmpty) {
+      final msg = _shelf == _AudiobookShelf.liked
+          ? 'No liked audiobooks'
+          : 'No audiobooks found';
+      return Padding(
+          padding: const EdgeInsets.only(top: 100),
+          child: Center(
+              child: Text(msg,
+                  style: const TextStyle(color: Colors.white54))));
+    }
 
     final screenWidth = MediaQuery.of(context).size.width;
     int crossAxisCount = 2;
@@ -439,11 +643,13 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildBookCard(Audiobook book) {
+  Widget _buildBookCard(Audiobook book, {Map<String, dynamic>? bookmarkResume}) {
     final isLiked = _likedBooks.any((b) => b.audioBookId == book.audioBookId);
 
     return FocusableControl(
-      onTap: () => _openAudiobook(book),
+      onTap: bookmarkResume != null
+          ? () => _resumeAudiobook(bookmarkResume!)
+          : () => _openAudiobook(book),
       borderRadius: 16,
       child: Container(
         decoration: BoxDecoration(
@@ -457,18 +663,30 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: CachedNetworkImage(
-                    imageUrl: book.thumbUrl,
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    placeholder: (context, url) => Container(color: Colors.white10),
-                    errorWidget: (context, url, error) => CachedNetworkImage(
-                      imageUrl: book.coverImage,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      errorWidget: (c, u, e) => const Center(child: Icon(Icons.book, color: Colors.white24)),
-                    ),
-                  ),
+                  child: book.thumbUrl.startsWith('http://') ||
+                          book.thumbUrl.startsWith('https://')
+                      ? CachedNetworkImage(
+                          imageUrl: book.thumbUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          placeholder: (context, url) =>
+                              Container(color: Colors.white10),
+                          errorWidget: (context, url, error) =>
+                              CachedNetworkImage(
+                            imageUrl: book.coverImage,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            errorWidget: (c, u, e) => const Center(
+                                child:
+                                    Icon(Icons.book, color: Colors.white24)),
+                          ),
+                        )
+                      : FittedBox(
+                          fit: BoxFit.cover,
+                          clipBehavior: Clip.hardEdge,
+                          child: audiobookThumb(book.thumbUrl,
+                              width: 480, height: 720),
+                        ),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(12.0),
@@ -482,25 +700,89 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ],
             ),
             Positioned(
-              top: 8, right: 8,
-              child: GestureDetector(
-                onTap: () async {
-                  await _playerService.toggleLikeBook(book);
-                  _loadLikedBooks();
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: const BoxDecoration(
-                    color: Colors.black45,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    isLiked ? Icons.favorite : Icons.favorite_border,
-                    color: isLiked ? Colors.redAccent : Colors.white70,
-                    size: 18,
-                  ),
-                ),
-              ),
+              top: 8,
+              right: 8,
+              child: bookmarkResume == null
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TvGestureTap(
+                          onTap: () async {
+                            await _playerService.toggleBookmarkGrid(book);
+                            await _loadBookmarkIds();
+                            if (_shelf == _AudiobookShelf.bookmarks) {
+                              await _loadBookmarks();
+                            }
+                            if (mounted) setState(() {});
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(
+                              color: Colors.black45,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _bookmarkIds.contains(book.audioBookId)
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border,
+                              color: _bookmarkIds.contains(book.audioBookId)
+                                  ? Colors.amberAccent
+                                  : Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        TvGestureTap(
+                          onTap: () async {
+                            await _playerService.toggleLikeBook(book);
+                            _loadLikedBooks();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(
+                              color: Colors.black45,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              isLiked ? Icons.favorite : Icons.favorite_border,
+                              color:
+                                  isLiked ? Colors.redAccent : Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : TvGestureTap(
+                      onTap: () async {
+                        await _playerService.removeBookmark(book.audioBookId);
+                        await _reloadCloudBackedShelves();
+                        if (mounted) setState(() {});
+                      },
+                      onLongPress: () async {
+                        await _playerService.removeBookmark(book.audioBookId);
+                        await _reloadCloudBackedShelves();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Bookmark removed'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.black45,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close,
+                            color: Colors.white70, size: 18),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -509,7 +791,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   }
 
   Widget _buildPagination() {
-    if (_showLiked) return const SizedBox.shrink();
+    if (_shelf != _AudiobookShelf.browse) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
       child: Row(

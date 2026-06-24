@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../../../utils/tv_guide_refresh.dart';
 import '../controller/iptv_controller.dart';
+import '../data/iptv_cloud_bundle.dart';
 import 'iptv_pt_tv_guide_view.dart';
 
 /// Main-tab wrapper: loads verified portals then builds the favorites TV guide.
@@ -13,22 +17,33 @@ class IptvPtTvGuideTabScreen extends StatefulWidget {
 
 class _IptvPtTvGuideTabScreenState extends State<IptvPtTvGuideTabScreen> {
   late final IptvController _ctrl;
+  VoidCallback? _refreshListener;
 
   @override
   void initState() {
     super.initState();
     _ctrl = IptvController();
-    _bootstrap();
+    _refreshListener = () {
+      if (!mounted) return;
+      unawaited(_reloadGuide());
+    };
+    TvGuideRefresh.notifier.addListener(_refreshListener!);
+    IptvCloudBundle.epoch.addListener(_refreshListener!);
+    unawaited(_reloadGuide());
   }
 
-  Future<void> _bootstrap() async {
-    await _ctrl.init();
+  Future<void> _reloadGuide() async {
+    await _ctrl.reloadVerifiedFromDisk();
     if (!mounted) return;
     await _ctrl.refreshTvGuide();
   }
 
   @override
   void dispose() {
+    if (_refreshListener != null) {
+      TvGuideRefresh.notifier.removeListener(_refreshListener!);
+      IptvCloudBundle.epoch.removeListener(_refreshListener!);
+    }
     _ctrl.dispose();
     super.dispose();
   }

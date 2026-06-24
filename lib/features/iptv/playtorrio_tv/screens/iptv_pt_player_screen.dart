@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,10 +9,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../../../api/settings_service.dart';
-import '../../../../platform_flags.dart';
-import '../../../../services/built_in_video_media_session.dart';
-import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 
 /// Single source for the IPTV player.
@@ -89,11 +84,16 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     with WidgetsBindingObserver {
   late Player _player;
   late VideoController _controller;
-  final SettingsService _settings = SettingsService();
-  bool _audioSessionConfigured = false;
-  bool _mediaSessionAttached = false;
 
-  StreamSubscription? _posSub, _playingSub, _bufferingSub, _errorSub;
+  StreamSubscription? _posSub, _playingSub, _bufferingSub, _errorSub, _logSub;
+  StreamSubscription? _durSub;
+
+  // VOD seekbar state — duration is 0 for live streams, > 0 for VOD.
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  bool _isSeeking = false;
+  double _seekPreview = 0.0;
+  bool get _isVod => _duration.inSeconds > 1;
 
   int _sourceIdx = 0;
   bool _playing = false;
@@ -109,6 +109,10 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   DateTime _lastPosChange = DateTime.now();
   DateTime? _bufferingSince;
   DateTime? _readyNotPlayingSince;
+  // When the current source was last opened. Used by detector 4 to find
+  // "playing=true but never produced a first frame" — the classic
+  // CDN-dropped-mid-handshake hang where mpv neither buffers nor errors.
+  DateTime _openedAt = DateTime.now();
 
   // Audio state
   double _volume = 100.0; // 0..100 (mpv scale)
@@ -126,12 +130,15 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   int _retryAttempt = 0;
   DateTime? _lastRecoveryAt;
   // When the user explicitly paused (so play-after-pause can rejoin live edge)
+  // ignore: unused_field
   DateTime? _pausedAt;
-  // How long a pause must be before we treat resume as "rejoin live" (full reload)
-  static const Duration _liveRejoinThreshold = Duration(seconds: 2);
   final List<int> _backoffMs = const [500, 1000, 2000, 3000, 4000, 6000, 8000, 8000];
   static const int _maxRetries = 8;
   static const Duration _healthyStreakNeeded = Duration(seconds: 6);
+  // After exhausting per-source retries on a single-source stream, keep
+  // probing every N seconds forever — live IPTV channels routinely come
+  // back from short outages, so we don't want to give up.
+  static const Duration _coldRetryInterval = Duration(seconds: 15);
 
   static const _ua = 'VLC/3.0.20 LibVLC/3.0.20';
 
@@ -143,80 +150,20 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     WakelockPlus.enable();
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 32 * 1024 * 1024,
+        // Generous libmpv-side buffer. Most IPTV stalls are caused by tiny
+        // buffers running dry on jittery upstream feeds — at 64 MB we can
+        // ride out a ~5–10 s upstream stall on a 1080p stream without
+        // showing the user a single buffering icon.
+        bufferSize: 64 * 1024 * 1024,
         logLevel: MPVLogLevel.warn,
       ),
     );
     _controller = VideoController(_player);
     _bind();
     _applyMpvTunables();
-    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
-      unawaited(_configureIptvAudioSession());
-    }
     _openCurrent();
     _startWatchdog();
     _scheduleHideControls();
-  }
-
-  /// Same behavior as the main [MobilePlayerScreen]: do not auto-pause in
-  /// background when the user allows background playback; configure OS audio focus.
-  Future<void> _configureIptvAudioSession() async {
-    if (_audioSessionConfigured) return;
-    try {
-      final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playback,
-        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
-        androidAudioAttributes: AndroidAudioAttributes(
-          contentType: AndroidAudioContentType.movie,
-          usage: AndroidAudioUsage.media,
-        ),
-        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-      ));
-      _audioSessionConfigured = true;
-      await session.setActive(true);
-    } catch (e) {
-      debugPrint('[IPTV Player] AudioSession: $e');
-    }
-  }
-
-  Future<void> _ensureIptvAudioSessionActive() async {
-    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
-    try {
-      final session = await AudioSession.instance;
-      await session.setActive(true);
-    } catch (e) {
-      debugPrint('[IPTV Player] setActive: $e');
-    }
-  }
-
-  void _attachIptvMediaSession() {
-    if (kIsWeb) return;
-    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
-    if (_mediaSessionAttached) return;
-    _mediaSessionAttached = true;
-    String? art;
-    final u = widget.logoUrl;
-    if (u != null && u.isNotEmpty && u.startsWith('http')) {
-      art = u;
-    }
-    attachBuiltInVideoMediaSession(
-      _player,
-      title: widget.title,
-      posterPath: art,
-      displaySubtitle: widget.subtitle,
-      album: 'PlayTorrio TV',
-      isLive: true,
-    );
-  }
-
-  void _detachIptvMediaSession() {
-    if (!_mediaSessionAttached) return;
-    _mediaSessionAttached = false;
-    if (kIsWeb) return;
-    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
-      detachBuiltInVideoMediaSession(_player);
-    }
   }
 
   /// Set libmpv/FFmpeg properties that turn media_kit into a real IPTV player.
@@ -230,14 +177,20 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
       // Network: fail fast so the watchdog can step in
       await p.setProperty('network-timeout', '15');
 
-      // Cache: small live-buffer; never pause on underrun (just let it skip)
+      // Cache: prioritise SMOOTHNESS over live-edge latency. We aggressively
+      // pre-buffer ~30 s of forward data and let mpv hold up to 150 MB so
+      // brief upstream hiccups never reach the screen. cache-pause stays
+      // OFF — we'd rather let the decoder skip frames than show a spinner.
       await p.setProperty('cache', 'yes');
-      await p.setProperty('cache-secs', '10');
-      await p.setProperty('demuxer-readahead-secs', '5');
-      await p.setProperty('demuxer-max-bytes', '50000000');
-      await p.setProperty('demuxer-max-back-bytes', '10000000');
+      await p.setProperty('cache-secs', '30');
+      await p.setProperty('demuxer-readahead-secs', '20');
+      await p.setProperty('demuxer-max-bytes', '150000000');
+      await p.setProperty('demuxer-max-back-bytes', '25000000');
       await p.setProperty('cache-pause', 'no');
       await p.setProperty('cache-pause-initial', 'no');
+      // Larger audio buffer too — audio underruns are the most jarring
+      // form of buffering on IPTV feeds.
+      await p.setProperty('audio-buffer', '1.0');
 
       // Don't quit on EOF / brief disconnect — let us recover
       await p.setProperty('keep-open', 'yes');
@@ -263,18 +216,22 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
             'reconnect_on_http_error=4xx\\,5xx',
       );
 
-      // Low-latency MPEG-TS / HLS demux. Probesize/analyzeduration must be
-      // big enough for ffmpeg to detect real frame rate & codec params on
-      // junk Xtream streams — too small => wrong fps / laggy decode.
-      //   probesize=5MB, analyzeduration=5s   (mpv low-latency-ish defaults)
-      //   nobuffer + discardcorrupt           — keep latency low, drop junk.
-      // NOTE: HLS-only options (live_start_index, m3u8_hold_counters,
-      // seg_max_retry, max_reload) are NOT set here — when the stream isn't
-      // HLS, libavformat rejects them and mpv prints noisy errors that our
-      // watchdog mistakes for stream failures.
+      // MPEG-TS / HLS demux tuning.
+      //   probesize=5MB, analyzeduration=5s — big enough for ffmpeg to
+      //                                       detect real codec params.
+      //   discardcorrupt                    — drop junk packets silently.
+      // We deliberately DO NOT set fflags=+nobuffer here. +nobuffer tells
+      // ffmpeg to push frames the instant they arrive, which is great for
+      // sub-second-latency live but means any upstream jitter ⇒ visible
+      // buffer underrun. For IPTV we'd rather have ~1–2 s of demuxer
+      // smoothing than a spinner every 30 s.
+      // HLS-only options (live_start_index, m3u8_hold_counters, etc.) are
+      // intentionally not set — when the stream isn't HLS, libavformat
+      // rejects them and mpv prints noisy errors the watchdog mistakes
+      // for stream failures.
       await p.setProperty(
         'demuxer-lavf-o',
-        'fflags=+nobuffer+discardcorrupt,'
+        'fflags=+discardcorrupt+genpts,'
             'probesize=5000000,'
             'analyzeduration=5000000',
       );
@@ -329,6 +286,14 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   void _bind() {
     _posSub = _player.stream.position.listen((pos) {
       if (!mounted) return;
+      if (!_isSeeking && pos != _position) {
+        // Don't pump setState on every tick if duration is 0 (pure live).
+        if (_isVod) {
+          setState(() => _position = pos);
+        } else {
+          _position = pos;
+        }
+      }
       if (pos != _lastPos) {
         _lastPos = pos;
         _lastPosChange = DateTime.now();
@@ -341,17 +306,27 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
         }
       }
     });
+    _durSub = _player.stream.duration.listen((dur) {
+      if (!mounted) return;
+      if (dur != _duration) setState(() => _duration = dur);
+    });
     _playingSub = _player.stream.playing.listen((p) {
       if (!mounted) return;
       setState(() => _playing = p);
       if (p) {
         _readyNotPlayingSince = null;
-        if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
-          unawaited(_ensureIptvAudioSessionActive());
-          _attachIptvMediaSession();
-        }
       } else if (_userPlayWhenReady) {
+        // libmpv silently went paused while the user wants playback. On a
+        // live IPTV stream this is the classic "feed died, mpv hit EOF and
+        // toggled pause=yes" symptom. Poke play() once immediately — if it
+        // takes, great; if it doesn't, the watchdog will hard-reload us.
         _readyNotPlayingSince = DateTime.now();
+        Future.microtask(() async {
+          if (!mounted || !_userPlayWhenReady || _playing) return;
+          try {
+            await _player.play();
+          } catch (_) {}
+        });
       }
     });
     _bufferingSub = _player.stream.buffering.listen((b) {
@@ -377,7 +352,38 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
           lower.contains("expected '=' and a value")) {
         return;
       }
+      // "Stream ends prematurely" / "End of file" on a live HTTP feed means
+      // the CDN dropped the TCP connection mid-stream. mpv's reconnect_at_eof
+      // only fires on clean EOF, not on premature close, so we have to force
+      // a full player recreation to get a fresh socket — gentle seek/reopen
+      // attempts will just keep failing on the same dead connection.
+      if (lower.contains('ends prematurely') ||
+          lower.contains('end of file') ||
+          lower.contains('connection reset')) {
+        _triggerRecovery(reason: 'connection dropped: $msg', forceHard: true);
+        return;
+      }
       _triggerRecovery(reason: 'error: $msg');
+    });
+    // mpv log stream catches conditions that don't surface as `error`
+    // events — most importantly, ffmpeg's "http: Stream ends prematurely"
+    // (CDN dropped the TCP connection mid-stream). Without this, the
+    // watchdog only sees the resulting position freeze and tries gentle
+    // recoveries that can't fix a dead socket.
+    _logSub = _player.stream.log.listen((l) {
+      if (l.level != 'error' && l.level != 'fatal' && l.level != 'warn') {
+        return;
+      }
+      final text = l.text.toLowerCase();
+      if (text.contains('ends prematurely') ||
+          text.contains('end of file') ||
+          text.contains('connection reset') ||
+          text.contains('connection refused') ||
+          text.contains('connection timed out')) {
+        debugPrint('[IPTV Player] mpv log: ${l.level} ${l.prefix}: ${l.text}');
+        _triggerRecovery(
+            reason: 'mpv log: ${l.text}', forceHard: true);
+      }
     });
   }
 
@@ -394,6 +400,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
       _pausedAt = null;
       _lastPos = Duration.zero;
       _lastPosChange = DateTime.now();
+      _openedAt = DateTime.now();
       // For HLS streams that DO expose a DVR window, jump to the live edge
       // shortly after open so we never replay stale buffered packets.
       _scheduleJumpToLive();
@@ -458,32 +465,68 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
         if (mounted) setState(() => _statusBanner = null);
       }
 
-      // Detector 1: long buffering
+      // Detector 1: long buffering. Mid-stream stalls with a 30 s buffer
+      // shouldn't last more than ~10 s; before the first frame, the slow
+      // initial connect to a remote `.ts` feed needs more grace.
+      final bufferGrace = _lastPos > Duration.zero
+          ? const Duration(milliseconds: 12000)
+          : const Duration(milliseconds: 25000);
       if (_userPlayWhenReady &&
           _bufferingSince != null &&
-          now.difference(_bufferingSince!) > const Duration(milliseconds: 6000)) {
-        _triggerRecovery(reason: 'buffering > 6s');
+          now.difference(_bufferingSince!) > bufferGrace) {
+        _triggerRecovery(reason: 'buffering > ${bufferGrace.inSeconds}s');
         return;
       }
-      // Detector 2: position frozen while playing
+      // Detector 2: position frozen while playing.
+      // CRITICAL gates to avoid false positives on initial connect:
+      //  • !_buffering — if mpv reports buffering, position-not-advancing is
+      //    expected and detector 1 is the right signal.
+      //  • _lastPos > 0 — we must have received at least one decoded frame
+      //    since the last open. Until first frame, mpv flips playing=true
+      //    on play() but the position stream is silent; on slow streams
+      //    the initial connect easily exceeds 8 s.
       if (_playing &&
-          now.difference(_lastPosChange) > const Duration(milliseconds: 5000)) {
-        _triggerRecovery(reason: 'position frozen > 5s');
+          !_buffering &&
+          _lastPos > Duration.zero &&
+          now.difference(_lastPosChange) > const Duration(milliseconds: 8000)) {
+        _triggerRecovery(reason: 'position frozen > 8s');
         return;
       }
-      // Detector 3: should be playing but isn't
+      // Detector 3: should be playing but isn't. For LIVE IPTV, a sustained
+      // self-pause (mpv flipped to pause=yes on its own) almost always means
+      // the upstream feed ended — live TV doesn't end, ever, so this is
+      // dead. Skip the gradual seek→reload backoff and go straight to a hard
+      // reopen (forceHard:true).
       if (_userPlayWhenReady &&
           !_playing &&
           _readyNotPlayingSince != null &&
           now.difference(_readyNotPlayingSince!) >
-              const Duration(milliseconds: 5000)) {
-        _triggerRecovery(reason: 'not playing > 5s');
+              const Duration(milliseconds: 3000)) {
+        _triggerRecovery(reason: 'silent self-pause > 3s', forceHard: true);
+        return;
+      }
+      // Detector 4: opened but never produced a first frame. The classic
+      // "CDN dropped the connection mid-handshake" hang where mpv keeps
+      // playing=true, never flips buffering, never errors, just sits there
+      // with position=0 forever. None of detectors 1-3 catch this:
+      //   • detector 1 needs buffering=true (mpv may not set it)
+      //   • detector 2 is gated on _lastPos > 0
+      //   • detector 3 needs playing=false (mpv stays true)
+      // 30 s is well past the 25 s initial-connect grace in detector 1.
+      if (_userPlayWhenReady &&
+          _lastPos == Duration.zero &&
+          now.difference(_openedAt) > const Duration(seconds: 30)) {
+        _triggerRecovery(
+            reason: 'no first frame after 30s', forceHard: true);
       }
     });
   }
 
   bool _recoveryInFlight = false;
-  Future<void> _triggerRecovery({required String reason}) async {
+  Future<void> _triggerRecovery({
+    required String reason,
+    bool forceHard = false,
+  }) async {
     if (_recoveryInFlight) return;
     final now = DateTime.now();
     if (_lastRecoveryAt != null &&
@@ -493,11 +536,12 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     }
     _recoveryInFlight = true;
     _lastRecoveryAt = now;
-    debugPrint('[IPTV Watchdog] recovery (#${_retryAttempt + 1}): $reason');
+    debugPrint(
+        '[IPTV Watchdog] recovery (#${_retryAttempt + 1}, hard=$forceHard): $reason');
 
     try {
       if (_retryAttempt >= _maxRetries) {
-        // Rotate source
+        // Rotate to the next source if we have one.
         if (_sourceIdx < widget.sources.length - 1) {
           _sourceIdx++;
           _retryAttempt = 0;
@@ -506,22 +550,86 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
                 _statusBanner = 'Switching to ${widget.sources[_sourceIdx].label}…');
           }
           await _openCurrent();
-        } else {
-          if (mounted) {
-            setState(() => _statusBanner = 'Unable to connect.');
-          }
+          return;
         }
+        // Single-source channel that won't connect. Don't give up — live
+        // streams come back. Wipe the player completely and try again on a
+        // long interval so we're not hammering a dead endpoint.
+        if (mounted) {
+          setState(() => _statusBanner =
+              'Stream offline — retrying every ${_coldRetryInterval.inSeconds}s…');
+        }
+        await Future.delayed(_coldRetryInterval);
+        try {
+          await _disposePlayer();
+          _player = Player(
+            configuration: const PlayerConfiguration(
+              bufferSize: 64 * 1024 * 1024,
+              logLevel: MPVLogLevel.warn,
+            ),
+          );
+          _controller = VideoController(_player);
+          _bind();
+          await _applyMpvTunables();
+        } catch (e) {
+          debugPrint('[IPTV] cold-retry recreate failed: $e');
+        }
+        // Reset the retry ladder so the next ladder run gets fresh backoff.
+        _retryAttempt = 0;
+        try {
+          await _player.open(
+            Media(widget.sources[_sourceIdx].url,
+                httpHeaders: const {'User-Agent': _ua}),
+          );
+          await _player.play();
+        } catch (e) {
+          debugPrint('[IPTV] cold-retry open failed: $e');
+        }
+        if (mounted) setState(() {});
+        _bufferingSince = null;
+        _readyNotPlayingSince = null;
+        _lastPos = Duration.zero;
+        _lastPosChange = DateTime.now();
+        _openedAt = DateTime.now();
         return;
       }
 
       _retryAttempt++;
       final delayIdx = (_retryAttempt - 1).clamp(0, _backoffMs.length - 1);
       final delay = _backoffMs[delayIdx];
-      // Reconnect silently in the background — no UI banner.
+      // Show what we're doing so the user isn't staring at a frozen spinner.
+      if (mounted) {
+        setState(() => _statusBanner =
+            'Reconnecting\u2026 (attempt $_retryAttempt/$_maxRetries)');
+      }
 
       await Future.delayed(Duration(milliseconds: delay));
 
-      if (_retryAttempt <= 2) {
+      // Fast path: silent self-pause on a live stream means the feed is
+      // gone. A seek/reload won't bring it back — jump straight to the
+      // "recreate the player" tier so we get a fully fresh socket.
+      if (forceHard) {
+        try {
+          await _disposePlayer();
+          _player = Player(
+            configuration: const PlayerConfiguration(
+              bufferSize: 64 * 1024 * 1024,
+              logLevel: MPVLogLevel.warn,
+            ),
+          );
+          _controller = VideoController(_player);
+          _bind();
+          await _applyMpvTunables();
+          await _player.open(
+            Media(widget.sources[_sourceIdx].url,
+                httpHeaders: const {'User-Agent': _ua}),
+          );
+          await _player.play();
+          if (mounted) setState(() {});
+        } catch (e) {
+          debugPrint('[IPTV] hard recreate failed: $e');
+        }
+      } else if (_retryAttempt <= 2) {
         try {
           await _player.seek(Duration.zero);
         } catch (_) {}
@@ -549,7 +657,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
           await _disposePlayer();
           _player = Player(
             configuration: const PlayerConfiguration(
-              bufferSize: 32 * 1024 * 1024,
+              bufferSize: 64 * 1024 * 1024,
               logLevel: MPVLogLevel.warn,
             ),
           );
@@ -570,17 +678,19 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
       _readyNotPlayingSince = null;
       _lastPos = Duration.zero;
       _lastPosChange = DateTime.now();
+      _openedAt = DateTime.now();
     } finally {
       _recoveryInFlight = false;
     }
   }
 
   Future<void> _disposePlayer() async {
-    _detachIptvMediaSession();
     await _posSub?.cancel();
+    await _durSub?.cancel();
     await _playingSub?.cancel();
     await _bufferingSub?.cancel();
     await _errorSub?.cancel();
+    await _logSub?.cancel();
     try {
       await _player.dispose();
     } catch (_) {}
@@ -636,24 +746,6 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (!platformIsAndroid && !Platform.isIOS) return;
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
-      unawaited(_settings.continuePlaybackInBackground().then((allow) {
-        if (!mounted) return;
-        if (!allow && _playing) {
-          unawaited(_player.pause());
-        }
-      }));
-    } else if (state == AppLifecycleState.resumed) {
-      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
-        unawaited(_ensureIptvAudioSessionActive());
-      }
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final compact = size.shortestSide < 600;
@@ -665,20 +757,12 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Video — respect "Continue playback in background" (same as main player)
+            // Video
             Center(
-              child: ValueListenableBuilder<bool>(
-                valueListenable:
-                    SettingsService.continuePlaybackInBackgroundNotifier,
-                builder: (context, allowBg, _) {
-                  return Video(
-                    controller: _controller,
-                    fit: BoxFit.contain,
-                    controls: NoVideoControls,
-                    fill: Colors.black,
-                    pauseUponEnteringBackgroundMode: !allowBg,
-                  );
-                },
+              child: Video(
+                controller: _controller,
+                fit: BoxFit.contain,
+                controls: NoVideoControls,
               ),
             ),
             // Reconnect/buffering banner
@@ -758,6 +842,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
           children: [
             _buildTopBar(compact),
             const Spacer(),
+            if (_isVod) _buildSeekbar(compact),
             _buildBottomBar(compact),
           ],
         ),
@@ -828,6 +913,114 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     );
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  //  VOD SEEKBAR — only shown when duration > 0 (Xtream movies / series)
+  // ───────────────────────────────────────────────────────────────────────
+  Widget _buildSeekbar(bool compact) {
+    final totalMs = _duration.inMilliseconds.toDouble();
+    if (totalMs <= 0) return const SizedBox.shrink();
+    final currentMs = _isSeeking
+        ? _seekPreview
+        : _position.inMilliseconds.toDouble().clamp(0.0, totalMs);
+    final shownPos = Duration(milliseconds: currentMs.toInt());
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 24,
+        vertical: compact ? 2 : 4,
+      ),
+      child: Row(
+        children: [
+          // Current time
+          SizedBox(
+            width: compact ? 56 : 64,
+            child: Text(
+              _fmtDur(shownPos),
+              style: GoogleFonts.spaceMono(
+                color: Colors.white,
+                fontSize: compact ? 12 : 13,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                shadows: const [
+                  Shadow(blurRadius: 6, color: Colors.black87),
+                ],
+              ),
+            ),
+          ),
+          // Slider
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: const Color(0xFF00E5FF),
+                inactiveTrackColor: Colors.white.withValues(alpha: 0.18),
+                thumbColor: Colors.white,
+                overlayColor: const Color(0x3300E5FF),
+                trackHeight: 3.5,
+                thumbShape: const RoundSliderThumbShape(
+                  enabledThumbRadius: 7,
+                  elevation: 3,
+                ),
+                overlayShape:
+                    const RoundSliderOverlayShape(overlayRadius: 16),
+                trackShape: const RoundedRectSliderTrackShape(),
+              ),
+              child: Slider(
+                value: currentMs.clamp(0.0, totalMs),
+                min: 0,
+                max: totalMs,
+                onChangeStart: (v) {
+                  setState(() {
+                    _isSeeking = true;
+                    _seekPreview = v;
+                  });
+                  _hideControlsTimer?.cancel();
+                },
+                onChanged: (v) {
+                  setState(() => _seekPreview = v);
+                },
+                onChangeEnd: (v) async {
+                  final target = Duration(milliseconds: v.toInt());
+                  setState(() {
+                    _isSeeking = false;
+                    _position = target;
+                  });
+                  try {
+                    await _player.seek(target);
+                  } catch (_) {}
+                  _scheduleHideControls();
+                },
+              ),
+            ),
+          ),
+          // Total time
+          SizedBox(
+            width: compact ? 56 : 64,
+            child: Text(
+              _fmtDur(_duration),
+              textAlign: TextAlign.right,
+              style: GoogleFonts.spaceMono(
+                color: Colors.white70,
+                fontSize: compact ? 12 : 13,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                shadows: const [
+                  Shadow(blurRadius: 6, color: Colors.black87),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _fmtDur(Duration d) {
+    final s = d.inSeconds.abs();
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final sec = s % 60;
+    final two = (int n) => n.toString().padLeft(2, '0');
+    return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
+  }
+
   Widget _buildBottomBar(bool compact) {
     return Container(
       padding: EdgeInsets.symmetric(
@@ -844,18 +1037,13 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
                 await _player.pause();
               } else {
                 _userPlayWhenReady = true;
-                final pausedFor = _pausedAt == null
-                    ? Duration.zero
-                    : DateTime.now().difference(_pausedAt!);
                 _pausedAt = null;
-                if (pausedFor >= _liveRejoinThreshold) {
-                  // Long pause on a live stream → buffered data is stale.
-                  // Reload the source so we rejoin at the live edge instead of
-                  // replaying packets from when the user first hit play.
-                  await _openCurrent();
-                } else {
-                  await _player.play();
-                }
+                // Always just resume — never throw away buffered data on
+                // play. If the user paused specifically to *let the stream
+                // buffer*, blowing the cache and reopening would be the
+                // exact opposite of what they want. If the buffer is too
+                // stale to play, the watchdog will recover us.
+                await _player.play();
               }
               _scheduleHideControls();
             },

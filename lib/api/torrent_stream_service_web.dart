@@ -60,7 +60,22 @@ class TorrentStreamService {
   }) async =>
       null;
 
+  Future<String?> streamAudiobookFile(
+    String magnetLink,
+    int fileIdx, {
+    bool allowNonStreamable = false,
+    bool stopSiblingStreams = true,
+    String? fileNameHint,
+  }) async =>
+      null;
+
+  void stopAudiobookStreamsForMagnet(String magnetLink) {}
+
+  void releaseAudiobookMagnet(String magnetLink) {}
+
   void removeTorrent(String magnetOrHash) {}
+
+  void disposeOrphanTorrent(int torrentId) {}
 
   TorrentStats? getTorrentStats(String magnetOrHash) => null;
 

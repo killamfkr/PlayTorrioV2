@@ -6,6 +6,7 @@ import '../controller/iptv_controller.dart';
 import '../data/hardcoded_channels.dart';
 import '../data/iptv_network.dart';
 import '../data/models.dart';
+import '../m3u/m3u_playlists_screen.dart';
 import 'iptv_pt_player_screen.dart';
 import 'iptv_pt_tv_guide_view.dart';
 
@@ -167,6 +168,79 @@ class _PtAppBar extends StatelessWidget {
   }
 }
 
+class _SourceChip extends StatelessWidget {
+  final String label;
+  final String tag;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+  const _SourceChip({
+    required this.label,
+    required this.tag,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: Material(
+        color: Colors.transparent,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: selected
+                ? const LinearGradient(
+                    colors: [Color(0xFF1565C0), Color(0xFF00E5FF)],
+                  )
+                : null,
+            color: selected ? null : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? Colors.transparent
+                  : Colors.white.withValues(alpha: 0.12),
+            ),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: enabled ? onTap : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    tag,
+                    style: GoogleFonts.poppins(
+                      color: selected
+                          ? Colors.white
+                          : const Color(0xFF00E5FF),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PrimaryButton extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -255,12 +329,20 @@ class _PortalListView extends StatelessWidget {
         children: [
           _PtAppBar(
             title: 'IPTV Portals',
-            subtitle: ctrl.verified.isNotEmpty
-                ? (ctrl.statusText.isNotEmpty
-                    ? ctrl.statusText
-                    : '${ctrl.verified.length} verified')
-                : (ctrl.statusText.isNotEmpty ? null : '0 verified'),
+            subtitle: ctrl.statusText.isEmpty
+                ? '${ctrl.verified.length} verified'
+                : ctrl.statusText,
             actions: [
+              IconButton(
+                tooltip: 'M3U Playlists',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const M3uPlaylistsScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.playlist_play_rounded,
+                    color: Color(0xFF00E5FF)),
+              ),
               IconButton(
                 tooltip: 'Add portal',
                 onPressed: () => _showAddDialog(context),
@@ -334,74 +416,38 @@ class _PortalListView extends StatelessWidget {
   }
 
   Widget _buildEmpty(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        return Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 520, maxHeight: c.maxHeight * 0.72),
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.satellite_alt_rounded,
-                        size: 64, color: Color(0xFF00E5FF)),
-                    const SizedBox(height: 16),
-                    Text('No portals yet',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.bebasNeue(
-                            color: Colors.white,
-                            fontSize: 32,
-                            letterSpacing: 1.2)),
-                    const SizedBox(height: 12),
-                    if (ctrl.statusText.isNotEmpty) ...[
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Scrape',
-                          style: TextStyle(
-                            color: Color(0xFF9E9E9E),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                    ],
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 200),
-                      child: Scrollbar(
-                        thumbVisibility: ctrl.statusText.length > 180,
-                        child: SingleChildScrollView(
-                          child: Text(
-                            ctrl.statusText.isEmpty
-                                ? 'Find live Xtream portals,\nor add one manually.'
-                                : ctrl.statusText,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(
-                              color: Colors.white60,
-                              fontSize: 13.5,
-                              height: 1.35,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    _PrimaryButton(
-                      icon: Icons.travel_explore,
-                      label: 'Find Portals',
-                      busy: ctrl.isScraping,
-                      onPressed: ctrl.scrape,
-                    ),
-                  ],
-                ),
-              ),
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.satellite_alt_rounded,
+                size: 80, color: Color(0xFF00E5FF)),
+            const SizedBox(height: 24),
+            Text('No portals yet',
+                style: GoogleFonts.bebasNeue(
+                    color: Colors.white,
+                    fontSize: 36,
+                    letterSpacing: 1.6)),
+            const SizedBox(height: 8),
+            Text(
+              ctrl.statusText.isEmpty
+                  ? 'Find live Xtream portals,\nor add one manually.'
+                  : ctrl.statusText,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(color: Colors.white60),
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 28),
+            _PrimaryButton(
+              icon: Icons.travel_explore,
+              label: 'Find Portals',
+              busy: ctrl.isScraping,
+              onPressed: ctrl.scrape,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -415,7 +461,7 @@ class _PortalListView extends StatelessWidget {
             crossAxisCount: cross,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            mainAxisExtent: 168,
+            mainAxisExtent: 120,
           ),
           itemCount: ctrl.verified.length,
           itemBuilder: (_, i) {
@@ -455,206 +501,80 @@ class _PortalListView extends StatelessWidget {
           top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
         ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _PrimaryButton(
-              icon: Icons.travel_explore,
-              label: 'Scrape',
-              busy: ctrl.isScraping,
-              onPressed: ctrl.scrape,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSourcePicker(),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _PrimaryButton(
+                  icon: Icons.travel_explore,
+                  label: 'Scrape',
+                  busy: ctrl.isScraping,
+                  onPressed: ctrl.scrape,
+                ),
+                const SizedBox(width: 8),
+                if (ctrl.canGetMore)
+                  _PrimaryButton(
+                    icon: Icons.add_circle_outline,
+                    label: 'Get More',
+                    subtle: true,
+                    onPressed: ctrl.isScraping ? null : ctrl.getMore,
+                  ),
+                if (ctrl.canGetMore) const SizedBox(width: 8),
+                _PrimaryButton(
+                  icon: Icons.calendar_view_day_rounded,
+                  label: 'TV Guide',
+                  subtle: true,
+                  onPressed: ctrl.openTvGuide,
+                ),
+                const SizedBox(width: 8),
+                _PrimaryButton(
+                  icon: Icons.tv_rounded,
+                  label: 'Channels',
+                  subtle: true,
+                  onPressed: ctrl.openChannelsHub,
+                ),
+                const SizedBox(width: 8),
+                if (ctrl.verified.isNotEmpty)
+                  _PrimaryButton(
+                    icon: Icons.refresh_rounded,
+                    label: 'Re-verify',
+                    subtle: true,
+                    onPressed: ctrl.runVerification,
+                  ),
+              ],
             ),
-            const SizedBox(width: 8),
-            if (ctrl.canGetMore)
-              _PrimaryButton(
-                icon: Icons.add_circle_outline,
-                label: 'Get More',
-                subtle: true,
-                onPressed: ctrl.isScraping ? null : ctrl.getMore,
-              ),
-            if (ctrl.canGetMore) const SizedBox(width: 8),
-            if (ctrl.lastScrapeM3uSnippets.isNotEmpty) ...[
-              _PrimaryButton(
-                icon: Icons.list_alt_rounded,
-                label: 'M3U from scrape',
-                subtle: true,
-                onPressed: () => _showM3uScrapeBottomSheet(context),
-              ),
-              const SizedBox(width: 8),
-            ],
-            _PrimaryButton(
-              icon: Icons.calendar_view_day_rounded,
-              label: 'TV Guide',
-              subtle: true,
-              onPressed: ctrl.openTvGuide,
-            ),
-            const SizedBox(width: 8),
-            _PrimaryButton(
-              icon: Icons.tv_rounded,
-              label: 'Channels',
-              subtle: true,
-              onPressed: ctrl.openChannelsHub,
-            ),
-            const SizedBox(width: 8),
-            if (ctrl.verified.isNotEmpty)
-              _PrimaryButton(
-                icon: Icons.refresh_rounded,
-                label: 'Re-verify',
-                subtle: true,
-                onPressed: ctrl.runVerification,
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  void _showM3uScrapeBottomSheet(BuildContext context) {
-    final snippets = ctrl.lastScrapeM3uSnippets;
-    if (snippets.isEmpty) return;
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF11151C),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.88,
-        minChildSize: 0.4,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (_, scrollCtrl) {
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 8, 8),
-                child: Row(
-                  children: [
-                    Text(
-                      'M3U / playlist from scraper',
-                      style: GoogleFonts.bebasNeue(
-                        color: Colors.white,
-                        fontSize: 22,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () {
-                        final buf = StringBuffer();
-                        for (var i = 0; i < snippets.length; i++) {
-                          final s = snippets[i];
-                          buf.writeln('### ${i + 1}. ${s.source} '
-                              '(~${s.originalLength} chars)');
-                          buf.writeln(s.text);
-                          buf.writeln();
-                        }
-                        Clipboard.setData(ClipboardData(text: buf.toString()));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Copied all snippets'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.copy, color: Color(0xFF00E5FF), size: 18),
-                      label: Text(
-                        'Copy all',
-                        style: GoogleFonts.poppins(
-                          color: const Color(0xFF00E5FF),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      icon: const Icon(Icons.close, color: Colors.white54),
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                child: Text(
-                  'Blocks that look like #EXTM3U playlists from Reddit or paste fetches. '
-                  'Long lists may be truncated in memory.',
-                  style: GoogleFonts.poppins(color: Colors.white54, fontSize: 11),
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  controller: scrollCtrl,
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-                  itemCount: snippets.length,
-                  itemBuilder: (_, i) {
-                    final s = snippets[i];
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 14),
-                      child: Material(
-                        color: Colors.white.withValues(alpha: 0.04),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(10),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      '${i + 1}. ${s.source} · ${s.originalLength} chars',
-                                      style: GoogleFonts.poppins(
-                                        color: const Color(0xFF00E5FF),
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                  TextButton(
-                                    onPressed: () {
-                                      Clipboard.setData(
-                                        ClipboardData(text: s.text),
-                                      );
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Copied section'),
-                                          behavior: SnackBarBehavior.floating,
-                                        ),
-                                      );
-                                    },
-                                    child: Text(
-                                      'Copy',
-                                      style: GoogleFonts.poppins(
-                                        color: Colors.white70,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              SelectableText(
-                                s.text,
-                                style: GoogleFonts.jetBrainsMono(
-                                  color: Colors.white70,
-                                  fontSize: 10,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          );
-        },
+  Widget _buildSourcePicker() {
+    const items = <(CatalogSource, String, String)>[
+      (CatalogSource.best, 'Source 1', 'Best'),
+      (CatalogSource.works, 'Source 2', 'Works'),
+    ];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final it in items) ...[
+            _SourceChip(
+              label: it.$2,
+              tag: it.$3,
+              selected: ctrl.scrapeSource == it.$1,
+              enabled: !ctrl.isScraping,
+              onTap: () => ctrl.setScrapeSource(it.$1),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
       ),
     );
   }
@@ -852,31 +772,6 @@ class _PortalCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.poppins(
                               color: Colors.white60, fontSize: 11)),
-                      if (v.portal.username.isNotEmpty ||
-                          v.portal.password.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'User: ${v.portal.username.isNotEmpty ? v.portal.username : '—'}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.poppins(
-                            color: Colors.white54,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Pass: ${v.portal.password.isNotEmpty ? v.portal.password : '—'}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.poppins(
-                            color: Colors.white54,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
                       const SizedBox(height: 6),
                       Row(
                         children: [
@@ -894,7 +789,22 @@ class _PortalCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (!editMode)
+                if (!editMode) ...[
+                  IconButton(
+                    tooltip: 'Copy portal details',
+                    onPressed: () {
+                      final p = v.portal;
+                      final cleanUrl = p.url.replaceFirst('http://', '').replaceFirst('https://', '');
+                      Clipboard.setData(ClipboardData(text: '$cleanUrl:${p.username}:${p.password}'));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Portal details copied to clipboard'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, color: Colors.white54, size: 20),
+                  ),
                   IconButton(
                     tooltip: isFavorite ? 'Unfavorite' : 'Favorite',
                     onPressed: onToggleFavorite,
@@ -906,6 +816,7 @@ class _PortalCard extends StatelessWidget {
                       size: 22,
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -1322,13 +1233,9 @@ class _BrowserViewState extends State<_BrowserView> {
             onChanged: ctrl.setLiveOnly,
           ),
           const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Show only alive (${ctrl.aliveStreamIds.length}) · favorites always shown',
+          Text('Show only alive streams (${ctrl.aliveStreamIds.length})',
               style: GoogleFonts.poppins(
-                  color: Colors.white70, fontSize: 12),
-            ),
-          ),
+                  color: Colors.white70, fontSize: 12)),
         ],
       ),
     );
@@ -1538,9 +1445,8 @@ class _StreamCard extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                padding: const EdgeInsets.all(8),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: Tooltip(
@@ -1568,6 +1474,11 @@ class _StreamCard extends StatelessWidget {
                     ),
                     if (stream.kind == 'live')
                       IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 32,
+                          minHeight: 32,
+                        ),
                         tooltip: ctrl.isLiveStreamFavorite(stream)
                             ? 'Remove from favorites'
                             : 'Favorite channel',
