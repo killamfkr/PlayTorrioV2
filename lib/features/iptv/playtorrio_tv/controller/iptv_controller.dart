@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../../../services/playtorrio_cloud_sync_service.dart';
+import '../../../../utils/tv_guide_refresh.dart';
 import '../data/hardcoded_channels.dart';
 import '../data/iptv_cloud_bundle.dart';
 import '../data/iptv_network.dart';
@@ -140,6 +141,7 @@ class IptvController extends ChangeNotifier {
   bool channelIsRunning = false;
   List<ChannelHit> channelResults = const [];
   bool _channelCancel = false;
+  bool _iptvCloudEpochHooked = false;
 
   // ── Favorites TV guide (starred Live TV channels across portals) ──
   bool tvGuideLoading = false;
@@ -169,6 +171,7 @@ class IptvController extends ChangeNotifier {
     }
     await IptvBrowserFavoritesStore.save(p.key, _liveFavoriteIds);
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    TvGuideRefresh.bump();
     notifyListeners();
   }
 
@@ -195,8 +198,16 @@ class IptvController extends ChangeNotifier {
 
   // ── Init ──
   Future<void> init() async {
-    IptvCloudBundle.epoch.addListener(_onIptvCloudEpoch);
+    if (!_iptvCloudEpochHooked) {
+      IptvCloudBundle.epoch.addListener(_onIptvCloudEpoch);
+      _iptvCloudEpochHooked = true;
+    }
+    await reloadVerifiedFromDisk();
+    notifyListeners();
+  }
 
+  /// Reload verified portals / favorites from disk (PT TV Guide tab, cloud pull).
+  Future<void> reloadVerifiedFromDisk() async {
     final stored = await IptvStore.load();
     _favoritePortals
       ..clear()
@@ -206,7 +217,6 @@ class IptvController extends ChangeNotifier {
       ..clear()
       ..addAll(stored.map((v) => v.credKey));
     await _loadHubAndBrowserFavoritesFromDisk();
-    notifyListeners();
   }
 
   Future<void> _loadHubAndBrowserFavoritesFromDisk() async {
@@ -264,6 +274,7 @@ class IptvController extends ChangeNotifier {
             .toList(),
       );
     }
+    TvGuideRefresh.bump();
     notifyListeners();
   }
 
@@ -801,6 +812,7 @@ class IptvController extends ChangeNotifier {
     PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
     _guideEpgCache.remove('${slot.portal.key}|${slot.stream.streamId}');
     await syncTvGuideSlots();
+    TvGuideRefresh.bump();
     notifyListeners();
   }
 

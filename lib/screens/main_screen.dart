@@ -189,6 +189,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _onItemTapped(int index) {
     setState(() => _selectedIndex = index);
+    if (index < _visibleIds.length &&
+        _visibleIds[index] == 'iptv_pt_guide') {
+      TvGuideRefresh.bump();
+    }
   }
 
   void searchComics(String query) {
