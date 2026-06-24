@@ -27,6 +27,21 @@ class IptvController extends ChangeNotifier {
   bool isScraping = false;
   String statusText = '';
   List<VerifiedPortal> verified = const [];
+
+  /// Which catalog backend Scrape / Get More pulls from.
+  CatalogSource scrapeSource = CatalogSource.best;
+
+  void setScrapeSource(CatalogSource s) {
+    if (s == scrapeSource) return;
+    scrapeSource = s;
+    _scrapeAfter = null;
+    _pendingPortals.clear();
+    _pendingKeys.clear();
+    canGetMore = false;
+    statusText = '';
+    notifyListeners();
+  }
+
   bool canGetMore = false;
   String? _scrapeAfter;
   /// Last M3U-like text captured from catalog scrape (paste posts / big bodies). For inspection only.
@@ -35,6 +50,9 @@ class IptvController extends ChangeNotifier {
   /// Set of credKeys (user|pass) already verified — used to dedupe portals.
   /// Same credentials on a different URL still counts as a duplicate.
   final Set<String> _verifiedKeys = {};
+
+  /// Cred keys already attempted this session (alive or dead).
+  final Set<String> _attemptedKeys = {};
 
   /// Untested portals scraped on previous Get-More presses.
   /// Consumed first before scraping a fresh page — never wasted.
@@ -341,6 +359,7 @@ class IptvController extends ChangeNotifier {
         page = await IptvScraper.scrapeCatalogPage(
           maxResults: 50,
           after: _scrapeAfter,
+          source: scrapeSource,
         );
         _scrapeAfter = page.nextAfter;
         if (page.m3uSnippets.isNotEmpty) {
@@ -354,6 +373,7 @@ class IptvController extends ChangeNotifier {
         // host still counts as a duplicate.
         for (final p in page.portals) {
           if (_verifiedKeys.contains(p.credKey)) continue;
+          if (_attemptedKeys.contains(p.credKey)) continue;
           if (_pendingKeys.contains(p.credKey)) continue;
           _pendingKeys.add(p.credKey);
           _pendingPortals.add(p);
@@ -383,6 +403,7 @@ class IptvController extends ChangeNotifier {
         portals: snapshot,
         target: 5,
         onAttempted: (p) {
+          _attemptedKeys.add(p.credKey);
           if (_pendingKeys.remove(p.credKey)) {
             _pendingPortals.removeWhere((x) => x.credKey == p.credKey);
           }
@@ -1026,7 +1047,10 @@ class IptvController extends ChangeNotifier {
         try {
           final after = _channelCatalogAfter[ch.id];
           final page = await IptvScraper.scrapeCatalogPage(
-              maxResults: 60, after: after);
+            maxResults: 60,
+            after: after,
+            source: scrapeSource,
+          );
           _channelCatalogAfter[ch.id] = page.nextAfter;
           final knownKeys = {
             ...pool.map((p) => p.key),

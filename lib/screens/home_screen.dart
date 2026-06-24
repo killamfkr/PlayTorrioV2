@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:palette_generator/palette_generator.dart';
 import 'package:shimmer/shimmer.dart';
 import '../api/tmdb_api.dart';
+import '../api/bestsimilar_scraper.dart';
 import '../api/settings_service.dart';
 import '../api/stremio_service.dart';
-import '../utils/stremio_stream_headers.dart';
 import '../api/stream_extractor.dart';
 import '../api/stream_providers.dart';
 import '../api/amri_extractor.dart';
@@ -15,17 +18,17 @@ import '../api/trakt_service.dart';
 import '../api/simkl_service.dart';
 import '../api/webstreamr_service.dart';
 import '../services/watch_history_service.dart';
-import '../services/playtorrio_cloud_sync_service.dart';
 import '../services/my_list_service.dart';
 import '../models/movie.dart';
 import '../utils/app_theme.dart';
-import '../utils/device_profile.dart';
-import '../utils/performance_tuning.dart';
-import '../utils/dlstreams_top_home.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
 import 'player_screen.dart';
 import 'stremio_catalog_screen.dart';
+import '../services/playtorrio_cloud_sync_service.dart';
+import '../utils/device_profile.dart';
+import '../utils/dlstreams_top_home.dart';
+import '../utils/performance_tuning.dart';
 import '../widgets/hero_banner.dart';
 
 /// Converts nested maps from JSON decode into String maps for HTTP headers.
@@ -61,7 +64,8 @@ Future<bool> _tryResumeSavedStreamDirect(
   final headers = _watchHistoryParseHeaders(item['streamHeaders']);
 
   final method = item['method'] as String? ?? 'stream';
-  String activeProvider = method == 'stremio_direct' ? 'stremio_direct' : method;
+  String activeProvider =
+      method == 'stremio_direct' ? 'stremio_direct' : method;
   if (method == 'stream' && item['sourceId'] is String) {
     activeProvider = item['sourceId'] as String;
   }
@@ -94,7 +98,6 @@ Future<bool> _tryResumeSavedStreamDirect(
         startPosition: startPos,
         stremioId: item['stremioId'] as String?,
         stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
-        stremioStreamType: season != null ? 'tv' : 'movie',
       ),
     ),
   );
@@ -114,16 +117,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   final PageController _heroController = PageController();
   
   late Future<List<Movie>> _trendingFuture;
-  late Future<List<Movie>> _trendingTvFuture;
   late Future<List<Movie>> _popularFuture;
-  late Future<List<Movie>> _popularTvFuture;
   late Future<List<Movie>> _topRatedFuture;
   late Future<List<Movie>> _nowPlayingFuture;
   
   Timer? _heroTimer;
   int _heroIndex = 0;
-  /// Hero uses at most 5 items; kept in sync with trending load for correct auto-advance.
-  int _heroPageCount = 1;
 
   // Hero logo cache: movieId -> logo URL
   final Map<int, String> _heroLogos = {};
@@ -138,6 +137,37 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   List<Map<String, dynamic>> _traktCalendar = [];
   List<Map<String, dynamic>> _traktCalendarMovies = [];
 
+  // Ambient backdrop colors derived from current hero poster
+  Color _ambientPrimary = AppTheme.primaryColor;
+  Color _ambientSecondary = AppTheme.accentColor;
+  final Map<int, ({Color primary, Color secondary})> _ambientCache = {};
+
+  // Tonight's Pick — randomized recommendation
+  Movie? _tonightsPick;
+
+  // "Because you watched ___" — randomized seed pulled from continue-watching
+  // once per session, then BestSimilar.com recommendations (mapped to TMDB).
+  Map<String, dynamic>? _becauseSeed; // raw history item
+  Future<List<Movie>>? _becauseFuture;
+  int _becausePoolSize = 0; // unique in-progress shows; controls shuffle button
+  StreamSubscription<List<Map<String, dynamic>>>? _historySeedSub;
+
+  // Mood/genre filter state
+  String _selectedMood = 'mind';
+  Future<List<Movie>>? _moodFuture;
+
+  // Mood definitions (label, icon, tmdb genre IDs)
+  static const List<({String id, String label, IconData icon, List<int> genres})> _moods = [
+    (id: 'mind',     label: 'Mind-Bending',   icon: Icons.psychology_rounded,        genres: [878, 9648]),
+    (id: 'feel',     label: 'Feel-Good',      icon: Icons.wb_sunny_rounded,          genres: [35, 10751]),
+    (id: 'dark',     label: 'Dark Thrillers', icon: Icons.dark_mode_rounded,         genres: [53, 80]),
+    (id: 'romance',  label: 'Romance',        icon: Icons.favorite_rounded,          genres: [10749]),
+    (id: 'horror',   label: 'Horror',         icon: Icons.bedtime_rounded,           genres: [27]),
+    (id: 'action',   label: 'Action',         icon: Icons.local_fire_department_rounded, genres: [28, 12]),
+    (id: 'animated', label: 'Animated',       icon: Icons.brush_rounded,             genres: [16]),
+    (id: 'drama',    label: 'Drama',          icon: Icons.theaters_rounded,          genres: [18]),
+  ];
+
   @override
   bool get wantKeepAlive => true;
 
@@ -146,25 +176,22 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     super.initState();
     _trendingFuture = _api.getTrending().then((movies) {
       _fetchHeroLogos(movies.take(5).toList());
-      if (mounted) {
-        final n = movies.length.clamp(0, 5);
-        setState(() => _heroPageCount = n > 0 ? n : 1);
+      // Pick tonight's randomized recommendation from a deeper pool
+      if (movies.length > 6 && mounted) {
+        final pool = movies.skip(3).toList();
+        setState(() => _tonightsPick = pool[math.Random().nextInt(pool.length)]);
       }
+      // Prime ambient color for the first hero
+      if (movies.isNotEmpty) _extractAmbientFor(movies.first);
       return movies;
     });
-    _trendingTvFuture = _api.getTrendingTv();
     _popularFuture = _api.getPopular();
-    _popularTvFuture = _api.getPopularTv();
     _topRatedFuture = _api.getTopRated();
     _nowPlayingFuture = _api.getNowPlaying();
-
-    // TV hero uses HeroBanner (carousel); mobile/tablet use PageView + this timer.
-    if (!DeviceProfile.isAndroidTv) {
-      _startHeroTimer();
-    }
+    _moodFuture = _loadMoodMovies(_selectedMood);
+    
+    _startHeroTimer();
     _loadStremioCatalogs();
-
-    // Reload catalogs whenever addons are added/removed in Settings
     SettingsService.addonChangeNotifier.addListener(_onAddonsChanged);
 
     // Trakt auto-sync (runs once per session, no-op if not logged in)
@@ -176,6 +203,157 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     _loadTraktRecommendations();
     _loadTraktCalendar();
     _loadTraktCalendarMovies();
+
+    // "Because you watched ___" — pick a random in-progress item once per
+    // app session. If history isn't loaded yet, wait for the first event.
+    _initBecauseYouWatched();
+  }
+
+  void _initBecauseYouWatched() {
+    final svc = WatchHistoryService();
+    if (!_pickBecauseSeed(svc.current)) {
+      _historySeedSub = svc.historyStream.listen((items) {
+        if (_pickBecauseSeed(items)) {
+          _historySeedSub?.cancel();
+          _historySeedSub = null;
+        }
+      });
+    }
+  }
+
+  /// Returns true if a seed was successfully picked. Filters to in-progress
+  /// items (between 2% and 90% watched) and picks one at random per session.
+  bool _pickBecauseSeed(List<Map<String, dynamic>> history) {
+    if (!mounted || history.isEmpty) return false;
+    // Group episodes by their parent show so The Vampire Diaries doesn't get
+    // picked 8 times because you watched 8 episodes of it.
+    final byShow = <int, Map<String, dynamic>>{};
+    for (final item in history) {
+      final pos = (item['position'] as int?) ?? 0;
+      final dur = (item['duration'] as int?) ?? 0;
+      if (dur <= 0) continue;
+      final progress = pos / dur;
+      if (progress < 0.02 || progress >= 0.9) continue;
+      final tmdbId = item['tmdbId'] as int?;
+      if (tmdbId == null) continue;
+      // Keep the most-recently-updated entry per tmdbId
+      final existing = byShow[tmdbId];
+      final ts = (item['updatedAt'] as int?) ?? 0;
+      final existingTs = (existing?['updatedAt'] as int?) ?? -1;
+      if (ts > existingTs) byShow[tmdbId] = item;
+    }
+    if (byShow.isEmpty) return false;
+    final pool = byShow.values.toList();
+    final seed = pool[math.Random().nextInt(pool.length)];
+    setState(() {
+      _becauseSeed = seed;
+      _becausePoolSize = pool.length;
+      _becauseFuture = _loadBecauseRecs(seed);
+    });
+    return true;
+  }
+
+  Future<List<Movie>> _loadBecauseRecs(Map<String, dynamic> seed) async {
+    final title = (seed['title'] as String?)?.trim();
+    if (title == null || title.isEmpty) {
+      debugPrint('[BecauseYouWatched] no title in seed');
+      return const [];
+    }
+    final mediaType = (seed['mediaType'] as String?) ??
+        (seed['season'] != null ? 'tv' : 'movie');
+    final isTv = mediaType == 'tv';
+    debugPrint('[BecauseYouWatched] seed="$title" isTv=$isTv');
+
+    try {
+      // 1) Autocomplete on bestsimilar; pick the closest hit (forgiving).
+      final hits = await BestSimilarScraper.autocomplete(title);
+      debugPrint('[BecauseYouWatched] autocomplete hits=${hits.length}');
+      if (hits.isEmpty) return const [];
+
+      final lowerTitle = title.toLowerCase();
+      BSAutocompleteHit? hit;
+      // Prefer same-type exact title match.
+      for (final h in hits) {
+        if (h.isTv == isTv && h.title.toLowerCase() == lowerTitle) {
+          hit = h; break;
+        }
+      }
+      // Then any exact title match.
+      hit ??= hits.firstWhere(
+        (h) => h.title.toLowerCase() == lowerTitle,
+        orElse: () => hits.first,
+      );
+      debugPrint('[BecauseYouWatched] picked hit id=${hit.id} title="${hit.title}"');
+
+      // 2) Detail page → similar items.
+      final details =
+          await BestSimilarScraper.fetchDetails(id: hit.id, slug: hit.slug);
+      if (details == null || details.similar.isEmpty) {
+        debugPrint('[BecauseYouWatched] no similar items returned');
+        return const [];
+      }
+      debugPrint('[BecauseYouWatched] bestsimilar similar=${details.similar.length}');
+
+      // 3) Resolve each BS item to a TMDB Movie (parallel) — relaxed threshold
+      //    so we don't drop everything when the year is unknown.
+      final lookups = details.similar.map((it) async {
+        try {
+          final hits = await _api.searchMulti(it.title);
+          if (hits.isEmpty) return null;
+          Movie? best;
+          var bestScore = -1;
+          for (final h in hits) {
+            var s = 0;
+            final ht = h.title.toLowerCase();
+            final it2 = it.title.toLowerCase();
+            if (ht == it2) {
+              s += 5;
+            } else if (ht.startsWith(it2) || it2.startsWith(ht)) {
+              s += 2;
+            }
+            if (it.year != null && h.releaseDate.length >= 4) {
+              final hy = int.tryParse(h.releaseDate.substring(0, 4));
+              if (hy == it.year) {
+                s += 4;
+              } else if (hy != null && (hy - it.year!).abs() <= 1) {
+                s += 1;
+              }
+            }
+            if (h.posterPath.isNotEmpty) s += 1;
+            if (s > bestScore) {
+              bestScore = s;
+              best = h;
+            }
+          }
+          if (best == null || bestScore < 2) return null;
+          if (best.posterPath.isEmpty) return null;
+          return MapEntry(it.similarityPercent ?? -1, best);
+        } catch (_) {
+          return null;
+        }
+      });
+      final resolved = await Future.wait(lookups);
+
+      // 4) Sort by bestsimilar similarity % (desc), drop dupes & nulls.
+      //    Items without a percentage fall to the bottom.
+      final ranked = resolved.whereType<MapEntry<int, Movie>>().toList()
+        ..sort((a, b) => b.key.compareTo(a.key));
+      final out = <Movie>[];
+      final seen = <int>{};
+      for (final e in ranked) {
+        if (!seen.add(e.value.id)) continue;
+        out.add(e.value);
+      }
+      debugPrint('[BecauseYouWatched] tmdb-resolved=${out.length} (sorted by %)');
+      return out;
+    } catch (e) {
+      debugPrint('[BecauseYouWatched] failed: $e');
+      return const [];
+    }
+  }
+
+  void _shuffleBecauseSeed() {
+    _pickBecauseSeed(WatchHistoryService().current);
   }
 
   Future<void> _loadTraktRecommendations() async {
@@ -237,19 +415,94 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   }
 
   void _startHeroTimer() {
-    if (AppTheme.isLightMode || PerformanceTuning.skipHomeHeroAutoAdvance) {
-      return;
-    }
+    if (AppTheme.isLightMode) return; // skip periodic rebuilds in light mode
     _heroTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
-      if (_heroController.hasClients && _heroPageCount > 1) {
-        final next = (_heroIndex + 1) % _heroPageCount;
+      if (_heroController.hasClients) {
+        final next = (_heroIndex + 1) % 5;
         _heroController.animateToPage(
           next,
           duration: const Duration(milliseconds: 1000),
           curve: Curves.easeInOutCubic,
         );
+        setState(() => _heroIndex = next);
+        _onHeroChanged(next);
       }
     });
+  }
+
+  void _onHeroChanged(int index) {
+    // Extract ambient color for the new hero
+    _trendingFuture.then((movies) {
+      if (!mounted) return;
+      final list = movies.take(5).toList();
+      if (index >= 0 && index < list.length) {
+        _extractAmbientFor(list[index]);
+      }
+    }).catchError((_) {});
+  }
+
+  Future<List<Movie>> _loadMoodMovies(String moodId) async {
+    final mood = _moods.firstWhere((m) => m.id == moodId, orElse: () => _moods.first);
+    try {
+      final results = await _api.discoverMovies(genres: mood.genres, minRating: 6.0);
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _selectMood(String moodId) {
+    if (moodId == _selectedMood) return;
+    setState(() {
+      _selectedMood = moodId;
+      _moodFuture = _loadMoodMovies(moodId);
+    });
+  }
+
+  Future<void> _extractAmbientFor(Movie movie) async {
+    if (AppTheme.isLightMode) return;
+    if (_ambientCache.containsKey(movie.id)) {
+      final c = _ambientCache[movie.id]!;
+      if (mounted) {
+        setState(() {
+          _ambientPrimary = c.primary;
+          _ambientSecondary = c.secondary;
+        });
+      }
+      return;
+    }
+    final src = movie.backdropPath.isNotEmpty
+        ? TmdbApi.getImageUrl(movie.backdropPath)
+        : (movie.posterPath.isNotEmpty ? TmdbApi.getImageUrl(movie.posterPath) : '');
+    if (src.isEmpty) return;
+    try {
+      final pg = await PaletteGenerator.fromImageProvider(
+        CachedNetworkImageProvider(src),
+        size: const Size(160, 90),
+        maximumColorCount: 12,
+      );
+      final dom = pg.dominantColor?.color ?? pg.vibrantColor?.color ?? AppTheme.primaryColor;
+      final vib = pg.vibrantColor?.color ??
+          pg.lightVibrantColor?.color ??
+          pg.mutedColor?.color ??
+          AppTheme.accentColor;
+      // Boost saturation slightly so dark posters still tint the page
+      Color boosted(Color c) {
+        final hsl = HSLColor.fromColor(c);
+        return hsl
+            .withSaturation((hsl.saturation + 0.25).clamp(0.0, 1.0))
+            .withLightness((hsl.lightness * 0.65 + 0.18).clamp(0.05, 0.55))
+            .toColor();
+      }
+      final primary = boosted(dom);
+      final secondary = boosted(vib);
+      _ambientCache[movie.id] = (primary: primary, secondary: secondary);
+      if (!mounted) return;
+      setState(() {
+        _ambientPrimary = primary;
+        _ambientSecondary = secondary;
+      });
+    } catch (_) {}
   }
 
   Future<void> _fetchHeroLogos(List<Movie> movies) async {
@@ -280,6 +533,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     SettingsService.addonChangeNotifier.removeListener(_onAddonsChanged);
     _heroTimer?.cancel();
     _heroController.dispose();
+    _historySeedSub?.cancel();
     super.dispose();
   }
 
@@ -531,20 +785,16 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     }
   }
 
-  /// Hosted Streaming Catalogs addon (Netflix, Disney+, Prime, etc.) — load every catalog row on Home.
-  static bool _isStreamingCatalogsAddon(Map<String, dynamic> cat) {
-    final u = (cat['addonBaseUrl'] as String? ?? '').toLowerCase();
-    return u.contains('stremio-netflix-catalog-addon.baby-beamup.club');
-  }
-
   Future<void> _loadStremioCatalogs() async {
     try {
       final catalogs = await _stremio.getAllCatalogs();
       if (!mounted || catalogs.isEmpty) return;
 
-      final usable = catalogs.where((c) => c['searchRequired'] != true).toList();
+      final usable =
+          catalogs.where((c) => c['searchRequired'] != true).toList();
 
-      final streamingAddonCats = usable.where(_isStreamingCatalogsAddon).toList();
+      final streamingAddonCats =
+          usable.where(_isStreamingCatalogsAddon).toList();
       final dlstreamsAddonCats =
           usable.where(isDlstreamsTopCatalog).toList();
       final otherCats = usable
@@ -555,7 +805,6 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       final Map<String, List<Map<String, dynamic>>> nextItems = {};
       final List<Map<String, dynamic>> nextOrder = [];
 
-      // Streaming Catalogs addon: fetch in manifest order (sequential so rows match Netflix → Disney+ → …).
       for (final cat in streamingAddonCats) {
         try {
           final items = await _stremio.getCatalog(
@@ -568,14 +817,13 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             item['_addonBaseUrl'] = cat['addonBaseUrl'];
             item['_addonName'] = cat['addonName'];
           }
-          final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+          final itemKey =
+              '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
           nextItems[itemKey] = items;
           nextOrder.add(cat);
         } catch (_) {}
       }
 
-      // dlstreams.top: load **every** catalog as its own home row, grouped into shelves
-      // (Sports TV, Movies & Series, …); schedule-style catalogs → "Live schedules" board.
       if (dlstreamsAddonCats.isNotEmpty) {
         final ordered = orderedDlstreamsCatalogs(dlstreamsAddonCats);
         annotateDlstreamsShelfHeaders(ordered);
@@ -603,7 +851,6 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
         }));
       }
 
-      // Other addons: first catalog per addon that returns items (original behavior).
       final Map<String, List<Map<String, dynamic>>> byAddon = {};
       for (final c in otherCats) {
         byAddon.putIfAbsent(c['addonBaseUrl'] as String, () => []).add(c);
@@ -621,7 +868,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               item['_addonBaseUrl'] = cat['addonBaseUrl'];
               item['_addonName'] = cat['addonName'];
             }
-            final itemKey = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+            final itemKey =
+                '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
             nextItems[itemKey] = items;
             nextOrder.add(cat);
             return;
@@ -640,6 +888,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     } catch (e) {
       debugPrint('[HomeScreen] Error loading Stremio catalogs: $e');
     }
+  }
+
+  /// Hosted Streaming Catalogs addon — load every catalog row on Home.
+  static bool _isStreamingCatalogsAddon(Map<String, dynamic> cat) {
+    final u = (cat['addonBaseUrl'] as String? ?? '').toLowerCase();
+    return u.contains('stremio-netflix-catalog-addon.baby-beamup.club');
   }
 
   void _openStremioCatalog(Map<String, dynamic> catalog) {
@@ -694,9 +948,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     // Custom ID, collection, or all lookups failed
     if (mounted) {
       // Override type to 'collections' if it's a collection ID
-      final actualType = isCollection
-          ? 'collections'
-          : ((type == 'series' || type == 'channel' || type == 'tv') ? 'tv' : 'movie');
+      final actualType = isCollection ? 'collections' : (type == 'series' ? 'tv' : 'movie');
       
       final movie = Movie(
         id: id.hashCode,
@@ -725,44 +977,128 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
 
   List<Widget> _sliversBelowHero() {
     return [
-          // Continue Watching
-          const SliverToBoxAdapter(child: RepaintBoundary(child: _ContinueWatchingSection())),
-          // Popular movies & series (TMDB), then Stremio catalog rows (Streaming Catalogs addon shows all services)
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Movies', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular Series', icon: Icons.tv_rounded, future: _popularTvFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
-          // Stremio Addon Catalogs
-          if (_catalogsLoaded)
-            ..._stremioCatalogs.map((cat) {
-              final key = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
-              final items = _catalogItems[key];
-              if (items == null || items.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
-              return SliverToBoxAdapter(
+              // Stats strip — derived from local watch history
+              const SliverToBoxAdapter(child: RepaintBoundary(child: _StatsStrip())),
+
+              // Continue Watching — wide cinematic hero card for the most recent
+              SliverToBoxAdapter(
                 child: RepaintBoundary(
-                  child: _StremioCatalogSection(
-                    catalog: cat,
-                    items: items,
-                    onItemTap: _openStremioItem,
-                    onShowAll: () => _openStremioCatalog(cat),
+                  child: _ContinueWatchingHero(onOpen: _openDetails),
+                ),
+              ),
+
+              // Continue Watching strip (everything else)
+              const SliverToBoxAdapter(child: RepaintBoundary(child: _ContinueWatchingSection())),
+
+              // Mosaic Spotlight — Trending Now reimagined as 1 big + 4 small
+              SliverToBoxAdapter(
+                child: RepaintBoundary(
+                  child: _MosaicSpotlight(
+                    future: _trendingFuture,
+                    onTap: _openDetails,
                   ),
                 ),
-              );
-            }),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Movies', icon: Icons.local_fire_department_rounded, future: _trendingFuture, onMovieTap: _openDetails))),
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Trending Series', icon: Icons.whatshot_rounded, future: _trendingTvFuture, onMovieTap: _openDetails))),
-          // Top Rated
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Top Rated', icon: Icons.star_rounded, future: _topRatedFuture, onMovieTap: _openDetails))),
-          // Trakt Recommendations
-          if (_traktRecommendations.isNotEmpty)
-            SliverToBoxAdapter(child: RepaintBoundary(child: _StaticMovieSection(title: 'Recommended for You', icon: Icons.recommend_rounded, movies: _traktRecommendations, onMovieTap: _openDetails))),
-          // Trakt Calendar
-          if (_traktCalendar.isNotEmpty)
-            SliverToBoxAdapter(child: RepaintBoundary(child: _buildTraktCalendarSection())),
-          // Trakt Calendar Movies
-          if (_traktCalendarMovies.isNotEmpty)
-            SliverToBoxAdapter(child: RepaintBoundary(child: _buildTraktCalendarMoviesSection())),
-          // New Releases
-          SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'New Releases', icon: Icons.new_releases_rounded, future: _nowPlayingFuture, onMovieTap: _openDetails, isPortrait: true))),
-          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+              ),
+
+              // Trending Ticker — auto-scrolling marquee with rank numbers
+              SliverToBoxAdapter(
+                child: RepaintBoundary(
+                  child: _TrendingTicker(
+                    future: _trendingFuture,
+                    onTap: _openDetails,
+                  ),
+                ),
+              ),
+
+              // Tonight's Pick — randomized hand-feeling recommendation
+              if (_tonightsPick != null)
+                SliverToBoxAdapter(
+                  child: RepaintBoundary(
+                    child: _TonightsPickCard(
+                      movie: _tonightsPick!,
+                      onPlay: () => _openDetails(_tonightsPick!),
+                      onShuffle: () {
+                        _trendingFuture.then((movies) {
+                          if (!mounted || movies.length < 4) return;
+                          final pool = movies.skip(2).where((m) => m.id != _tonightsPick?.id).toList();
+                          if (pool.isEmpty) return;
+                          setState(() => _tonightsPick = pool[math.Random().nextInt(pool.length)]);
+                        });
+                      },
+                    ),
+                  ),
+                ),
+
+              // Mood / Genre chips — interactive filter
+              SliverToBoxAdapter(
+                child: RepaintBoundary(
+                  child: _MoodSection(
+                    moods: _moods,
+                    selectedId: _selectedMood,
+                    onSelect: _selectMood,
+                    future: _moodFuture,
+                    onMovieTap: _openDetails,
+                  ),
+                ),
+              ),
+
+              // "Because you watched ___" — BestSimilar.com recommendations
+              // (the /recommendations endpoint, not the trash /similar one)
+              if (_becauseSeed != null && _becauseFuture != null)
+                SliverToBoxAdapter(
+                  child: RepaintBoundary(
+                    child: _BecauseYouWatchedSection(
+                      seedTitle: (_becauseSeed!['title'] as String?) ?? '',
+                      seedPosterPath: (_becauseSeed!['posterPath'] as String?) ?? '',
+                      future: _becauseFuture!,
+                      onMovieTap: _openDetails,
+                      // Only allow re-rolling when there's actually more than
+                      // one in-progress show to choose between.
+                      onShuffle: _becausePoolSize > 1 ? _shuffleBecauseSeed : null,
+                    ),
+                  ),
+                ),
+
+              // Popular
+              SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Popular', icon: Icons.movie_filter_rounded, future: _popularFuture, onMovieTap: _openDetails, isPortrait: true, showRank: true))),
+
+              // Stremio Addon Catalogs (preserved exactly as before)
+              if (_catalogsLoaded)
+                ..._stremioCatalogs.map((cat) {
+                  final key = '${cat['addonBaseUrl']}/${cat['catalogType']}/${cat['catalogId']}';
+                  final items = _catalogItems[key];
+                  if (items == null || items.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
+                  return SliverToBoxAdapter(
+                    child: RepaintBoundary(
+                      child: _StremioCatalogSection(
+                        catalog: cat,
+                        items: items,
+                        onItemTap: _openStremioItem,
+                        onShowAll: () => _openStremioCatalog(cat),
+                      ),
+                    ),
+                  );
+                }),
+
+              // Top Rated
+              SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'Top Rated', icon: Icons.star_rounded, future: _topRatedFuture, onMovieTap: _openDetails))),
+
+              // Trakt Recommendations
+              if (_traktRecommendations.isNotEmpty)
+                SliverToBoxAdapter(child: RepaintBoundary(child: _StaticMovieSection(title: 'Recommended for You', icon: Icons.recommend_rounded, movies: _traktRecommendations, onMovieTap: _openDetails))),
+
+              // Trakt Calendar
+              if (_traktCalendar.isNotEmpty)
+                SliverToBoxAdapter(child: RepaintBoundary(child: _buildTraktCalendarSection())),
+
+              // Trakt Calendar Movies
+              if (_traktCalendarMovies.isNotEmpty)
+                SliverToBoxAdapter(child: RepaintBoundary(child: _buildTraktCalendarMoviesSection())),
+
+              // New Releases
+              SliverToBoxAdapter(child: RepaintBoundary(child: _MovieSection(title: 'New Releases', icon: Icons.new_releases_rounded, future: _nowPlayingFuture, onMovieTap: _openDetails, isPortrait: true))),
+
+              const SliverToBoxAdapter(child: SizedBox(height: 100)),
     ];
   }
 
@@ -772,74 +1108,48 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     if (DeviceProfile.isAndroidTv) {
       return _buildAndroidTvHome(context);
     }
-
-    final mq = MediaQuery.of(context);
-    final isLandscape = mq.orientation == Orientation.landscape;
-    final heroHeight = isLandscape ? mq.size.height * 0.65 : mq.size.height * 0.82;
-
-    final heroLayer = RepaintBoundary(
-      child: FutureBuilder<List<Movie>>(
-        future: _trendingFuture,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return _buildHeroShimmer();
-          }
-          return _buildHeroCarousel(snapshot.data!.take(5).toList());
-        },
-      ),
-    );
-
-    final scrollView = CustomScrollView(
-      cacheExtent: 500,
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverToBoxAdapter(child: heroLayer),
-        ..._sliversBelowHero(),
-      ],
-    );
-
     return Scaffold(
       extendBodyBehindAppBar: true,
       backgroundColor: AppTheme.bgDark,
       body: Stack(
         children: [
-          if (!PerformanceTuning.skipHomeAmbientGlows) ...[
-            Positioned(
-              top: MediaQuery.of(context).size.height * 0.6,
-              left: -80,
-              child: Container(
-                width: 260,
-                height: 260,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [AppTheme.primaryColor.withValues(alpha: 0.06), Colors.transparent],
-                  ),
+          // ── Ambient backdrop: dynamic blobs of color extracted from current hero
+          if (!AppTheme.isLightMode)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: _AmbientBackdrop(
+                  primary: _ambientPrimary,
+                  secondary: _ambientSecondary,
                 ),
               ),
             ),
-            Positioned(
-              top: MediaQuery.of(context).size.height * 1.2,
-              right: -60,
-              child: Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [AppTheme.accentColor.withValues(alpha: 0.04), Colors.transparent],
+          CustomScrollView(
+            cacheExtent: 500,
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              // Hero
+              SliverToBoxAdapter(
+                child: RepaintBoundary(
+                  child: FutureBuilder<List<Movie>>(
+                    future: _trendingFuture,
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return _buildHeroShimmer();
+                      }
+                      return _buildHeroCarousel(snapshot.data!.take(5).toList());
+                    },
                   ),
                 ),
               ),
-            ),
-          ],
-          scrollView,
+              ..._sliversBelowHero(),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  /// Leanback layout: fork-style top carousel (focus-friendly) + scrollable rows (your sections).
+  /// Leanback layout: focus-friendly hero carousel + scrollable rows.
   Widget _buildAndroidTvHome(BuildContext context) {
     final mq = MediaQuery.of(context);
     final heroH = mq.size.height * 0.42;
@@ -925,7 +1235,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
           PageView.builder(
             controller: _heroController,
             itemCount: movies.length,
-            onPageChanged: (i) => setState(() => _heroIndex = i),
+            onPageChanged: (i) {
+              setState(() => _heroIndex = i);
+              _extractAmbientFor(movies[i]);
+            },
             itemBuilder: (context, index) {
               final movie = movies[index];
               return Stack(
@@ -1277,10 +1590,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       ),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(28),
-      sigma: 12,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: inner,
+      ),
     );
   }
 
@@ -1294,10 +1609,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       child: child,
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(24),
-      sigma: 12,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: inner,
+      ),
     );
   }
 
@@ -1312,10 +1629,12 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.7), size: 18),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(24),
-      sigma: 10,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: inner,
+      ),
     );
   }
 }
@@ -1381,10 +1700,12 @@ class _MovieSectionState extends State<_MovieSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(20),
-      sigma: 6,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: inner,
+      ),
     );
   }
 
@@ -1483,7 +1804,7 @@ class _MovieSectionState extends State<_MovieSection> {
               ),
             ),
             SizedBox(
-              height: widget.isPortrait ? 260 : 190,
+              height: widget.isPortrait ? 290 : 210,
               child: ListView.separated(
                 clipBehavior: Clip.none,
                 controller: _scrollController,
@@ -1563,10 +1884,12 @@ class _StaticMovieSectionState extends State<_StaticMovieSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(20),
-      sigma: 6,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: inner,
+      ),
     );
   }
 
@@ -1623,7 +1946,7 @@ class _StaticMovieSectionState extends State<_StaticMovieSection> {
           ),
         ),
         SizedBox(
-          height: 190,
+          height: 210,
           child: ListView.separated(
             clipBehavior: Clip.none,
             controller: _scrollController,
@@ -1661,8 +1984,8 @@ class _MovieCard extends StatelessWidget {
     final isDesktop = screenWidth > 900;
     
     final cardWidth = isPortrait 
-        ? (isDesktop ? 165.0 : 140.0) 
-        : (isDesktop ? 320.0 : 270.0);
+        ? (isDesktop ? 190.0 : 165.0) 
+        : (isDesktop ? 360.0 : 300.0);
         
     final image = isPortrait ? movie.posterPath : movie.backdropPath;
     final imageUrl = image.isNotEmpty ? TmdbApi.getImageUrl(image) : '';
@@ -1698,18 +2021,10 @@ class _MovieCard extends StatelessWidget {
               color: AppTheme.bgCard,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 0.5),
-              boxShadow: (AppTheme.isLightMode || DeviceProfile.isAndroidTv)
-                  ? null
-                  : [
-                      BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.5),
-                          blurRadius: 16,
-                          offset: const Offset(0, 8)),
-                      BoxShadow(
-                          color: AppTheme.primaryColor.withValues(alpha: 0.05),
-                          blurRadius: 20,
-                          spreadRadius: -4),
-                    ],
+              boxShadow: AppTheme.isLightMode ? null : [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16, offset: const Offset(0, 8)),
+                BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.05), blurRadius: 20, spreadRadius: -4),
+              ],
             ),
             child: Stack(
               fit: StackFit.expand,
@@ -1828,10 +2143,12 @@ Widget _buildRatingBadge(double voteAverage) {
     ),
   );
   if (AppTheme.isLightMode) return inner;
-  return DeviceProfile.backdropBlurOrPlain(
+  return ClipRRect(
     borderRadius: BorderRadius.circular(8),
-    sigma: 8,
-    child: inner,
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: inner,
+    ),
   );
 }
 
@@ -1854,10 +2171,12 @@ Widget _buildRatingBadgeText(String rating) {
     ),
   );
   if (AppTheme.isLightMode) return content;
-  return DeviceProfile.backdropBlurOrPlain(
+  return ClipRRect(
     borderRadius: BorderRadius.circular(6),
-    sigma: 8,
-    child: content,
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: content,
+    ),
   );
 }
 
@@ -1905,10 +2224,12 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(20),
-      sigma: 6,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: inner,
+      ),
     );
   }
 
@@ -1980,84 +2301,45 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
       int? fileIndex;
       String? stremioItemId;
       String? stremioAddonBase;
-      Map<String, String>? stremioResumeHeaders;
 
       if (method == 'stremio_direct') {
-        // Direct stremio stream — try the saved URL first
-        final savedUrl = row['streamUrl'] as String?;
         stremioItemId = row['stremioId'] as String?;
         stremioAddonBase = row['stremioAddonBaseUrl'] as String?;
-        activeProvider = 'stremio_direct';
 
-        if (savedUrl != null && savedUrl.isNotEmpty) {
-          // Try playing the saved URL directly
-          streamUrl = savedUrl;
-          debugPrint('[Resume] Trying saved stremio direct URL: $savedUrl');
-        }
-
-        // If no saved URL, or if player fails, we'll fall through to the
-        // "open details page" fallback below
-        if (streamUrl == null && stremioItemId != null && stremioAddonBase != null) {
-          // Re-fetch streams from the addon
-          debugPrint('[Resume] Re-fetching stremio streams for $stremioItemId from $stremioAddonBase');
-          final stremioType = row['stremioType'] as String? ?? (season != null ? 'series' : 'movie');
-          final stremio = StremioService();
-          try {
-            final streams = await stremio.getStreams(
-              baseUrl: stremioAddonBase,
-              type: stremioType,
-              id: stremioItemId,
-            );
-            if (streams.isNotEmpty) {
-              final first = streams.first;
-              if (first is Map<String, dynamic> && first['url'] != null) {
-                streamUrl = first['url'] as String;
-                stremioResumeHeaders = stremioProxyRequestHeadersFromStream(first);
-                if (stremioResumeHeaders.isEmpty) stremioResumeHeaders = null;
-              }
-            }
-          } catch (e) {
-            debugPrint('[Resume] Re-fetch stremio streams failed: $e');
+        if (mounted) {
+          final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
+          final movie = Movie(
+            id: tmdbId,
+            title: title,
+            posterPath: posterPath,
+            backdropPath: '',
+            overview: '',
+            releaseDate: '',
+            voteAverage: 0,
+            mediaType: mediaType,
+            genres: [],
+            imdbId: row['imdbId'],
+          );
+          Map<String, dynamic>? stremioItem;
+          if (stremioItemId != null) {
+            stremioItem = {
+              'id': stremioItemId,
+              '_addonBaseUrl': stremioAddonBase ?? '',
+              'type': row['stremioType'] ?? (season != null ? 'series' : 'movie'),
+              'name': title,
+            };
           }
+          Navigator.push(context, MaterialPageRoute(
+            builder: (_) => DetailsScreen(
+              movie: movie,
+              stremioItem: stremioItem,
+              initialSeason: season,
+              initialEpisode: episode,
+              startPosition: startPos,
+            ),
+          ));
         }
-
-        // If we still have nothing, open the details page
-        if (streamUrl == null) {
-          if (mounted) {
-            final mediaType = row['mediaType'] as String? ?? (season != null ? 'tv' : 'movie');
-            final movie = Movie(
-              id: tmdbId,
-              title: title,
-              posterPath: posterPath,
-              backdropPath: '',
-              overview: '',
-              releaseDate: '',
-              voteAverage: 0,
-              mediaType: mediaType,
-              genres: [],
-              imdbId: row['imdbId'],
-            );
-            Map<String, dynamic>? stremioItem;
-            if (stremioItemId != null) {
-              stremioItem = {
-                'id': stremioItemId,
-                '_addonBaseUrl': stremioAddonBase ?? '',
-                'type': row['stremioType'] ?? (season != null ? 'series' : 'movie'),
-                'name': title,
-              };
-            }
-            Navigator.push(context, MaterialPageRoute(
-              builder: (_) => DetailsScreen(
-                movie: movie,
-                stremioItem: stremioItem,
-                initialSeason: season,
-                initialEpisode: episode,
-                startPosition: startPos,
-              ),
-            ));
-          }
-          return; // Skip the player launch below
-        }
+        return; // Skip the player launch below
       } else if (method == 'stream') {
         // Re-extract stream using saved sourceId (tmdbId + season + episode)
         final sourceId = row['sourceId'] as String;
@@ -2233,7 +2515,6 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
             builder: (_) => PlayerScreen(
               streamUrl: streamUrl!,
               title: title,
-              headers: stremioResumeHeaders,
               movie: Movie(
                 id: tmdbId,
                 title: title,
@@ -2484,10 +2765,12 @@ Widget _buildCWPlayButton() {
     child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 28),
   );
   if (AppTheme.isLightMode) return inner;
-  return DeviceProfile.backdropBlurOrPlain(
+  return ClipRRect(
     borderRadius: BorderRadius.circular(30),
-    sigma: 6,
-    child: inner,
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+      child: inner,
+    ),
   );
 }
 
@@ -2731,10 +3014,12 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
 
   Widget _wrapFrosted({required double borderRadius, required Widget child}) {
     if (AppTheme.isLightMode) return child;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(borderRadius),
-      sigma: 6,
-      child: child,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: child,
+      ),
     );
   }
 
@@ -2749,10 +3034,12 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
       child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
     );
     if (AppTheme.isLightMode) return inner;
-    return DeviceProfile.backdropBlurOrPlain(
+    return ClipRRect(
       borderRadius: BorderRadius.circular(20),
-      sigma: 6,
-      child: inner,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: inner,
+      ),
     );
   }
 
@@ -3088,6 +3375,1692 @@ class _MyListButton extends StatelessWidget {
               color: inList ? AppTheme.primaryColor : Colors.white70,
             ),
           ),
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  AMBIENT BACKDROP — animated color blobs derived from current hero poster
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _AmbientBackdrop extends StatelessWidget {
+  final Color primary;
+  final Color secondary;
+  const _AmbientBackdrop({required this.primary, required this.secondary});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 1200),
+      curve: Curves.easeOutCubic,
+      builder: (context, _, _) {
+        // The TweenAnimationBuilder's value is unused — the AnimatedContainer
+        // children below crossfade their own colors. The outer tween simply
+        // forces a rebuild when colors change so the children re-animate.
+        return Stack(
+          children: [
+            // Top-right vibrant blob
+            Positioned(
+              top: -120,
+              right: -120,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 1400),
+                curve: Curves.easeOutCubic,
+                width: 520,
+                height: 520,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      primary.withValues(alpha: 0.40),
+                      primary.withValues(alpha: 0.14),
+                      Colors.transparent,
+                    ],
+                    stops: const [0.0, 0.45, 1.0],
+                  ),
+                ),
+              ),
+            ),
+            // Bottom-left dominant blob
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.55,
+              left: -150,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 1400),
+                curve: Curves.easeOutCubic,
+                width: 480,
+                height: 480,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      secondary.withValues(alpha: 0.30),
+                      secondary.withValues(alpha: 0.10),
+                      Colors.transparent,
+                    ],
+                    stops: const [0.0, 0.45, 1.0],
+                  ),
+                ),
+              ),
+            ),
+            // Mid-right subtle accent
+            Positioned(
+              top: MediaQuery.of(context).size.height * 1.4,
+              right: -60,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 1400),
+                curve: Curves.easeOutCubic,
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      primary.withValues(alpha: 0.18),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // Soft veil so it never overpowers content
+            Positioned.fill(
+              child: Container(color: AppTheme.bgDark.withValues(alpha: 0.35)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STATS STRIP — animated counters from local watch history
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _StatsStrip extends StatelessWidget {
+  const _StatsStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: MyListService.changeNotifier,
+      builder: (context, _, _) {
+        return StreamBuilder<List<Map<String, dynamic>>>(
+          stream: WatchHistoryService().historyStream,
+          initialData: WatchHistoryService().current,
+          builder: (context, snapshot) {
+            final history = snapshot.data ?? const <Map<String, dynamic>>[];
+            final myListCount = MyListService().items.length;
+            if (history.isEmpty && myListCount == 0) return const SizedBox.shrink();
+
+            // Compute stats
+            final now = DateTime.now();
+            int inProgress = 0;
+            Duration remaining = Duration.zero;
+            final activeDays = <String>{};
+
+            for (final item in history) {
+              final pos = (item['position'] as int?) ?? 0;
+              final dur = (item['duration'] as int?) ?? 0;
+              if (dur > 0) {
+                final progress = pos / dur;
+                if (progress > 0.02 && progress < 0.9) {
+                  inProgress++;
+                  // Sum the time still left to watch on in-progress items.
+                  remaining += Duration(milliseconds: dur - pos);
+                }
+              }
+              final tsRaw = item['updatedAt'];
+              if (tsRaw is int) {
+                final dt = DateTime.fromMillisecondsSinceEpoch(tsRaw);
+                activeDays.add('${dt.year}-${dt.month}-${dt.day}');
+              }
+            }
+
+            // Streak: consecutive days back from today with at least one play
+            int streak = 0;
+            for (var i = 0; i < 60; i++) {
+              final d = now.subtract(Duration(days: i));
+              final key = '${d.year}-${d.month}-${d.day}';
+              if (activeDays.contains(key)) {
+                streak++;
+              } else if (i > 0) {
+                break;
+              }
+            }
+
+            final hours = remaining.inMinutes / 60.0;
+            final hoursLabel = hours >= 10
+                ? hours.toStringAsFixed(0)
+                : hours.toStringAsFixed(1);
+
+            final tiles = <_StatTileData>[
+              _StatTileData(
+                icon: Icons.bookmark_rounded,
+                label: 'My List',
+                value: '$myListCount',
+                tint: AppTheme.primaryColor,
+              ),
+              _StatTileData(
+                icon: Icons.play_circle_outline_rounded,
+                label: 'In progress',
+                value: '$inProgress',
+                tint: const Color(0xFF60A5FA),
+              ),
+              _StatTileData(
+                icon: Icons.timer_outlined,
+                label: 'Hours left',
+                value: hoursLabel,
+                tint: const Color(0xFF34D399),
+              ),
+              _StatTileData(
+                icon: Icons.local_fire_department_rounded,
+                label: 'Day streak',
+                value: '$streak',
+                tint: const Color(0xFFF97316),
+              ),
+            ];
+
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 4),
+              child: SizedBox(
+                height: 96,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  itemCount: tiles.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (context, i) => _StatTile(data: tiles[i]),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _StatTileData {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color tint;
+  _StatTileData({required this.icon, required this.label, required this.value, required this.tint});
+}
+
+class _StatTile extends StatelessWidget {
+  final _StatTileData data;
+  const _StatTile({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final inner = Container(
+      width: 168,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white.withValues(alpha: AppTheme.isLightMode ? 0.06 : 0.04),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: data.tint.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(data.icon, size: 14, color: data.tint),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  data.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: double.tryParse(data.value) ?? 0),
+            duration: const Duration(milliseconds: 900),
+            curve: Curves.easeOutCubic,
+            builder: (context, v, _) {
+              final isInt = !data.value.contains('.');
+              final shown = isInt ? v.round().toString() : v.toStringAsFixed(1);
+              return Text(
+                shown,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -1,
+                  height: 1.0,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+    if (AppTheme.isLightMode) return inner;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: inner,
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CONTINUE WATCHING HERO — wide cinematic card for the most recent item
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _ContinueWatchingHero extends StatefulWidget {
+  final Function(Movie) onOpen;
+  const _ContinueWatchingHero({required this.onOpen});
+
+  @override
+  State<_ContinueWatchingHero> createState() => _ContinueWatchingHeroState();
+}
+
+class _ContinueWatchingHeroState extends State<_ContinueWatchingHero> {
+  String? _backdropPath;
+  int? _lastTmdbId;
+
+  Future<void> _loadBackdrop(int tmdbId, String mediaType) async {
+    if (_lastTmdbId == tmdbId && _backdropPath != null) return;
+    _lastTmdbId = tmdbId;
+    try {
+      final m = mediaType == 'tv'
+          ? await TmdbApi().getTvDetails(tmdbId)
+          : await TmdbApi().getMovieDetails(tmdbId);
+      if (!mounted) return;
+      setState(() => _backdropPath = m.backdropPath);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: WatchHistoryService().historyStream,
+      initialData: WatchHistoryService().current,
+      builder: (context, snapshot) {
+        final list = snapshot.data ?? const <Map<String, dynamic>>[];
+        if (list.isEmpty) return const SizedBox.shrink();
+        final item = list.first;
+
+        final tmdbId = item['tmdbId'] as int?;
+        final mediaType = (item['mediaType'] as String?) ??
+            (item['season'] != null ? 'tv' : 'movie');
+        if (tmdbId != null) _loadBackdrop(tmdbId, mediaType);
+
+        final title = (item['title'] as String?) ?? '';
+        final posterPath = (item['posterPath'] as String?) ?? '';
+        final season = item['season'] as int?;
+        final episode = item['episode'] as int?;
+        final episodeTitle = (item['episodeTitle'] as String?) ?? '';
+        final position = (item['position'] as int?) ?? 0;
+        final duration = (item['duration'] as int?) ?? 0;
+        final progress = duration > 0 ? (position / duration).clamp(0.0, 1.0) : 0.0;
+        final remaining = duration > 0 ? Duration(milliseconds: duration - position) : Duration.zero;
+        final remainingText = remaining.inMinutes > 0 ? '${remaining.inMinutes}m left' : '';
+
+        final subtitle = season != null
+            ? 'S$season · E$episode${episodeTitle.isNotEmpty ? '  ·  $episodeTitle' : ''}'
+            : (mediaType == 'movie' ? 'Movie' : 'Series');
+
+        // Background image: prefer fetched landscape backdrop, fall back to poster
+        String bgUrl = '';
+        bool bgIsPoster = false;
+        if (_backdropPath != null && _backdropPath!.isNotEmpty) {
+          bgUrl = TmdbApi.getBackdropUrl(_backdropPath!);
+        } else if (posterPath.isNotEmpty) {
+          bgUrl = posterPath.startsWith('http')
+              ? posterPath
+              : TmdbApi.getImageUrl(posterPath);
+          bgIsPoster = true;
+        }
+
+        return LayoutBuilder(builder: (context, c) {
+          final w = c.maxWidth;
+          final isWide = w > 700;
+          // Scale height with width so wide screens don't crop the backdrop to a sliver.
+          // Backdrops are 16:9, so a ~3:1 card ratio still feels cinematic without
+          // chopping the visually interesting middle of the image away.
+          final cardHeight = (w / (isWide ? 3.4 : 2.6)).clamp(190.0, 320.0);
+
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 0),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () {
+                  if (tmdbId == null) return;
+                  final movie = Movie(
+                    id: tmdbId,
+                    title: title,
+                    posterPath: posterPath,
+                    backdropPath: _backdropPath ?? '',
+                    voteAverage: 0,
+                    releaseDate: '',
+                    overview: '',
+                    mediaType: mediaType,
+                    imdbId: item['imdbId'] as String?,
+                  );
+                  widget.onOpen(movie);
+                },
+                child: Container(
+                  height: cardHeight,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: AppTheme.bgCard,
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                    boxShadow: AppTheme.isLightMode
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              blurRadius: 24,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                  ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (bgUrl.isNotEmpty) ...[
+                        // Blurred fill behind so portrait posters never look cropped to a sliver
+                        if (bgIsPoster)
+                          ImageFiltered(
+                            imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                            child: CachedNetworkImage(
+                              imageUrl: bgUrl,
+                              fit: BoxFit.cover,
+                              alignment: Alignment.center,
+                              placeholder: (_, _) => Container(color: AppTheme.bgCard),
+                              errorWidget: (_, _, _) => Container(color: AppTheme.bgCard),
+                            ),
+                          ),
+                        // Foreground image — centered, contain for portrait so we see the
+                        // whole poster; cover for landscape so the card fills edge-to-edge.
+                        CachedNetworkImage(
+                          imageUrl: bgUrl,
+                          fit: bgIsPoster ? BoxFit.contain : BoxFit.cover,
+                          alignment: bgIsPoster
+                              ? Alignment.centerRight
+                              : const Alignment(0, -0.1),
+                          placeholder: (_, _) => Container(color: AppTheme.bgCard),
+                          errorWidget: (_, _, _) => Container(color: AppTheme.bgCard),
+                        ),
+                      ],
+                      // Left-to-right gradient for text legibility — lighter on the right
+                      // so more of the backdrop image stays visible.
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.78),
+                              Colors.black.withValues(alpha: 0.35),
+                              Colors.transparent,
+                            ],
+                            stops: const [0.0, 0.5, 0.95],
+                          ),
+                        ),
+                      ),
+                      // Bottom gradient for the progress bar zone
+                      Positioned(
+                        left: 0, right: 0, bottom: 0,
+                        height: 80,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.7),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Content
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Tag
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryColor.withValues(alpha: 0.22),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text(
+                                'CONTINUE WATCHING',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            ConstrainedBox(
+                              constraints: BoxConstraints(maxWidth: w * 0.7),
+                              child: Text(
+                                title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: isWide ? 26 : 21,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.05,
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              subtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.65),
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const Spacer(),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(24),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.play_arrow_rounded, color: Colors.black, size: 22),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'Resume',
+                                        style: TextStyle(
+                                          color: Colors.black,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                if (remainingText.isNotEmpty)
+                                  Text(
+                                    remainingText,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.75),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            // Progress bar
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: LinearProgressIndicator(
+                                value: progress,
+                                minHeight: 4,
+                                backgroundColor: Colors.white.withValues(alpha: 0.18),
+                                valueColor: const AlwaysStoppedAnimation(AppTheme.primaryColor),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MOSAIC SPOTLIGHT — 1 big featured tile + 4 smaller tiles in a grid
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _MosaicSpotlight extends StatelessWidget {
+  final Future<List<Movie>> future;
+  final Function(Movie) onTap;
+
+  const _MosaicSpotlight({required this.future, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Movie>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.length < 5) {
+          return const SizedBox.shrink();
+        }
+        final movies = snapshot.data!;
+        final featured = movies.first;
+        final small = movies.skip(1).take(4).toList();
+
+        return LayoutBuilder(builder: (context, c) {
+          final w = c.maxWidth;
+          final isWide = w > 720;
+          // Adaptive horizontal padding so mobile gets more breathing room.
+          final hPad = w < 380 ? 14.0 : (w < 520 ? 18.0 : 24.0);
+          final headerTopPad = w < 380 ? 24.0 : 36.0;
+          final headerBotPad = w < 380 ? 12.0 : 16.0;
+
+          final header = Padding(
+            padding: EdgeInsets.fromLTRB(hPad, headerTopPad, hPad, headerBotPad),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.auto_awesome_rounded, color: AppTheme.primaryColor, size: 18),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Spotlight',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ),
+                if (w >= 380)
+                  Text(
+                    '${movies.take(5).length} trending now',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+          );
+
+          if (isWide) {
+            // Side-by-side: big tile left, 2x2 grid right
+            final featuredW = (w - hPad * 2 - 14) * 0.58;
+            final smallW = (w - hPad * 2 - 14) * 0.42;
+            final tileH = featuredW * 0.58;
+            final smallTileH = (tileH - 12) / 2;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                header,
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: hPad),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: featuredW,
+                        height: tileH,
+                        child: _MosaicTile(movie: featured, onTap: () => onTap(featured), big: true),
+                      ),
+                      const SizedBox(width: 14),
+                      SizedBox(
+                        width: smallW,
+                        height: tileH,
+                        child: GridView.count(
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          childAspectRatio: (smallW / 2 - 6) / smallTileH,
+                          children: small
+                              .map((m) => _MosaicTile(movie: m, onTap: () => onTap(m)))
+                              .toList(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }
+
+          // Stacked: big tile on top, horizontal scroll of small below
+          // Sizes scale to viewport so phones look right.
+          final featuredAvail = w - hPad * 2;
+          final featuredH = (featuredAvail * 0.56).clamp(170.0, 320.0);
+          // Small tile width: ~62% of viewport on tiny phones (peek of next),
+          // capped so tablets in narrow mode don't get giant tiles.
+          final smallTileW = w < 380
+              ? (w * 0.62).clamp(180.0, 240.0)
+              : (w < 520 ? 200.0 : 220.0);
+          final smallTileH = w < 380 ? 110.0 : 130.0;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: hPad),
+                child: SizedBox(
+                  height: featuredH,
+                  child: _MosaicTile(movie: featured, onTap: () => onTap(featured), big: true),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: smallTileH,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  padding: EdgeInsets.symmetric(horizontal: hPad),
+                  itemCount: small.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
+                  itemBuilder: (_, i) => SizedBox(
+                    width: smallTileW,
+                    child: _MosaicTile(movie: small[i], onTap: () => onTap(small[i])),
+                  ),
+                ),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+}
+
+class _MosaicTile extends StatelessWidget {
+  final Movie movie;
+  final VoidCallback onTap;
+  final bool big;
+  const _MosaicTile({required this.movie, required this.onTap, this.big = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = movie.backdropPath.isNotEmpty
+        ? TmdbApi.getBackdropUrl(movie.backdropPath)
+        : (movie.posterPath.isNotEmpty ? TmdbApi.getImageUrl(movie.posterPath) : '');
+
+    return FocusableControl(
+      onTap: onTap,
+      borderRadius: 16,
+      scaleOnFocus: 1.04,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: AppTheme.bgCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          boxShadow: AppTheme.isLightMode
+              ? null
+              : [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 18, offset: const Offset(0, 8)),
+                ],
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (imageUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
+                placeholder: (_, _) => Container(color: AppTheme.bgCard),
+                errorWidget: (_, _, _) => Container(color: AppTheme.bgCard),
+              ),
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.25),
+                    Colors.black.withValues(alpha: 0.85),
+                  ],
+                  stops: const [0.0, 0.5, 1.0],
+                ),
+              ),
+            ),
+            if (big)
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                  ),
+                  child: const Text(
+                    '#1 TRENDING',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ),
+              ),
+            if (movie.voteAverage > 0)
+              Positioned(
+                top: 10,
+                right: 10,
+                child: _buildRatingBadge(movie.voteAverage),
+              ),
+            Positioned(
+              left: 14,
+              right: 14,
+              bottom: 12,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    movie.title,
+                    maxLines: big ? 2 : 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: big ? 20 : 14,
+                      height: 1.1,
+                      letterSpacing: -0.3,
+                      shadows: AppTheme.isLightMode
+                          ? null
+                          : const [Shadow(color: Colors.black54, blurRadius: 8)],
+                    ),
+                  ),
+                  if (big && movie.overview.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      movie.overview,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 12.5,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TRENDING TICKER — auto-scrolling marquee with rank numbers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _TrendingTicker extends StatefulWidget {
+  final Future<List<Movie>> future;
+  final Function(Movie) onTap;
+  const _TrendingTicker({required this.future, required this.onTap});
+
+  @override
+  State<_TrendingTicker> createState() => _TrendingTickerState();
+}
+
+class _TrendingTickerState extends State<_TrendingTicker> {
+  final ScrollController _ctrl = ScrollController();
+  Timer? _timer;
+  bool _userScrolling = false;
+  Timer? _resumeTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!_ctrl.hasClients || _userScrolling) return;
+      final pos = _ctrl.position;
+      final next = pos.pixels + 0.5;
+      if (next >= pos.maxScrollExtent - 1) {
+        _ctrl.jumpTo(0);
+      } else {
+        _ctrl.jumpTo(next);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _resumeTimer?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _pause() {
+    _userScrolling = true;
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) _userScrolling = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Movie>>(
+      future: widget.future,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) return const SizedBox.shrink();
+        final list = snapshot.data!.take(10).toList();
+        // Repeat list to give marquee breathing room
+        final loop = [...list, ...list];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 36, 24, 14),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.local_fire_department_rounded, color: AppTheme.primaryColor, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Top 10 Right Now',
+                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.3),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+                    ),
+                    child: const Text(
+                      'LIVE',
+                      style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 110,
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (n) {
+                  if (n is ScrollStartNotification && n.dragDetails != null) _pause();
+                  return false;
+                },
+                child: ListView.separated(
+                  controller: _ctrl,
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  itemCount: loop.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 6),
+                  itemBuilder: (context, i) {
+                    final movie = loop[i];
+                    final rank = (i % list.length) + 1;
+                    return _TickerItem(
+                      movie: movie,
+                      rank: rank,
+                      onTap: () => widget.onTap(movie),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _TickerItem extends StatelessWidget {
+  final Movie movie;
+  final int rank;
+  final VoidCallback onTap;
+  const _TickerItem({required this.movie, required this.rank, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = movie.posterPath.isNotEmpty ? TmdbApi.getImageUrl(movie.posterPath) : '';
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Big stroked rank number
+            SizedBox(
+              width: 60,
+              child: Text(
+                '$rank',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 80,
+                  height: 1.0,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -6,
+                  foreground: Paint()
+                    ..style = PaintingStyle.stroke
+                    ..strokeWidth = 2
+                    ..color = (rank <= 3
+                        ? AppTheme.primaryColor.withValues(alpha: 0.7)
+                        : Colors.white.withValues(alpha: 0.18)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Container(
+              width: 70,
+              height: 100,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: AppTheme.bgCard,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: imageUrl.isNotEmpty
+                  ? CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover)
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TONIGHT'S PICK — randomized hand-feeling recommendation card
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _TonightsPickCard extends StatelessWidget {
+  final Movie movie;
+  final VoidCallback onPlay;
+  final VoidCallback onShuffle;
+  const _TonightsPickCard({required this.movie, required this.onPlay, required this.onShuffle});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasBackdrop = movie.backdropPath.isNotEmpty;
+    final imageUrl = hasBackdrop
+        ? TmdbApi.getBackdropUrl(movie.backdropPath)
+        : (movie.posterPath.isNotEmpty ? TmdbApi.getImageUrl(movie.posterPath) : '');
+    final bgIsPoster = !hasBackdrop && imageUrl.isNotEmpty;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 36, 24, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.nights_stay_rounded, color: AppTheme.primaryColor, size: 18),
+                ),
+                const SizedBox(width: 10),
+                const Text(
+                  "Tonight's Pick",
+                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.3),
+                ),
+                const Spacer(),
+                Material(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(20),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: onShuffle,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.shuffle_rounded, size: 14, color: Colors.white.withValues(alpha: 0.7)),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Shuffle',
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          LayoutBuilder(builder: (context, c) {
+            final w = c.maxWidth;
+            final isWide = w > 700;
+            // Scale with width so the 16:9 backdrop has room to actually breathe.
+            // Cap so very large screens don't get a wall of poster.
+            final cardHeight = (w / (isWide ? 2.6 : 1.9)).clamp(260.0, 420.0);
+
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: onPlay,
+                child: Container(
+                  height: cardHeight,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgCard,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                    boxShadow: AppTheme.isLightMode
+                        ? null
+                        : [
+                            BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 24, offset: const Offset(0, 10)),
+                            BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.10), blurRadius: 32, spreadRadius: -8),
+                          ],
+                  ),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (imageUrl.isNotEmpty) ...[
+                        // Blurred fill so portrait-poster fallbacks don't look cropped to a sliver
+                        if (bgIsPoster)
+                          ImageFiltered(
+                            imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                            child: CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover),
+                          ),
+                        CachedNetworkImage(
+                          imageUrl: imageUrl,
+                          fit: bgIsPoster ? BoxFit.contain : BoxFit.cover,
+                          // Pull the focal point slightly above center \u2014 backdrops
+                          // usually frame faces in the upper third, and our text
+                          // overlays the bottom third.
+                          alignment: bgIsPoster
+                              ? Alignment.topRight
+                              : const Alignment(0, -0.15),
+                        ),
+                      ],
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.bottomLeft,
+                            end: Alignment.topRight,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.92),
+                              Colors.black.withValues(alpha: 0.55),
+                              Colors.black.withValues(alpha: 0.10),
+                            ],
+                            stops: const [0.0, 0.55, 1.0],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Row(
+                              children: [
+                                if (movie.voteAverage > 0) ...[
+                                  Icon(Icons.star_rounded, size: 16, color: Colors.amber.withValues(alpha: 0.9)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    movie.voteAverage.toStringAsFixed(1),
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
+                                if (movie.releaseDate.isNotEmpty)
+                                  Text(
+                                    movie.releaseDate.split('-').first,
+                                    style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13, fontWeight: FontWeight.w500),
+                                  ),
+                                if (movie.genres.isNotEmpty) ...[
+                                  const SizedBox(width: 12),
+                                  Flexible(
+                                    child: Text(
+                                      movie.genres.take(2).join(' · '),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              movie.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: isWide ? 28 : 22,
+                                fontWeight: FontWeight.w900,
+                                height: 1.05,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            if (movie.overview.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              ConstrainedBox(
+                                constraints: BoxConstraints(maxWidth: w * 0.85),
+                                child: Text(
+                                  movie.overview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.72),
+                                    fontSize: 13,
+                                    height: 1.45,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 14),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.play_arrow_rounded, color: Colors.black, size: 22),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Play Now',
+                                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MOOD SECTION — chip filter + result row
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _MoodSection extends StatefulWidget {
+  final List<({String id, String label, IconData icon, List<int> genres})> moods;
+  final String selectedId;
+  final ValueChanged<String> onSelect;
+  final Future<List<Movie>>? future;
+  final Function(Movie) onMovieTap;
+
+  const _MoodSection({
+    required this.moods,
+    required this.selectedId,
+    required this.onSelect,
+    required this.future,
+    required this.onMovieTap,
+  });
+
+  @override
+  State<_MoodSection> createState() => _MoodSectionState();
+}
+
+class _MoodSectionState extends State<_MoodSection> {
+  final ScrollController _resultsCtrl = ScrollController();
+
+  void _scrollResults(double delta) {
+    if (!_resultsCtrl.hasClients) return;
+    final target = (_resultsCtrl.offset + delta)
+        .clamp(0.0, _resultsCtrl.position.maxScrollExtent);
+    _resultsCtrl.animateTo(target,
+        duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _resultsCtrl.dispose();
+    super.dispose();
+  }
+
+  Widget _arrow(IconData icon, VoidCallback onTap) {
+    final inner = Container(
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: AppTheme.isLightMode ? 0.12 : 0.08),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
+    );
+    final wrapped = AppTheme.isLightMode
+        ? inner
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: inner,
+            ),
+          );
+    return GestureDetector(onTap: onTap, child: wrapped);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final moods = widget.moods;
+    final selectedId = widget.selectedId;
+    final onSelect = widget.onSelect;
+    final future = widget.future;
+    final onMovieTap = widget.onMovieTap;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 36, 24, 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.mood_rounded, color: AppTheme.primaryColor, size: 18),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  "What's your mood?",
+                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.3),
+                ),
+              ),
+              _arrow(Icons.arrow_back_ios_new_rounded, () => _scrollResults(-600)),
+              const SizedBox(width: 6),
+              _arrow(Icons.arrow_forward_ios_rounded, () => _scrollResults(600)),
+            ],
+          ),
+        ),
+        // Chip strip
+        SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            itemCount: moods.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, i) {
+              final m = moods[i];
+              final isSelected = m.id == selectedId;
+              return Material(
+                color: isSelected
+                    ? AppTheme.primaryColor.withValues(alpha: 0.2)
+                    : Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(24),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () => onSelect(m.id),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppTheme.primaryColor.withValues(alpha: 0.7)
+                            : Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          m.icon,
+                          size: 14,
+                          color: isSelected
+                              ? AppTheme.primaryColor
+                              : Colors.white.withValues(alpha: 0.7),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          m.label,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.75),
+                            fontSize: 12.5,
+                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Results row
+        FutureBuilder<List<Movie>>(
+          future: future,
+          builder: (context, snap) {
+            if (!snap.hasData) {
+              return SizedBox(
+                height: 230,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  itemCount: 5,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (_, _) => Container(
+                    width: 150,
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgCard,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              );
+            }
+            final movies = snap.data!;
+            if (movies.isEmpty) {
+              return SizedBox(
+                height: 80,
+                child: Center(
+                  child: Text(
+                    'No matches for this mood',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 13),
+                  ),
+                ),
+              );
+            }
+            return SizedBox(
+              height: 290,
+              child: ListView.separated(
+                clipBehavior: Clip.none,
+                controller: _resultsCtrl,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                itemCount: movies.length.clamp(0, 20),
+                separatorBuilder: (_, _) => const SizedBox(width: 14),
+                itemBuilder: (context, i) => _MovieCard(
+                  movie: movies[i],
+                  onTap: () => onMovieTap(movies[i]),
+                  isPortrait: true,
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BECAUSE YOU WATCHED — BestSimilar.com recommendations seeded from CW history
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _BecauseYouWatchedSection extends StatefulWidget {
+  final String seedTitle;
+  final String seedPosterPath;
+  final Future<List<Movie>> future;
+  final Function(Movie) onMovieTap;
+  final VoidCallback? onShuffle;
+
+  const _BecauseYouWatchedSection({
+    required this.seedTitle,
+    required this.seedPosterPath,
+    required this.future,
+    required this.onMovieTap,
+    required this.onShuffle,
+  });
+
+  @override
+  State<_BecauseYouWatchedSection> createState() => _BecauseYouWatchedSectionState();
+}
+
+class _BecauseYouWatchedSectionState extends State<_BecauseYouWatchedSection> {
+  final ScrollController _ctrl = ScrollController();
+
+  void _scroll(double delta) {
+    if (!_ctrl.hasClients) return;
+    final target =
+        (_ctrl.offset + delta).clamp(0.0, _ctrl.position.maxScrollExtent);
+    _ctrl.animateTo(target,
+        duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Widget _frostedAction(IconData icon, VoidCallback? onTap, {String? tooltip}) {
+    if (onTap == null) return const SizedBox.shrink();
+    final inner = Container(
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: AppTheme.isLightMode ? 0.12 : 0.08),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Icon(icon, color: Colors.white.withValues(alpha: 0.6), size: 14),
+    );
+    final wrapped = AppTheme.isLightMode
+        ? inner
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: inner,
+            ),
+          );
+    final tappable = GestureDetector(onTap: onTap, child: wrapped);
+    return tooltip != null ? Tooltip(message: tooltip, child: tappable) : tappable;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Movie>>(
+      future: widget.future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          // Quiet placeholder; the section just hides until ready below.
+          return const SizedBox(height: 0);
+        }
+        final movies = snap.data ?? const <Movie>[];
+        if (movies.isEmpty) return const SizedBox.shrink();
+
+        final posterUrl = widget.seedPosterPath.isNotEmpty
+            ? TmdbApi.getImageUrl(widget.seedPosterPath)
+            : '';
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with mini seed poster + "Because you watched <title>"
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 36, 24, 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Glowing mini-poster of the seed
+                  Container(
+                    width: 36,
+                    height: 50,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      color: AppTheme.bgCard,
+                      border: Border.all(
+                        color: AppTheme.primaryColor.withValues(alpha: 0.5),
+                        width: 1.2,
+                      ),
+                      boxShadow: AppTheme.isLightMode
+                          ? null
+                          : [
+                              BoxShadow(
+                                color: AppTheme.primaryColor.withValues(alpha: 0.35),
+                                blurRadius: 12,
+                                spreadRadius: -2,
+                              ),
+                            ],
+                    ),
+                    child: posterUrl.isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: posterUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (_, _) => Container(color: AppTheme.bgCard),
+                            errorWidget: (_, _, _) =>
+                                Container(color: AppTheme.bgCard),
+                          )
+                        : const Icon(Icons.movie_outlined,
+                            color: Colors.white38, size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Because you watched',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.5),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.6,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.seedTitle.isEmpty ? 'recently' : widget.seedTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          height: 2.5,
+                          width: 36,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(2),
+                            gradient: LinearGradient(
+                              colors: [
+                                AppTheme.primaryColor,
+                                AppTheme.primaryColor.withValues(alpha: 0.0),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _frostedAction(Icons.shuffle_rounded, widget.onShuffle,
+                      tooltip: 'Pick a different show'),
+                  if (widget.onShuffle != null) const SizedBox(width: 6),
+                  _frostedAction(
+                      Icons.arrow_back_ios_new_rounded, () => _scroll(-600)),
+                  const SizedBox(width: 6),
+                  _frostedAction(
+                      Icons.arrow_forward_ios_rounded, () => _scroll(600)),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 290,
+              child: ListView.separated(
+                clipBehavior: Clip.none,
+                controller: _ctrl,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                itemCount: movies.length.clamp(0, 25),
+                separatorBuilder: (_, _) => const SizedBox(width: 14),
+                itemBuilder: (context, i) => _MovieCard(
+                  movie: movies[i],
+                  onTap: () => widget.onMovieTap(movies[i]),
+                  isPortrait: true,
+                ),
+              ),
+            ),
+          ],
         );
       },
     );
