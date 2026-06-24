@@ -2,4 +2,6 @@
 abstract final class AudiobookPrefsKeys {
   static const String history = 'audiobook_history';
   static const String liked = 'audiobook_liked';
+  /// Saved titles + optional chapter/position; synced with PlayTorrio cloud login.
+  static const String bookmarks = 'audiobook_bookmarks';
 }
