@@ -1,62 +1,99 @@
 # PlayTorrio
 
-Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live TV from Stremio. All in one app.
+Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live TV, sports, and IPTV — all in one app.
+
+**Current version:** 1.2.2
 
 Made by me. If you like it, star it or whatever.
 
 ## What it does
 
-Movies & TV Shows:
+### Home
+
+- **Tonight's Pick** — a randomized featured title with shuffle
+- **Mood chips** — quick browse by vibe (action, comedy, horror, etc.) via TMDB discover
+- **Because you watched** — recommendations from BestSimilar.com, mapped back to TMDB
+- **dlstreams.top shelves** — grouped live-TV-style Stremio catalogs when that addon is installed
+- **Continue watching** — local history plus PlayTorrio Cloud sync; can resume with the exact saved stream URL and headers
+- **Android TV** — split layout with a focused hero banner for D-pad navigation
+
+### Movies & TV
+
 - Search and browse movies/TV shows with TMDB metadata
-- Stream torrents directly with built-in libtorrent engine
-- Stremio addon support
+- Stream torrents directly with the built-in libtorrent engine
+- Stremio addon support (catalogs, streams, live channels)
+- **WebStreamr** — on-device embed scraper as a streaming source (country/extractor toggles in settings)
 - Real-Debrid and TorBox integration
-- Auto-resume from where you left off
-- Watch history tracking
+- Auto-resume and watch history tracking
+- **Trakt** and **Simkl** integration
 - Jellyfin server integration
 
-Music:
+### Live TV (Stremio)
+
+- **TV Channels** — browse live channel catalogs from installed Stremio addons
+- **Sports** — live sports events and channels (CDN Live TV and related feeds)
+- Plays through the same Stremio/HLS flow as movies and series
+
+### IPTV
+
+Three related tabs; hide or reorder any of them in **Settings → Navigation**:
+
+| Tab | What it is |
+|-----|------------|
+| **IPTV (M3U)** | Classic IPTV login — Xtream Codes API or M3U/M3U8 playlists, live TV and VOD |
+| **PT IPTV** | PlayTorrio IPTV hub — discover Xtream portals, add portals manually, manage M3U playlists, star favorite channels, inline EPG on tiles, alive-check for live streams |
+| **PT TV Guide** | Full TV guide grid (EPG) for PT IPTV channels; stays in sync when favorites or IPTV data change |
+
+### Audiobooks
+
+- Browse and search **[AudiobookBay.lu](https://audiobookbay.lu)** (`audiobookbay.lu`)
+- Stream magnet/torrent-backed audiobooks with chapter navigation
+- **Bookmarks** shelf and liked titles
+- **Cloud sync** — continue playback position and bookmarks across devices (with removal support)
+- **Generate audiobook** — upload an EPUB and convert via Paper2audio into a playable audiobook
+- Playback speed control and background playback
+
+### Music
+
 - Search and stream music from Deezer
 - Fetches audio from YouTube
 - Synced lyrics
 - Create playlists
 - Download tracks for offline playback
 - Like songs and save albums
-- Full-featured player with shuffle, repeat, queue management
+- Full player with shuffle, repeat, and queue management
 
-Manga & Comics:
-- Read manga from multiple sources
-- comics support
-- Chapter tracking and history
-- page-by-page or continuous scroll reading
+### Manga, comics, books & anime
 
-Audiobooks:
-- Stream audiobooks
-- Chapter navigation
-- Playback speed control
+- Read manga from multiple sources — chapter tracking, page-by-page or continuous scroll
+- Comics support with history
+- Books library
+- Anime browsing and streaming
 
-Live TV (Stremio):
-- Browse TV channel catalogs from installed Stremio addons
-- Play streams through the same Stremio flow as movies and series
+### Cloud & account
 
-IPTV:
-- Xtream Codes API support
-- M3U playlist support
-- Live TV and VOD
+- **PlayTorrio Cloud** — optional Supabase-backed sync for watch progress, app settings, and audiobook bookmarks (sign in from Settings)
+- **Trakt** — connect your Trakt account for history and stats
 
-Other stuff:
+### Other
+
+- **Magnet** tab — paste a magnet link and play
 - Torrent search with Prowlarr/Jackett integration
-- Cross-platform (Windows, Linux, macOS, Android)
+- Customizable bottom/side navigation (show, hide, reorder tabs)
+- **Android TV** — TV-optimized focus handling and LAN settings import from your phone
+- Cross-platform: **Windows**, **Linux**, **macOS**, **Android**
 - Dark theme because obviously
 
 ## Download
 
-Check the releases page for the latest builds.
+Check the [releases](https://github.com/killamfkr/PlayTorrioV2/releases) page for the latest builds.
 
-Android: APK files
-Windows: Installer
-Linux: AppImage
-macOS: Zip
+| Platform | Artifact |
+|----------|----------|
+| Android | APK |
+| Windows | Installer |
+| Linux | AppImage |
+| macOS | Zip |
 
 ## Building
 
@@ -107,6 +144,5 @@ Then open http://localhost:8089
 Use the Community Applications–style template in [`docker/unraid/playtorrio-web.xml`](docker/unraid/playtorrio-web.xml). Copy it to `config/plugins/dockerMan/templates-user/` on your Unraid flash drive, build the image on the server (`docker build -f docker/web/Dockerfile -t playtorrio-web:latest .`), then add the container from the template. Full steps: [`docker/unraid/README.md`](docker/unraid/README.md).
 
 ## License
-
 
 GPL-2.0 license
