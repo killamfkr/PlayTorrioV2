@@ -1022,6 +1022,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
       }
 
       if (_isPlayingNotifier.value) {
+        if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+          _syncBuiltInVideoMediaSession();
+        }
         unawaited(SettingsService().continuePlaybackInBackground().then((allow) {
           if (!mounted || _disposed) return;
           if (!allow && _isPlayingNotifier.value) {
@@ -1680,6 +1683,9 @@ class _MobilePlayerScreenState extends State<MobilePlayerScreen>
         }
         unawaited(_configureAudioSessionIfNeeded());
         unawaited(_ensureAudioSessionActive());
+        if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+          _syncBuiltInVideoMediaSession();
+        }
         _startHideTimer();
         // Scrobble resume
         if (widget.movie != null) {

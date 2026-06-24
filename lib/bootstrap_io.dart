@@ -93,9 +93,11 @@ Future<void> bootstrap() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.playtorrio.native.channel.audio',
       androidNotificationChannelName: 'Media playback',
-      androidNotificationOngoing: false,
+      androidNotificationOngoing: true,
       androidStopForegroundOnPause: false,
       androidResumeOnClick: true,
+      fastForwardInterval: Duration(seconds: 30),
+      rewindInterval: Duration(seconds: 30),
     ),
   );
   debugPrint('[Boot] AudioService OK');

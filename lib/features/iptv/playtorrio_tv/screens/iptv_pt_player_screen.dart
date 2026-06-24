@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,10 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../../../api/settings_service.dart';
+import '../../../../platform_flags.dart';
+import '../../../../services/built_in_video_media_session.dart';
+import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
 
 /// Single source for the IPTV player.
@@ -129,6 +134,9 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   // Retry state
   int _retryAttempt = 0;
   DateTime? _lastRecoveryAt;
+  bool _audioSessionConfigured = false;
+  bool _mediaSessionAttached = false;
+  final SettingsService _settings = SettingsService();
   // When the user explicitly paused (so play-after-pause can rejoin live edge)
   // ignore: unused_field
   DateTime? _pausedAt;
@@ -161,9 +169,73 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     _controller = VideoController(_player);
     _bind();
     _applyMpvTunables();
+    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+      unawaited(_configureIptvAudioSession());
+    }
     _openCurrent();
     _startWatchdog();
     _scheduleHideControls();
+  }
+
+  /// Same behavior as the main [MobilePlayerScreen]: do not auto-pause in
+  /// background when the user allows background playback; configure OS audio focus.
+  Future<void> _configureIptvAudioSession() async {
+    if (_audioSessionConfigured) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.movie,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      ));
+      _audioSessionConfigured = true;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[IPTV Player] AudioSession: $e');
+    }
+  }
+
+  Future<void> _ensureIptvAudioSessionActive() async {
+    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[IPTV Player] setActive: $e');
+    }
+  }
+
+  void _attachIptvMediaSession() {
+    if (kIsWeb) return;
+    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
+    if (_mediaSessionAttached) return;
+    _mediaSessionAttached = true;
+    String? art;
+    final u = widget.logoUrl;
+    if (u != null && u.isNotEmpty && u.startsWith('http')) {
+      art = u;
+    }
+    attachBuiltInVideoMediaSession(
+      _player,
+      title: widget.title,
+      posterPath: art,
+      displaySubtitle: widget.subtitle,
+      album: 'PlayTorrio TV',
+      isLive: true,
+    );
+  }
+
+  void _detachIptvMediaSession() {
+    if (!_mediaSessionAttached) return;
+    _mediaSessionAttached = false;
+    if (kIsWeb) return;
+    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+      detachBuiltInVideoMediaSession(_player);
+    }
   }
 
   /// Set libmpv/FFmpeg properties that turn media_kit into a real IPTV player.
@@ -315,6 +387,10 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
       setState(() => _playing = p);
       if (p) {
         _readyNotPlayingSince = null;
+        if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+          unawaited(_ensureIptvAudioSessionActive());
+          _attachIptvMediaSession();
+        }
       } else if (_userPlayWhenReady) {
         // libmpv silently went paused while the user wants playback. On a
         // live IPTV stream this is the classic "feed died, mpv hit EOF and
@@ -685,6 +761,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   Future<void> _disposePlayer() async {
+    _detachIptvMediaSession();
     await _posSub?.cancel();
     await _durSub?.cancel();
     await _playingSub?.cancel();
@@ -746,6 +823,27 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!platformIsAndroid && !Platform.isIOS) return;
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      if (_playing && Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        _attachIptvMediaSession();
+      }
+      unawaited(_settings.continuePlaybackInBackground().then((allow) {
+        if (!mounted) return;
+        if (!allow && _playing) {
+          unawaited(_player.pause());
+        }
+      }));
+    } else if (state == AppLifecycleState.resumed) {
+      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        unawaited(_ensureIptvAudioSessionActive());
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final compact = size.shortestSide < 600;
@@ -757,12 +855,20 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Video
+            // Video — respect "Continue playback in background" (same as main player)
             Center(
-              child: Video(
-                controller: _controller,
-                fit: BoxFit.contain,
-                controls: NoVideoControls,
+              child: ValueListenableBuilder<bool>(
+                valueListenable:
+                    SettingsService.continuePlaybackInBackgroundNotifier,
+                builder: (context, allowBg, _) {
+                  return Video(
+                    controller: _controller,
+                    fit: BoxFit.contain,
+                    controls: NoVideoControls,
+                    fill: Colors.black,
+                    pauseUponEnteringBackgroundMode: !allowBg,
+                  );
+                },
               ),
             ),
             // Reconnect/buffering banner
