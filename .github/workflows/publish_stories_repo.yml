@@ -2,17 +2,26 @@
 #
 # Setup (once):
 #   1. GitHub → Settings → Developer settings → Personal access tokens
-#      Create a token with "Contents: Read and write" on killamfkr/Stories
+#      Fine-grained on killamfkr/Stories: Contents Read and write
+#      (Optional) Workflows Read and write — only if you enable "Include CI workflows"
+#      Classic alternative: repo + workflow scopes
 #   2. PlayTorrioV2 repo → Settings → Secrets and variables → Actions
 #      New secret: STORIES_PUSH_TOKEN = that token
 #   3. Actions → "Publish Stories repo" → Run workflow
 #
 # Works even when Stories is an empty repo (no main branch yet).
+# By default .github/workflows is omitted so a Contents-only token works.
 
 name: Publish Stories repo
 
 on:
   workflow_dispatch:
+    inputs:
+      include_github_actions:
+        description: 'Include .github/workflows (token needs workflow scope)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -34,6 +43,10 @@ jobs:
                  stories-export/android \
                  stories-export/ios \
                  stories-export/.flutter-plugins-dependencies || true
+          if [[ "${{ inputs.include_github_actions }}" != "true" ]]; then
+            echo "Omitting .github/ (use include_github_actions=true + workflow scope to ship CI)"
+            rm -rf stories-export/.github
+          fi
 
       - name: Push to killamfkr/Stories (creates main if repo is empty)
         env:
