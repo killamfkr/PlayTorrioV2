@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../api/settings_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/literary_character_avatar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -25,6 +26,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _registering = false;
   bool _syncing = false;
   String? _signedInEmail;
+  int _avatarIndex = 0;
   String _torrentCacheType = 'ram';
   int _torrentRamCacheMb = 200;
 
@@ -48,6 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final email = await cloud.signedInEmail();
     final cacheType = await _settings.getTorrentCacheType();
     final cacheMb = await _settings.getTorrentRamCacheMb();
+    final avatar = await _settings.getUserAvatarIndex();
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -55,9 +58,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _syncEnabled = sync;
       _configured = cloud.isConfigured;
       _signedInEmail = email;
+      _avatarIndex = avatar;
       _torrentCacheType = cacheType;
       _torrentRamCacheMb = cacheMb;
     });
+  }
+
+  Future<void> _selectAvatar(int index) async {
+    if (index == _avatarIndex) return;
+    await _settings.setUserAvatarIndex(index);
+    if (!mounted) return;
+    setState(() => _avatarIndex = index);
+    if (_sessionPresent && _syncEnabled) {
+      PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+    }
+  }
+
+  Widget _avatarPicker() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Text(
+              'Pick a literary character for your profile. These are original cartoon designs inspired by classic book heroes.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.4),
+            ),
+          ),
+          const SizedBox(height: 8),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.78,
+            ),
+            itemCount: kLiteraryAvatars.length,
+            itemBuilder: (context, i) {
+              final info = kLiteraryAvatars[i];
+              final selected = i == _avatarIndex;
+              return InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _selectAvatar(i),
+                child: Column(
+                  children: [
+                    LiteraryCharacterAvatar(
+                      index: i,
+                      size: 58,
+                      selected: selected,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      info.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        height: 1.2,
+                        fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                        color: selected ? AppTheme.primaryColor : AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   InputDecoration _fieldDecoration(String label) => InputDecoration(
@@ -229,6 +303,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
               children: [
+                _sectionCard(
+                  title: 'Your character',
+                  child: _avatarPicker(),
+                ),
                 if (kIsWeb)
                   _sectionCard(
                     title: 'Account',
@@ -263,11 +341,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (_sessionPresent) ...[
                             const SizedBox(height: 12),
                             ListTile(
-                              leading: const Icon(Icons.check_circle_outline,
-                                  color: AppTheme.primaryColor),
-                              title: const Text('Signed in'),
+                              leading: LiteraryCharacterAvatar(
+                                index: _avatarIndex,
+                                size: 48,
+                                selected: true,
+                              ),
+                              title: Text(
+                                kLiteraryAvatars[clampLiteraryAvatarIndex(_avatarIndex)].label,
+                              ),
                               subtitle: Text(
-                                _signedInEmail ?? 'Your account',
+                                _signedInEmail ?? 'Signed in',
                                 style: const TextStyle(color: AppTheme.textSecondary),
                               ),
                             ),

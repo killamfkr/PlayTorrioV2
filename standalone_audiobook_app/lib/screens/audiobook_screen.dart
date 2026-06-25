@@ -7,6 +7,7 @@ import '../api/settings_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/audiobook_thumb.dart';
+import '../widgets/literary_character_avatar.dart';
 import '../platform_flags.dart';
 import 'audiobook_player_screen.dart';
 import 'audiobook_downloads_screen.dart';
@@ -43,6 +44,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
   List<Map<String, dynamic>> _bookmarks = [];
   Set<String> _bookmarkIds = {};
   VoidCallback? _audiobookPrefsListener;
+  VoidCallback? _avatarListener;
+  int _avatarIndex = 0;
 
   @override
   void initState() {
@@ -54,7 +57,13 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     };
     SettingsService.audiobookPrefsChangeNotifier
         .addListener(_audiobookPrefsListener!);
+    _avatarListener = () {
+      if (!mounted) return;
+      _loadUserAvatar();
+    };
+    SettingsService.userAvatarChangeNotifier.addListener(_avatarListener!);
     _loadBooks();
+    _loadUserAvatar();
     _reloadCloudBackedShelves();
     final warning = widget.initWarning;
     if (warning != null && warning.isNotEmpty) {
@@ -73,6 +82,9 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
       SettingsService.audiobookPrefsChangeNotifier
           .removeListener(_audiobookPrefsListener!);
     }
+    if (_avatarListener != null) {
+      SettingsService.userAvatarChangeNotifier.removeListener(_avatarListener!);
+    }
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -83,6 +95,23 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
     if (state == AppLifecycleState.resumed) {
       _pullCloudAudiobookPrefs();
     }
+  }
+
+  Future<void> _loadUserAvatar() async {
+    final avatar = await SettingsService().getUserAvatarIndex();
+    if (mounted) setState(() => _avatarIndex = avatar);
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+    );
+    if (!mounted) return;
+    await Future.wait([
+      _reloadCloudBackedShelves(),
+      _loadUserAvatar(),
+    ]);
   }
 
   Future<void> _pullCloudAudiobookPrefs() async {
@@ -366,16 +395,23 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(24),
+                onTap: _openSettings,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: LiteraryCharacterAvatar(
+                    index: _avatarIndex,
+                    size: 34,
+                    selected: false,
+                  ),
+                ),
+              ),
               IconButton(
                 icon: const Icon(Icons.settings_outlined,
                     color: AppTheme.textSecondary, size: 22),
                 tooltip: 'Settings & account',
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                  ).then((_) => _reloadCloudBackedShelves());
-                },
+                onPressed: _openSettings,
               ),
               IconButton(
                 icon: const Icon(Icons.auto_awesome_outlined,

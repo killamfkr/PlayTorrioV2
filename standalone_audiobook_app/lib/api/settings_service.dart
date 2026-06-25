@@ -108,6 +108,13 @@ class SettingsService {
   static const _torrentCacheTypeKey = 'torrent_cache_type';
   static const _torrentRamCacheMbKey = 'torrent_ram_cache_mb';
   static const _ptCloudSettingsSyncKey = 'pt_cloud_sync_settings';
+  static const _userAvatarKey = 'stories_user_avatar';
+
+  static final ValueNotifier<int> userAvatarChangeNotifier = ValueNotifier<int>(0);
+
+  static void notifyUserAvatarChanged() {
+    userAvatarChangeNotifier.value++;
+  }
 
   /// Standalone app uses a single profile row in Supabase.
   Future<int> getPlaytorrioProfileId() async => 1;
@@ -142,6 +149,17 @@ class SettingsService {
     await prefs.setInt(_torrentRamCacheMbKey, mb);
   }
 
+  Future<int> getUserAvatarIndex() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_userAvatarKey) ?? 0;
+  }
+
+  Future<void> setUserAvatarIndex(int index) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_userAvatarKey, index);
+    notifyUserAvatarChanged();
+  }
+
   /// Audiobook prefs mirrored to Supabase when signed in.
   Future<Map<String, dynamic>> exportForCloudSync() async {
     final prefs = await SharedPreferences.getInstance();
@@ -154,6 +172,7 @@ class SettingsService {
           prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [],
       _torrentCacheTypeKey: await getTorrentCacheType(),
       _torrentRamCacheMbKey: await getTorrentRamCacheMb(),
+      _userAvatarKey: await getUserAvatarIndex(),
     };
   }
 
@@ -199,6 +218,11 @@ class SettingsService {
       if (k == _torrentRamCacheMbKey) {
         final n = v is int ? v : int.tryParse(v.toString());
         if (n != null) await setTorrentRamCacheMb(n);
+        continue;
+      }
+      if (k == _userAvatarKey) {
+        final n = v is int ? v : int.tryParse(v.toString());
+        if (n != null) await setUserAvatarIndex(n);
       }
     }
   }
