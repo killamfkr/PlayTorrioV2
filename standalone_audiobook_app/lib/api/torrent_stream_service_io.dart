@@ -317,6 +317,42 @@ class TorrentStreamService {
     return null;
   }
 
+  /// Adds a magnet and waits for metadata so the player can start streaming sooner.
+  Future<bool> prefetchAudiobookMagnet(String magnetLink) async {
+    if (_state != EngineState.ready) {
+      if (!await start()) return false;
+    }
+
+    final hash = _extractHash(magnetLink);
+    try {
+      final cacheType = await _settings.getTorrentCacheType();
+      final saveToRam = cacheType == 'ram';
+
+      late final int torrentId;
+      if (hash != null && _activeTorrents.containsKey(hash)) {
+        torrentId = _activeTorrents[hash]!;
+        final existing = LibtorrentFlutter.instance.getFiles(torrentId);
+        if (existing.isNotEmpty) return true;
+      } else {
+        torrentId =
+            LibtorrentFlutter.instance.addMagnet(magnetLink, null, saveToRam);
+        if (hash != null) {
+          _activeTorrents[hash] = torrentId;
+        }
+        _log('Audiobook prefetch: added magnet, torrentId=$torrentId');
+      }
+
+      final files = await _waitForMetadata(
+        torrentId,
+        timeout: const Duration(seconds: 25),
+      );
+      return files != null && files.isNotEmpty;
+    } catch (e) {
+      _log('prefetchAudiobookMagnet error: $e');
+      return false;
+    }
+  }
+
   /// Stops audiobook streams and drops the torrent for this magnet.
   void releaseAudiobookMagnet(String magnetLink) {
     removeTorrent(magnetLink);

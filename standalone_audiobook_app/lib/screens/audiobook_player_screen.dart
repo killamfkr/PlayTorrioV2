@@ -45,7 +45,6 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
 
   List<AudiobookChapter>? _playableChapters;
   bool _magnetResolving = false;
-  String? _magnetError;
   Uint8List? _magnetCoverBytes;
 
   List<AudiobookChapter> get _chaptersForUi =>
@@ -157,62 +156,6 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
 
     _playableChapters = widget.chapters;
 
-    if (needsMagnet) {
-      setState(() {
-        _magnetResolving = true;
-        _magnetError = null;
-      });
-      try {
-        final torrent = TorrentStreamService();
-        if (!await torrent.start()) {
-          throw Exception('Torrent engine failed to start');
-        }
-        if (book.magnetCoverFileIndex != null) {
-          torrent.stopAudiobookStreamsForMagnet(magnet);
-          final coverUrl = await torrent.streamAudiobookFile(
-            magnet,
-            book.magnetCoverFileIndex!,
-            allowNonStreamable: true,
-            stopSiblingStreams: true,
-            fileNameHint: book.magnetCoverFileName,
-          );
-          if (coverUrl != null && coverUrl.isNotEmpty) {
-            try {
-              final res = await http.get(
-                Uri.parse(coverUrl),
-                headers: AudiobookPlayerService.magnetStreamHttpHeaders,
-              );
-              if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-                _magnetCoverBytes = res.bodyBytes;
-              }
-            } catch (_) {}
-          }
-          torrent.stopAudiobookStreamsForMagnet(magnet);
-        }
-      } catch (e) {
-        _magnetError = '$e';
-      }
-      if (!mounted) return;
-      setState(() {});
-    }
-
-    if (_magnetError != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_magnetError!),
-            backgroundColor: Colors.red.shade900,
-          ),
-        );
-        Navigator.pop(context);
-      });
-      if (needsMagnet && mounted) {
-        setState(() => _magnetResolving = false);
-      }
-      return;
-    }
-
     final ch = _playableChapters;
     if (ch == null || ch.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -225,14 +168,25 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       return;
     }
 
+    setState(() {
+      _magnetResolving = needsMagnet;
+    });
+
     try {
-      await _refreshDownloadState(ch.length);
-      await _service.loadBook(
-        book,
-        ch,
-        initialChapter: widget.initialChapterIndex,
-        resumePosition: widget.initialPosition,
-      );
+      if (needsMagnet) {
+        if (!await TorrentStreamService().start()) {
+          throw Exception('Torrent engine failed to start');
+        }
+      }
+      await Future.wait([
+        _refreshDownloadState(ch.length),
+        _service.loadBook(
+          book,
+          ch,
+          initialChapter: widget.initialChapterIndex,
+          resumePosition: widget.initialPosition,
+        ),
+      ]);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,11 +198,38 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
       Navigator.pop(context);
       return;
     } finally {
-      if (mounted && needsMagnet) {
+      if (mounted) {
         setState(() => _magnetResolving = false);
       }
     }
+
+    unawaited(_fetchMagnetCoverInBackground(book));
     unawaited(_refreshBookmarkFlag());
+  }
+
+  /// Cover art from the torrent — loaded after audio starts so it does not block playback.
+  Future<void> _fetchMagnetCoverInBackground(Audiobook book) async {
+    final magnet = book.magnetLink?.trim();
+    final coverIdx = book.magnetCoverFileIndex;
+    if (magnet == null || magnet.isEmpty || coverIdx == null) return;
+    try {
+      final torrent = TorrentStreamService();
+      final coverUrl = await torrent.streamAudiobookFile(
+        magnet,
+        coverIdx,
+        allowNonStreamable: true,
+        stopSiblingStreams: false,
+        fileNameHint: book.magnetCoverFileName,
+      );
+      if (coverUrl == null || coverUrl.isEmpty) return;
+      final res = await http.get(
+        Uri.parse(coverUrl),
+        headers: AudiobookPlayerService.magnetStreamHttpHeaders,
+      );
+      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty && mounted) {
+        setState(() => _magnetCoverBytes = res.bodyBytes);
+      }
+    } catch (_) {}
   }
 
   Future<void> _refreshDownloadState(int chapterCount) async {
@@ -362,7 +343,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                       CircularProgressIndicator(color: AppTheme.primaryColor),
                       SizedBox(height: 16),
                       Text(
-                        'Connecting to torrent…',
+                        'Starting playback…',
                         style: TextStyle(color: Colors.white70),
                       ),
                     ],

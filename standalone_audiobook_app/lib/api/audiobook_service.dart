@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as hdom;
 import 'package:html/parser.dart' as hp;
 import 'local_server_service.dart';
+import 'torrent_stream_service.dart';
 
 class Audiobook {
   final String uuid;
@@ -298,6 +299,7 @@ class AudiobookService {
   /// Loads chapters; for Audiobook Bay this fetches the detail page and attaches [Audiobook.magnetLink].
   Future<({Audiobook book, List<AudiobookChapter> chapters})>
       prepareAudiobookPlayback(Audiobook book) async {
+    late final ({Audiobook book, List<AudiobookChapter> chapters}) prepared;
     if (book.source == 'audiobookbay') {
       final magnet = book.magnetLink?.trim() ?? '';
       final tracks = book.magnetTracks;
@@ -320,7 +322,7 @@ class AudiobookService {
           ));
         }
         if (chapters.isNotEmpty) {
-          return (
+          prepared = (
             book: Audiobook(
               uuid: book.uuid,
               audioBookId: book.audioBookId,
@@ -336,12 +338,28 @@ class AudiobookService {
             ),
             chapters: chapters,
           );
+        } else {
+          prepared = await _resolveAudiobookBay(book);
         }
+      } else {
+        prepared = await _resolveAudiobookBay(book);
       }
-      return _resolveAudiobookBay(book);
+    } else {
+      final chapters = await getChapters(book);
+      prepared = (book: book, chapters: chapters);
     }
-    final chapters = await getChapters(book);
-    return (book: book, chapters: chapters);
+    await _prefetchMagnetIfNeeded(prepared.book);
+    return prepared;
+  }
+
+  /// While the library spinner is visible, pull torrent metadata so playback starts faster.
+  Future<void> _prefetchMagnetIfNeeded(Audiobook book) async {
+    final magnet = book.magnetLink?.trim() ?? '';
+    if (magnet.isEmpty) return;
+    if (book.source != 'magnet' && book.source != 'audiobookbay') return;
+    final torrent = TorrentStreamService();
+    if (!await torrent.start()) return;
+    await torrent.prefetchAudiobookMagnet(magnet);
   }
 
   Future<List<Audiobook>> _searchTokybook(String query) async {

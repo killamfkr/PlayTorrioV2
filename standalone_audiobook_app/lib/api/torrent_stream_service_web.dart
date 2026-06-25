@@ -69,6 +69,8 @@ class TorrentStreamService {
   }) async =>
       null;
 
+  Future<bool> prefetchAudiobookMagnet(String magnetLink) async => false;
+
   void stopAudiobookStreamsForMagnet(String magnetLink) {}
 
   void releaseAudiobookMagnet(String magnetLink) {}

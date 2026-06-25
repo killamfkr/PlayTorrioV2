@@ -40,6 +40,7 @@ class AudiobookPlayerService {
   List<AudiobookChapter> _currentChapters = [];
   final List<StreamSubscription> _subscriptions = [];
   bool _playerListenersAttached = false;
+  bool _mpvAudiobookTuned = false;
   Timer? _progressTicker;
   bool _isResuming = false;
   Timer? _progressSaveDebounce;
@@ -172,10 +173,12 @@ class AudiobookPlayerService {
 
   /// Torrent loopback streams often report duration/position late — wait briefly.
   Future<void> _waitForPlaybackClock({
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 5),
+    Duration minPrepare = const Duration(milliseconds: 200),
   }) async {
-    final end = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(end)) {
+    final deadline = DateTime.now().add(timeout);
+    final minDone = DateTime.now().add(minPrepare);
+    while (DateTime.now().isBefore(deadline)) {
       final st = _player.state;
       if (st.duration > Duration.zero) {
         duration.value = st.duration;
@@ -185,9 +188,49 @@ class AudiobookPlayerService {
         _wallClockBase = st.position;
         return;
       }
-      if (st.duration > Duration.zero) return;
-      await Future.delayed(const Duration(milliseconds: 200));
+      if (st.duration > Duration.zero && DateTime.now().isAfter(minDone)) {
+        return;
+      }
+      if (st.playing && DateTime.now().isAfter(minDone)) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 60));
     }
+  }
+
+  /// After play() on a torrent stream, wait until the loopback URL is primed.
+  Future<void> _waitForStreamPrime({
+    Duration minWait = const Duration(milliseconds: 150),
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    if (minWait > Duration.zero) {
+      await Future.delayed(minWait);
+    }
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final st = _player.state;
+      if (st.position > Duration.zero || st.duration > Duration.zero) return;
+      if (st.playing && !st.buffering) return;
+      await Future.delayed(const Duration(milliseconds: 80));
+    }
+  }
+
+  Future<void> _ensureMpvAudiobookTuning({required bool torrentBacked}) async {
+    if (_mpvAudiobookTuned) return;
+    if (_player.platform is! NativePlayer) return;
+    final p = _player.platform as NativePlayer;
+    await p.setProperty('hr-seek', 'yes');
+    await p.setProperty('cache', 'yes');
+    await p.setProperty('demuxer-max-bytes', '50000000');
+    await p.setProperty('demuxer-max-back-bytes', '50000000');
+    await p.setProperty('demuxer-readahead-secs', torrentBacked ? '12' : '30');
+    if (torrentBacked) {
+      await p.setProperty('force-seekable', 'yes');
+      try {
+        await p.setProperty('demuxer-seekable-cache', 'yes');
+      } catch (_) {}
+    }
+    _mpvAudiobookTuned = true;
   }
 
   void _startProgressTicker() {
@@ -360,21 +403,9 @@ class AudiobookPlayerService {
       artUri: art.isEmpty ? null : Uri.tryParse(art),
     ));
 
-    // Optimize for streaming audiobooks
-    if (_player.platform is NativePlayer) {
-      final p = _player.platform as NativePlayer;
-      await p.setProperty('hr-seek', 'yes'); // 'yes' is faster than 'always' for streams
-      await p.setProperty('cache', 'yes');
-      await p.setProperty('demuxer-max-bytes', '50000000'); // 50MB cache
-      await p.setProperty('demuxer-max-back-bytes', '50000000');
-      await p.setProperty('demuxer-readahead-secs', '30');
-      if (book.source == 'magnet' || book.source == 'audiobookbay') {
-        await p.setProperty('force-seekable', 'yes');
-        try {
-          await p.setProperty('demuxer-seekable-cache', 'yes');
-        } catch (_) {}
-      }
-    }
+    // Optimize for streaming audiobooks (once per player).
+    final torrentBacked = book.source == 'magnet' || book.source == 'audiobookbay';
+    await _ensureMpvAudiobookTuning(torrentBacked: torrentBacked);
 
     final media = await _mediaForChapter(book, chapters[idx]);
 
@@ -399,10 +430,9 @@ class AudiobookPlayerService {
       if (torrentResume) {
         // Start playback so the torrent HTTP stream buffers, then seek — seeking
         // a cold stream from play:false often snaps back to 0.
-        await Future.delayed(const Duration(milliseconds: 500));
         await _player.play();
         resumeAlreadyPlaying = true;
-        await Future.delayed(const Duration(milliseconds: 2000));
+        await _waitForStreamPrime();
         await _refineTorrentResumeSeek(resumePosition);
         _ignoreProgressPersistenceUntil =
             DateTime.now().add(const Duration(seconds: 3));
@@ -432,7 +462,6 @@ class AudiobookPlayerService {
 
     if (!resumeAlreadyPlaying) {
       await _player.play();
-      await Future.delayed(const Duration(milliseconds: 300));
     }
 
     await _waitForPlaybackClock();
@@ -538,8 +567,7 @@ class AudiobookPlayerService {
       final media = await _mediaForChapter(book, _currentChapters[index]);
       await _player.open(media, play: false);
       await _player.play();
-      await Future.delayed(const Duration(milliseconds: 300));
-      await _waitForPlaybackClock();
+      await _waitForPlaybackClock(timeout: const Duration(seconds: 4));
       _finishPreparingPlayback();
     } catch (e, st) {
       isPreparingPlayback.value = false;
