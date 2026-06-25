@@ -103,7 +103,7 @@ class AudiobookPlayerService {
       final wasPlaying = isPlaying.value;
       isPlaying.value = pl;
       if (pl) {
-        if (_wallClockStartedAt == null && !isBuffering.value) {
+        if (_wallClockStartedAt == null) {
           _markWallClock(base: _wallClockBase);
         }
         _startProgressTicker();
@@ -118,7 +118,7 @@ class AudiobookPlayerService {
 
     _subscriptions.add(_player.stream.buffering.listen((b) {
       isBuffering.value = b;
-      if (!b && isPlaying.value && _wallClockStartedAt == null) {
+      if (isPlaying.value && _wallClockStartedAt == null) {
         _markWallClock(base: _wallClockBase);
       }
       _updateSystemState();
@@ -148,17 +148,46 @@ class AudiobookPlayerService {
 
   void _finishPreparingPlayback({Duration? positionHint}) {
     isPreparingPlayback.value = false;
+    final st = _player.state;
+    if (st.duration > Duration.zero) {
+      duration.value = st.duration;
+    }
     if (positionHint != null && positionHint > Duration.zero) {
       position.value = positionHint;
       _wallClockBase = positionHint;
+    } else if (st.position > Duration.zero) {
+      position.value = st.position;
+      _wallClockBase = st.position;
     }
-    isPlaying.value = _player.state.playing;
-    isBuffering.value = _player.state.buffering;
+    isPlaying.value = st.playing;
+    isBuffering.value = st.buffering;
     if (isPlaying.value) {
-      _markWallClock(base: _wallClockBase);
+      if (_wallClockStartedAt == null) {
+        _markWallClock(base: _wallClockBase);
+      }
       _startProgressTicker();
     }
     _updateSystemState();
+  }
+
+  /// Torrent loopback streams often report duration/position late — wait briefly.
+  Future<void> _waitForPlaybackClock({
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final end = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(end)) {
+      final st = _player.state;
+      if (st.duration > Duration.zero) {
+        duration.value = st.duration;
+      }
+      if (st.position > Duration.zero) {
+        position.value = st.position;
+        _wallClockBase = st.position;
+        return;
+      }
+      if (st.duration > Duration.zero) return;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
   }
 
   void _startProgressTicker() {
@@ -197,9 +226,7 @@ class AudiobookPlayerService {
         position.value = p;
         changed = true;
       }
-    } else if (isPlaying.value &&
-        !isBuffering.value &&
-        _wallClockStartedAt != null) {
+    } else if (isPlaying.value && _wallClockStartedAt != null) {
       var wall =
           _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
       if (d > Duration.zero && wall > d) wall = d;
@@ -408,6 +435,7 @@ class AudiobookPlayerService {
       await Future.delayed(const Duration(milliseconds: 300));
     }
 
+    await _waitForPlaybackClock();
     _finishPreparingPlayback(positionHint: preparingPositionHint);
   }
 
@@ -466,7 +494,15 @@ class AudiobookPlayerService {
     return Media(url, httpHeaders: merged);
   }
 
-  void playOrPause() => _player.playOrPause();
+  void playOrPause() {
+    if (isPreparingPlayback.value) {
+      isPreparingPlayback.value = false;
+      final st = _player.state;
+      isPlaying.value = st.playing;
+      isBuffering.value = st.buffering;
+    }
+    _player.playOrPause();
+  }
   void seek(Duration p) => _player.seek(p);
   void setRate(double r) => _player.setRate(r);
 
@@ -503,6 +539,7 @@ class AudiobookPlayerService {
       await _player.open(media, play: false);
       await _player.play();
       await Future.delayed(const Duration(milliseconds: 300));
+      await _waitForPlaybackClock();
       _finishPreparingPlayback();
     } catch (e, st) {
       isPreparingPlayback.value = false;
@@ -518,9 +555,7 @@ class AudiobookPlayerService {
     if (fromPlayer > Duration.zero) {
       return fromPlayer.inMilliseconds;
     }
-    if (isPlaying.value &&
-        !isBuffering.value &&
-        _wallClockStartedAt != null) {
+    if (isPlaying.value && _wallClockStartedAt != null) {
       var wall =
           _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
       final d = duration.value;

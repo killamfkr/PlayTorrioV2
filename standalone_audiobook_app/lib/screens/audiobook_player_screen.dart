@@ -590,12 +590,14 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                   return ValueListenableBuilder<bool>(
                     valueListenable: _service.isPreparingPlayback,
                     builder: (context, preparing, _) {
-                      final displayPos =
-                          preparing ? Duration.zero : pos;
-                      final dValue = dur.inMilliseconds.toDouble();
+                      final hasDuration = dur > Duration.zero;
+                      final displayPos = preparing ? Duration.zero : pos;
+                      final dValue =
+                          hasDuration ? dur.inMilliseconds.toDouble() : 1.0;
                       final pValue = displayPos.inMilliseconds.toDouble();
-                      final maxValue = dValue > 0 ? dValue : 1.0;
-                      final safePValue = pValue.clamp(0.0, maxValue);
+                      final safePValue = hasDuration
+                          ? pValue.clamp(0.0, dValue)
+                          : 0.0;
 
                       return Column(
                         children: [
@@ -610,8 +612,8 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                             ),
                             child: Slider(
                               value: safePValue,
-                              max: maxValue,
-                              onChanged: preparing
+                              max: dValue,
+                              onChanged: (preparing || !hasDuration)
                                   ? null
                                   : (v) => _service.seek(
                                       Duration(milliseconds: v.toInt())),
@@ -627,9 +629,13 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
                                 Text(_formatDuration(displayPos),
                                     style: const TextStyle(
                                         color: Colors.white38, fontSize: 12)),
-                                Text(_formatDuration(dur),
-                                    style: const TextStyle(
-                                        color: Colors.white38, fontSize: 12)),
+                                Text(
+                                  hasDuration
+                                      ? _formatDuration(dur)
+                                      : (preparing ? '…' : '--:--'),
+                                  style: const TextStyle(
+                                      color: Colors.white38, fontSize: 12),
+                                ),
                               ],
                             ),
                           ),
@@ -682,40 +688,34 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
             ValueListenableBuilder<bool>(
               valueListenable: _service.isPreparingPlayback,
               builder: (context, preparing, _) {
+                if (preparing) {
+                  return const SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  );
+                }
                 return ValueListenableBuilder<bool>(
-                  valueListenable: _service.isBuffering,
-                  builder: (context, buffering, _) {
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: _service.isPlaying,
-                      builder: (context, playing, _) {
-                        if (preparing || (buffering && !playing)) {
-                          return const SizedBox(
-                            width: 80,
-                            height: 80,
-                            child: Padding(
-                              padding: EdgeInsets.all(20),
-                              child: CircularProgressIndicator(
-                                  color: Colors.white),
-                            ),
-                          );
-                        }
-                        return TvGestureTap(
-                          onTap: () => _service.playOrPause(),
-                          child: Container(
-                            width: 84,
-                            height: 84,
-                            decoration: const BoxDecoration(
-                                color: Colors.white, shape: BoxShape.circle),
-                            child: Icon(
-                              playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
-                              color: Colors.black,
-                              size: 54,
-                            ),
-                          ),
-                        );
-                      },
+                  valueListenable: _service.isPlaying,
+                  builder: (context, playing, _) {
+                    return TvGestureTap(
+                      onTap: () => _service.playOrPause(),
+                      child: Container(
+                        width: 84,
+                        height: 84,
+                        decoration: const BoxDecoration(
+                            color: Colors.white, shape: BoxShape.circle),
+                        child: Icon(
+                          playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          color: Colors.black,
+                          size: 54,
+                        ),
+                      ),
                     );
                   },
                 );
