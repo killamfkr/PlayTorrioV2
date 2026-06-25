@@ -6,6 +6,8 @@
 #   2. PlayTorrioV2 repo → Settings → Secrets and variables → Actions
 #      New secret: STORIES_PUSH_TOKEN = that token
 #   3. Actions → "Publish Stories repo" → Run workflow
+#
+# Works even when Stories is an empty repo (no main branch yet).
 
 name: Publish Stories repo
 
@@ -24,14 +26,28 @@ jobs:
       - name: Validate source folder
         run: test -d standalone_audiobook_app
 
-      - name: Push standalone_audiobook_app to killamfkr/Stories
-        uses: cpina/github-action-push-to-another-repository@v1.7.3
+      - name: Prepare export (no generated android/ios/build)
+        run: |
+          rsync -a standalone_audiobook_app/ stories-export/
+          rm -rf stories-export/.dart_tool \
+                 stories-export/build \
+                 stories-export/android \
+                 stories-export/ios \
+                 stories-export/.flutter-plugins-dependencies || true
+
+      - name: Push to killamfkr/Stories (creates main if repo is empty)
         env:
-          API_TOKEN_GITHUB: ${{ secrets.STORIES_PUSH_TOKEN }}
-        with:
-          source-directory: standalone_audiobook_app
-          destination-github-username: killamfkr
-          destination-repository-name: Stories
-          user-email: github-actions[bot]@users.noreply.github.com
-          user-name: github-actions[bot]
-          target-branch: main
+          STORIES_PUSH_TOKEN: ${{ secrets.STORIES_PUSH_TOKEN }}
+        run: |
+          if [[ -z "${STORIES_PUSH_TOKEN}" ]]; then
+            echo "::error::Add STORIES_PUSH_TOKEN in PlayTorrioV2 → Settings → Secrets → Actions"
+            exit 1
+          fi
+          cd stories-export
+          git init -b main
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -m "Publish Stories from PlayTorrioV2"
+          git remote add origin "https://x-access-token:${STORIES_PUSH_TOKEN}@github.com/killamfkr/Stories.git"
+          git push -u origin main
