@@ -2,45 +2,35 @@
 
 Standalone **Flutter** audiobook player — browse Audiobook Bay, stream via torrent, save bookmarks/favorites/progress, and sync across devices with email login.
 
-## Publish as its own GitHub repo
+**Repository:** https://github.com/killamfkr/Stories
 
-This folder is designed to be a **separate repository**. It does not depend on the PlayTorrio monorepo at runtime.
+## Publish / update this repo
 
-### Option A — New repo from this folder (recommended)
+From a machine logged into GitHub as `killamfkr` (or with push access to [killamfkr/Stories](https://github.com/killamfkr/Stories)):
 
 ```bash
-# 1. Copy the app folder anywhere you like
-cp -r /path/to/PlayTorrioV2/standalone_audiobook_app ~/stories-app
-cd ~/stories-app
+# From PlayTorrioV2 repo root — pushes standalone_audiobook_app/ as the Stories repo root
+bash standalone_audiobook_app/tool/publish_to_stories.sh
+```
 
-# 2. Initialize git (skip if you used git filter-repo / subtree — see Option B)
-git init
-git add .
+Or manually:
+
+```bash
+cd /path/to/PlayTorrioV2
+git fetch origin
+git subtree split --prefix=standalone_audiobook_app -b stories-publish-main
+git push https://github.com/killamfkr/Stories.git stories-publish-main:main
+```
+
+First-time setup (empty repo already created on GitHub):
+
+```bash
+cd standalone_audiobook_app
+bash tool/init_standalone_repo.sh
 git commit -m "Initial commit: Stories audiobook app"
-
-# 3. Create an empty repo on GitHub (no README), then:
-git remote add origin https://github.com/YOUR_USER/stories.git
-git branch -M main
+git remote add origin https://github.com/killamfkr/Stories.git
 git push -u origin main
 ```
-
-CI is included at `.github/workflows/build_apk.yml` — it builds a release APK on every push to `main`.
-
-### Option B — Split history from PlayTorrioV2 (keeps commits)
-
-From the PlayTorrioV2 repo root:
-
-```bash
-git subtree split --prefix=standalone_audiobook_app -b stories-standalone
-git push https://github.com/YOUR_USER/stories.git stories-standalone:main
-```
-
-### Option C — GitHub “Import repository”
-
-1. Push PlayTorrioV2 to GitHub (if not already).
-2. Use **Import** or clone, then keep only `standalone_audiobook_app/` as the root of a new repo (copy files + new `git init` as in Option A).
-
----
 
 ## Run locally
 
