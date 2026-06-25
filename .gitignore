@@ -61,3 +61,9 @@ android/key.properties
 
 # Inno Setup output
 installer/windows/Output/
+
+# Audiobook web app
+audiobook-web/**/node_modules/
+audiobook-web/client/dist/
+audiobook-web/gluetun/
+audiobook-web/data/
