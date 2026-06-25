@@ -33,6 +33,8 @@ class AudiobookPlayerService {
   final ValueNotifier<Duration> duration = ValueNotifier<Duration>(Duration.zero);
   final ValueNotifier<bool> isPlaying = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isBuffering = ValueNotifier<bool>(false);
+  /// True while a chapter is opening/buffering — UI should show loading, not pause.
+  final ValueNotifier<bool> isPreparingPlayback = ValueNotifier<bool>(false);
   final ValueNotifier<bool> autoplay = ValueNotifier<bool>(true);
   
   List<AudiobookChapter> _currentChapters = [];
@@ -81,14 +83,14 @@ class AudiobookPlayerService {
     _playerListenersAttached = true;
 
     _subscriptions.add(_player.stream.position.listen((p) {
-      if (p > Duration.zero || p != position.value) {
-        position.value = p;
-      }
+      if (isPreparingPlayback.value) return;
+      position.value = p;
       _updateSystemState();
       _scheduleDebouncedProgressSave();
     }));
 
     _subscriptions.add(_player.stream.duration.listen((d) {
+      if (isPreparingPlayback.value && d <= Duration.zero) return;
       if (d > Duration.zero) {
         duration.value = d;
         _syncMediaItem();
@@ -97,10 +99,11 @@ class AudiobookPlayerService {
     }));
 
     _subscriptions.add(_player.stream.playing.listen((pl) {
+      if (isPreparingPlayback.value) return;
       final wasPlaying = isPlaying.value;
       isPlaying.value = pl;
       if (pl) {
-        if (_wallClockStartedAt == null) {
+        if (_wallClockStartedAt == null && !isBuffering.value) {
           _markWallClock(base: _wallClockBase);
         }
         _startProgressTicker();
@@ -115,6 +118,9 @@ class AudiobookPlayerService {
 
     _subscriptions.add(_player.stream.buffering.listen((b) {
       isBuffering.value = b;
+      if (!b && isPlaying.value && _wallClockStartedAt == null) {
+        _markWallClock(base: _wallClockBase);
+      }
       _updateSystemState();
     }));
 
@@ -127,7 +133,32 @@ class AudiobookPlayerService {
       }
     }));
 
-    _startProgressTicker();
+    // Ticker starts when playback begins, not at app launch.
+  }
+
+  void _resetPlaybackUiState() {
+    position.value = Duration.zero;
+    duration.value = Duration.zero;
+    isPlaying.value = false;
+    isBuffering.value = true;
+    isPreparingPlayback.value = true;
+    _resetWallClock();
+    _stopProgressTicker();
+  }
+
+  void _finishPreparingPlayback({Duration? positionHint}) {
+    isPreparingPlayback.value = false;
+    if (positionHint != null && positionHint > Duration.zero) {
+      position.value = positionHint;
+      _wallClockBase = positionHint;
+    }
+    isPlaying.value = _player.state.playing;
+    isBuffering.value = _player.state.buffering;
+    if (isPlaying.value) {
+      _markWallClock(base: _wallClockBase);
+      _startProgressTicker();
+    }
+    _updateSystemState();
   }
 
   void _startProgressTicker() {
@@ -155,16 +186,23 @@ class AudiobookPlayerService {
 
   /// Torrent loopback streams often skip stream events; poll [Player.state] directly.
   void _pollPlayerClock() {
+    if (isPreparingPlayback.value) return;
     final st = _player.state;
     final p = st.position;
     final d = st.duration;
     var changed = false;
 
-    if (p > Duration.zero && p != position.value) {
-      position.value = p;
-      changed = true;
-    } else if (isPlaying.value && _wallClockStartedAt != null) {
-      final wall = _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
+    if (p > Duration.zero) {
+      if (p != position.value) {
+        position.value = p;
+        changed = true;
+      }
+    } else if (isPlaying.value &&
+        !isBuffering.value &&
+        _wallClockStartedAt != null) {
+      var wall =
+          _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
+      if (d > Duration.zero && wall > d) wall = d;
       if (wall > position.value) {
         position.value = wall;
         changed = true;
@@ -256,12 +294,14 @@ class AudiobookPlayerService {
 
     _isResuming =
         resumePosition != null && resumePosition > Duration.zero;
+    _resetPlaybackUiState();
+    _wallClockBase =
+        _isResuming && resumePosition != null ? resumePosition : Duration.zero;
+
     currentBook.value = book;
     _currentChapters = chapters;
     currentChapterIndex.value = idx;
-    _resetWallClock(
-      base: _isResuming && resumePosition != null ? resumePosition : Duration.zero,
-    );
+    _resetWallClock(base: _wallClockBase);
 
     if (!_isResuming) {
       _ignoreProgressPersistenceUntil =
@@ -314,7 +354,6 @@ class AudiobookPlayerService {
     // Open without auto-playing first to allow seek to settle
     await _player.open(media, play: false);
 
-    var resumeAlreadyPlaying = false;
     if (_isResuming && resumePosition != null && resumePosition > Duration.zero) {
       debugPrint(
         'AudiobookPlayerService: Resuming chapter $idx at $resumePosition',
@@ -333,12 +372,11 @@ class AudiobookPlayerService {
         await Future.delayed(const Duration(milliseconds: 500));
         await _player.play();
         resumeAlreadyPlaying = true;
-        _markWallClock(base: resumePosition);
         await Future.delayed(const Duration(milliseconds: 2000));
         await _refineTorrentResumeSeek(resumePosition);
-        // Let the reported clock settle before we persist again.
         _ignoreProgressPersistenceUntil =
             DateTime.now().add(const Duration(seconds: 3));
+        _finishPreparingPlayback(positionHint: _player.state.position);
       } else {
         // Wait for duration (direct URLs) before seeking.
         final ready = Completer<void>();
@@ -357,13 +395,13 @@ class AudiobookPlayerService {
         await Future.delayed(const Duration(milliseconds: 800));
         _ignoreProgressPersistenceUntil =
             DateTime.now().add(const Duration(seconds: 2));
+        _finishPreparingPlayback(positionHint: resumePosition);
       }
       _isResuming = false;
-    }
-
-    if (!resumeAlreadyPlaying) {
+    } else {
       await _player.play();
-      _markWallClock(base: _wallClockBase);
+      await Future.delayed(const Duration(milliseconds: 300));
+      _finishPreparingPlayback();
     }
   }
 
@@ -450,29 +488,38 @@ class AudiobookPlayerService {
     currentChapterIndex.value = index;
     final book = currentBook.value;
     if (book == null) return;
-    position.value = Duration.zero;
-    duration.value = Duration.zero;
-    _resetWallClock();
+    _resetPlaybackUiState();
     _syncMediaItem();
     _ignoreProgressPersistenceUntil =
         DateTime.now().add(const Duration(milliseconds: 1200));
     try {
       final media = await _mediaForChapter(book, _currentChapters[index]);
-      await _player.open(media);
-      _player.play();
+      await _player.open(media, play: false);
+      await _player.play();
+      await Future.delayed(const Duration(milliseconds: 300));
+      _finishPreparingPlayback();
     } catch (e, st) {
+      isPreparingPlayback.value = false;
       debugPrint('AudiobookPlayerService.changeChapter: $e\n$st');
     }
   }
 
   int _playbackPositionMs() {
+    if (isPreparingPlayback.value) {
+      return _wallClockBase.inMilliseconds;
+    }
     final fromPlayer = _player.state.position;
     if (fromPlayer > Duration.zero) {
       return fromPlayer.inMilliseconds;
     }
-    if (isPlaying.value && _wallClockStartedAt != null) {
-      return (_wallClockBase + DateTime.now().difference(_wallClockStartedAt!))
-          .inMilliseconds;
+    if (isPlaying.value &&
+        !isBuffering.value &&
+        _wallClockStartedAt != null) {
+      var wall =
+          _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
+      final d = duration.value;
+      if (d > Duration.zero && wall > d) wall = d;
+      return wall.inMilliseconds;
     }
     final ms = position.value.inMilliseconds;
     if (ms >= 0) return ms;

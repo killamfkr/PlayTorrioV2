@@ -587,37 +587,55 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
               return ValueListenableBuilder<Duration>(
                 valueListenable: _service.duration,
                 builder: (context, dur, _) {
-                  final dValue = dur.inMilliseconds.toDouble();
-                  final pValue = pos.inMilliseconds.toDouble();
-                  final safePValue = pValue.clamp(0.0, dValue > 0 ? dValue : 1.0);
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: _service.isPreparingPlayback,
+                    builder: (context, preparing, _) {
+                      final displayPos =
+                          preparing ? Duration.zero : pos;
+                      final dValue = dur.inMilliseconds.toDouble();
+                      final pValue = displayPos.inMilliseconds.toDouble();
+                      final maxValue = dValue > 0 ? dValue : 1.0;
+                      final safePValue = pValue.clamp(0.0, maxValue);
 
-                  return Column(
-                    children: [
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          activeTrackColor: Colors.white,
-                          inactiveTrackColor: Colors.white10,
-                          thumbColor: Colors.white,
-                          trackHeight: 4,
-                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                        ),
-                        child: Slider(
-                          value: safePValue,
-                          max: dValue > 0 ? dValue : 1.0,
-                          onChanged: (v) => _service.seek(Duration(milliseconds: v.toInt())),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(_formatDuration(pos), style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                            Text(_formatDuration(dur), style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ],
+                      return Column(
+                        children: [
+                          SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              activeTrackColor: Colors.white,
+                              inactiveTrackColor: Colors.white10,
+                              thumbColor: Colors.white,
+                              trackHeight: 4,
+                              overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 12),
+                            ),
+                            child: Slider(
+                              value: safePValue,
+                              max: maxValue,
+                              onChanged: preparing
+                                  ? null
+                                  : (v) => _service.seek(
+                                      Duration(milliseconds: v.toInt())),
+                            ),
+                          ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(_formatDuration(displayPos),
+                                    style: const TextStyle(
+                                        color: Colors.white38, fontSize: 12)),
+                                Text(_formatDuration(dur),
+                                    style: const TextStyle(
+                                        color: Colors.white38, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   );
                 },
               );
@@ -662,21 +680,42 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
             ),
             const SizedBox(width: 32),
             ValueListenableBuilder<bool>(
-              valueListenable: _service.isBuffering,
-              builder: (context, buffering, _) {
+              valueListenable: _service.isPreparingPlayback,
+              builder: (context, preparing, _) {
                 return ValueListenableBuilder<bool>(
-                  valueListenable: _service.isPlaying,
-                  builder: (context, playing, _) {
-                    if (buffering && !playing) {
-                      return const SizedBox(width: 80, height: 80, child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: Colors.white)));
-                    }
-                    return TvGestureTap(
-                      onTap: () => _service.playOrPause(),
-                      child: Container(
-                        width: 84, height: 84,
-                        decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                        child: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 54),
-                      ),
+                  valueListenable: _service.isBuffering,
+                  builder: (context, buffering, _) {
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: _service.isPlaying,
+                      builder: (context, playing, _) {
+                        if (preparing || (buffering && !playing)) {
+                          return const SizedBox(
+                            width: 80,
+                            height: 80,
+                            child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator(
+                                  color: Colors.white),
+                            ),
+                          );
+                        }
+                        return TvGestureTap(
+                          onTap: () => _service.playOrPause(),
+                          child: Container(
+                            width: 84,
+                            height: 84,
+                            decoration: const BoxDecoration(
+                                color: Colors.white, shape: BoxShape.circle),
+                            child: Icon(
+                              playing
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              color: Colors.black,
+                              size: 54,
+                            ),
+                          ),
+                        );
+                      },
                     );
                   },
                 );
