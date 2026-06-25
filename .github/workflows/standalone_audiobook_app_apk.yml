@@ -43,6 +43,8 @@ jobs:
             --project-name audiobook_app \
             --org com.playtorrio.audiobook \
             --platforms=android,ios
+          chmod +x tool/patch_android.sh
+          ./tool/patch_android.sh
 
       - run: flutter pub get
 

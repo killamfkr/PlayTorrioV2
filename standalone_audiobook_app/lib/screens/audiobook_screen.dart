@@ -17,7 +17,10 @@ import 'audiobook_magnet_screen.dart';
 enum _AudiobookShelf { browse, liked, bookmarks }
 
 class AudiobookScreen extends StatefulWidget {
-  const AudiobookScreen({super.key});
+  const AudiobookScreen({super.key, this.initWarning});
+
+  /// Shown once when background audio / torrent init partially failed.
+  final String? initWarning;
 
   @override
   State<AudiobookScreen> createState() => _AudiobookScreenState();
@@ -52,6 +55,15 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
         .addListener(_audiobookPrefsListener!);
     _loadBooks();
     _reloadCloudBackedShelves();
+    final warning = widget.initWarning;
+    if (warning != null && warning.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(warning)),
+        );
+      });
+    }
   }
 
   @override
@@ -307,9 +319,11 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: SafeArea(
+    return Container(
+      decoration: AppTheme.backgroundDecoration,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
         child: Column(
           children: [
             const SizedBox(height: 24),
@@ -336,6 +350,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
             if (!_isSearching && _shelf == _AudiobookShelf.browse) _buildPagination(),
           ],
         ),
+      ),
       ),
     );
   }
