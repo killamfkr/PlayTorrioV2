@@ -41,6 +41,9 @@ class AudiobookPlayerService {
   Timer? _progressTicker;
   bool _isResuming = false;
   Timer? _progressSaveDebounce;
+  /// Wall-clock fallback when torrent loopback streams report position 0.
+  Duration _wallClockBase = Duration.zero;
+  DateTime? _wallClockStartedAt;
   /// Ignore position-driven persistence briefly after resume/chapter opens — mpv often
   /// emits 0 before the clock catches up and would overwrite real progress.
   DateTime? _ignoreProgressPersistenceUntil;
@@ -97,6 +100,9 @@ class AudiobookPlayerService {
       final wasPlaying = isPlaying.value;
       isPlaying.value = pl;
       if (pl) {
+        if (_wallClockStartedAt == null) {
+          _markWallClock(base: _wallClockBase);
+        }
         _startProgressTicker();
       } else {
         _stopProgressTicker();
@@ -137,6 +143,16 @@ class AudiobookPlayerService {
     }
   }
 
+  void _markWallClock({Duration base = Duration.zero}) {
+    _wallClockBase = base;
+    _wallClockStartedAt = DateTime.now();
+  }
+
+  void _resetWallClock({Duration base = Duration.zero}) {
+    _wallClockBase = base;
+    _wallClockStartedAt = null;
+  }
+
   /// Torrent loopback streams often skip stream events; poll [Player.state] directly.
   void _pollPlayerClock() {
     final st = _player.state;
@@ -147,6 +163,12 @@ class AudiobookPlayerService {
     if (p > Duration.zero && p != position.value) {
       position.value = p;
       changed = true;
+    } else if (isPlaying.value && _wallClockStartedAt != null) {
+      final wall = _wallClockBase + DateTime.now().difference(_wallClockStartedAt!);
+      if (wall > position.value) {
+        position.value = wall;
+        changed = true;
+      }
     }
     if (d > Duration.zero && d != duration.value) {
       duration.value = d;
@@ -237,6 +259,9 @@ class AudiobookPlayerService {
     currentBook.value = book;
     _currentChapters = chapters;
     currentChapterIndex.value = idx;
+    _resetWallClock(
+      base: _isResuming && resumePosition != null ? resumePosition : Duration.zero,
+    );
 
     if (!_isResuming) {
       _ignoreProgressPersistenceUntil =
@@ -308,6 +333,7 @@ class AudiobookPlayerService {
         await Future.delayed(const Duration(milliseconds: 500));
         await _player.play();
         resumeAlreadyPlaying = true;
+        _markWallClock(base: resumePosition);
         await Future.delayed(const Duration(milliseconds: 2000));
         await _refineTorrentResumeSeek(resumePosition);
         // Let the reported clock settle before we persist again.
@@ -337,6 +363,7 @@ class AudiobookPlayerService {
 
     if (!resumeAlreadyPlaying) {
       await _player.play();
+      _markWallClock(base: _wallClockBase);
     }
   }
 
@@ -425,6 +452,7 @@ class AudiobookPlayerService {
     if (book == null) return;
     position.value = Duration.zero;
     duration.value = Duration.zero;
+    _resetWallClock();
     _syncMediaItem();
     _ignoreProgressPersistenceUntil =
         DateTime.now().add(const Duration(milliseconds: 1200));
@@ -438,9 +466,17 @@ class AudiobookPlayerService {
   }
 
   int _playbackPositionMs() {
-    final ms = _player.state.position.inMilliseconds;
+    final fromPlayer = _player.state.position;
+    if (fromPlayer > Duration.zero) {
+      return fromPlayer.inMilliseconds;
+    }
+    if (isPlaying.value && _wallClockStartedAt != null) {
+      return (_wallClockBase + DateTime.now().difference(_wallClockStartedAt!))
+          .inMilliseconds;
+    }
+    final ms = position.value.inMilliseconds;
     if (ms >= 0) return ms;
-    return position.value.inMilliseconds;
+    return 0;
   }
 
   /// Chapter index clamped to the loaded chapter list + live player clock (for bookmarks).
@@ -503,7 +539,7 @@ class AudiobookPlayerService {
     if (prevSame != null) {
       final pCh = (prevSame['chapterIndex'] as num?)?.toInt() ?? 0;
       final pMs = (prevSame['positionMs'] as num?)?.toInt() ?? 0;
-      if (outCh == pCh && outMs < 500 && pMs > 60_000) {
+      if (outCh == pCh && outMs < 500 && pMs > 5_000) {
         outMs = pMs;
       }
     }

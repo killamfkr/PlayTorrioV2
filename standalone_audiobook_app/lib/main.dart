@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -15,9 +16,45 @@ import 'platform_flags.dart';
 import 'screens/audiobook_screen.dart';
 import 'utils/app_theme.dart';
 
+/// Set when [AudioService.init] fails in [main]; shown once on the home screen.
+String? audiobookAudioInitWarning;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  AudiobookPlayerService().ensurePlayerListeners();
+
+  await _configureAudioSession();
+  if (platformIsAndroid) {
+    await Permission.notification.request();
+  }
+
+  try {
+    final audioHandler = await AudioService.init(
+      builder: () => PlayTorrioAudioHandler(MusicPlayerService().player),
+      config: AudioServiceConfig(
+        androidNotificationChannelId:
+            'com.playtorrio.audiobook.channel.audio',
+        androidNotificationChannelName: 'Audiobook playback',
+        androidNotificationChannelDescription:
+            'Playback controls and now playing for audiobooks',
+        androidNotificationOngoing: true,
+        androidStopForegroundOnPause: false,
+        androidResumeOnClick: true,
+        preloadArtwork: true,
+        fastForwardInterval: const Duration(seconds: 30),
+        rewindInterval: const Duration(seconds: 15),
+      ),
+    );
+    MusicPlayerService().setHandler(audioHandler);
+    AudiobookPlayerService().attachHandler(audioHandler);
+    debugPrint('[AudiobookApp] AudioService ready');
+  } catch (e, st) {
+    debugPrint('[AudiobookApp] AudioService failed: $e\n$st');
+    audiobookAudioInitWarning =
+        'Lock-screen notification unavailable ($e). Rebuild after running tool/patch_android.sh.';
+  }
+
   runApp(const AudiobookApp());
 }
 
@@ -43,7 +80,7 @@ class AudiobookApp extends StatelessWidget {
   }
 }
 
-/// Shows UI immediately, then initializes background services (torrent, proxy, audio).
+/// Starts torrent/proxy engines, then opens the library.
 class AudiobookBootstrapScreen extends StatefulWidget {
   const AudiobookBootstrapScreen({super.key});
 
@@ -55,7 +92,6 @@ class AudiobookBootstrapScreen extends StatefulWidget {
 class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
   bool _ready = false;
   String? _status;
-  String? _initWarning;
 
   @override
   void initState() {
@@ -64,42 +100,7 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
   }
 
   Future<void> _bootstrap() async {
-    AudiobookPlayerService().ensurePlayerListeners();
-
-    setState(() => _status = 'Starting audio…');
-
-    await _configureAudioSession();
-    if (platformIsAndroid) {
-      await Permission.notification.request();
-    }
-
-    try {
-      final audioHandler = await AudioService.init(
-        builder: () => PlayTorrioAudioHandler(MusicPlayerService().player),
-        config: AudioServiceConfig(
-          androidNotificationChannelId:
-              'com.playtorrio.audiobook.channel.audio',
-          androidNotificationChannelName: 'Audiobook playback',
-          androidNotificationChannelDescription:
-              'Playback controls and now playing for audiobooks',
-          androidNotificationOngoing: true,
-          androidStopForegroundOnPause: false,
-          androidResumeOnClick: true,
-          preloadArtwork: true,
-          fastForwardInterval: const Duration(seconds: 30),
-          rewindInterval: const Duration(seconds: 15),
-        ),
-      ).timeout(const Duration(seconds: 15));
-      MusicPlayerService().setHandler(audioHandler);
-      AudiobookPlayerService().attachHandler(audioHandler);
-    } catch (e, st) {
-      debugPrint('[AudiobookBootstrap] AudioService failed: $e\n$st');
-      _initWarning =
-          'Lock-screen notification unavailable; in-app playback still works.';
-    }
-
-    if (!mounted) return;
-    setState(() => _status = 'Starting local services…');
+    setState(() => _status = 'Starting engines…');
 
     await Future.wait([
       LocalServerService().start().catchError((Object e) {
@@ -127,7 +128,7 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
   @override
   Widget build(BuildContext context) {
     if (_ready) {
-      return AudiobookScreen(initWarning: _initWarning);
+      return AudiobookScreen(initWarning: audiobookAudioInitWarning);
     }
 
     return Scaffold(
@@ -178,6 +179,6 @@ Future<void> _configureAudioSession() async {
     ));
     await session.setActive(true);
   } catch (e) {
-    debugPrint('[AudiobookBootstrap] AudioSession: $e');
+    debugPrint('[AudiobookApp] AudioSession: $e');
   }
 }

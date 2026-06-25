@@ -263,6 +263,7 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
 
   @override
   void dispose() {
+    unawaited(_service.saveManualProgress());
     if (widget.audiobook.magnetLink != null &&
         widget.audiobook.magnetLink!.isNotEmpty &&
         (widget.audiobook.source == 'magnet' ||

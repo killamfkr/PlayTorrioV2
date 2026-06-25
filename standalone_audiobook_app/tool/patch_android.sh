@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Apply Android manifest after `flutter create .`
+# Apply Android manifest + MainActivity after `flutter create .`
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$ROOT/android/app/src/main/AndroidManifest.xml"
+DEST_MANIFEST="$ROOT/android/app/src/main/AndroidManifest.xml"
+MAIN_ACTIVITY_PKG="com/playtorrio/audiobook/audiobook_app"
+DEST_ACTIVITY="$ROOT/android/app/src/main/kotlin/$MAIN_ACTIVITY_PKG/MainActivity.kt"
 
-if [[ ! -f "$DEST" ]]; then
-  echo "error: run flutter create first (missing $DEST)" >&2
+if [[ ! -f "$DEST_MANIFEST" ]]; then
+  echo "error: run flutter create first (missing $DEST_MANIFEST)" >&2
   exit 1
 fi
 
-SRC="$ROOT/tool/android/AndroidManifest.xml"
-if [[ -f "$SRC" ]]; then
-  cp "$SRC" "$DEST"
+SRC_MANIFEST="$ROOT/tool/android/AndroidManifest.xml"
+if [[ -f "$SRC_MANIFEST" ]]; then
+  cp "$SRC_MANIFEST" "$DEST_MANIFEST"
 else
-  # Inline fallback so CI/local builds work even if the template file is absent.
-  cat > "$DEST" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  cat > "$DEST_MANIFEST" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -54,7 +56,8 @@ else
         <service
             android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
-            android:exported="true">
+            android:exported="true"
+            tools:ignore="Instantiatable">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
@@ -62,7 +65,8 @@ else
 
         <receiver
             android:name="com.ryanheise.audioservice.MediaButtonReceiver"
-            android:exported="true">
+            android:exported="true"
+            tools:ignore="Instantiatable">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
@@ -74,6 +78,13 @@ else
     </application>
 </manifest>
 EOF
+fi
+
+SRC_ACTIVITY="$ROOT/tool/android/MainActivity.kt"
+if [[ -f "$SRC_ACTIVITY" ]]; then
+  mkdir -p "$(dirname "$DEST_ACTIVITY")"
+  cp "$SRC_ACTIVITY" "$DEST_ACTIVITY"
+  echo "Patched MainActivity.kt (extends AudioServiceActivity)"
 fi
 
 echo "Patched AndroidManifest.xml for audiobook app"

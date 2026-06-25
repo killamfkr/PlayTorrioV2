@@ -11,7 +11,9 @@ cd /path/to/audiobook-app
 
 # Generate android/, ios/, etc. (project ships lib/ + pubspec only)
 flutter create . --project-name audiobook_app --org com.playtorrio.audiobook
-chmod +x tool/patch_android.sh && ./tool/patch_android.sh
+bash tool/patch_android.sh
+
+# Required: patch sets MainActivity to extend AudioServiceActivity (notifications).
 
 flutter pub get
 flutter run
