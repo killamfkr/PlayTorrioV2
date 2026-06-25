@@ -13,6 +13,7 @@ import 'audiobook_downloads_screen.dart';
 import 'generate_audiobook_screen.dart';
 import '../widgets/tv_interactive.dart';
 import 'audiobook_magnet_screen.dart';
+import 'settings_screen.dart';
 
 enum _AudiobookShelf { browse, liked, bookmarks }
 
@@ -365,6 +366,17 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              IconButton(
+                icon: const Icon(Icons.settings_outlined,
+                    color: AppTheme.textSecondary, size: 22),
+                tooltip: 'Settings & account',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                  ).then((_) => _reloadCloudBackedShelves());
+                },
+              ),
               IconButton(
                 icon: const Icon(Icons.auto_awesome_outlined,
                     color: AppTheme.textSecondary, size: 22),

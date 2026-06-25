@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'audiobook_prefs_keys.dart';
+
 String _audiobookEntryId(String raw) {
   try {
     final m = json.decode(raw) as Map<String, dynamic>;
@@ -55,6 +57,8 @@ List<String> mergeAudiobookHistoryLists(List<String> local, List<String> remote)
 }
 
 List<String> mergeAudiobookBookmarkLists(List<String> local, List<String> remote) {
+  if (remote.isEmpty) return List<String>.from(local);
+
   final localById = <String, String>{};
   for (final x in local) {
     final id = _audiobookEntryId(x);
@@ -90,7 +94,7 @@ List<String> mergeAudiobookLikedLists(List<String> local, List<String> remote) {
   return map.values.toList();
 }
 
-/// Minimal settings for the standalone audiobook app.
+/// Minimal settings for the standalone Stories app.
 class SettingsService {
   SettingsService();
 
@@ -103,14 +107,99 @@ class SettingsService {
 
   static const _torrentCacheTypeKey = 'torrent_cache_type';
   static const _torrentRamCacheMbKey = 'torrent_ram_cache_mb';
+  static const _ptCloudSettingsSyncKey = 'pt_cloud_sync_settings';
+
+  /// Standalone app uses a single profile row in Supabase.
+  Future<int> getPlaytorrioProfileId() async => 1;
+
+  Future<bool> isPlaytorrioCloudSettingsSyncEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_ptCloudSettingsSyncKey) ?? true;
+  }
+
+  Future<void> setPlaytorrioCloudSettingsSyncEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_ptCloudSettingsSyncKey, v);
+  }
 
   Future<String> getTorrentCacheType() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_torrentCacheTypeKey) ?? 'ram';
   }
 
+  Future<void> setTorrentCacheType(String type) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_torrentCacheTypeKey, type);
+  }
+
   Future<int> getTorrentRamCacheMb() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_torrentRamCacheMbKey) ?? 200;
+  }
+
+  Future<void> setTorrentRamCacheMb(int mb) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_torrentRamCacheMbKey, mb);
+  }
+
+  /// Audiobook prefs mirrored to Supabase when signed in.
+  Future<Map<String, dynamic>> exportForCloudSync() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      AudiobookPrefsKeys.history:
+          prefs.getStringList(AudiobookPrefsKeys.history) ?? [],
+      AudiobookPrefsKeys.liked:
+          prefs.getStringList(AudiobookPrefsKeys.liked) ?? [],
+      AudiobookPrefsKeys.bookmarks:
+          prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [],
+      _torrentCacheTypeKey: await getTorrentCacheType(),
+      _torrentRamCacheMbKey: await getTorrentRamCacheMb(),
+    };
+  }
+
+  Future<void> applyCloudPreferenceMap(Map<String, dynamic> map) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final e in map.entries) {
+      final k = e.key;
+      final v = e.value;
+      if (k == AudiobookPrefsKeys.history && v is List) {
+        final local = prefs.getStringList(AudiobookPrefsKeys.history) ?? [];
+        final remote = v.map((x) => x.toString()).toList();
+        await prefs.setStringList(
+          AudiobookPrefsKeys.history,
+          mergeAudiobookHistoryLists(local, remote),
+        );
+        notifyAudiobookPrefsChanged();
+        continue;
+      }
+      if (k == AudiobookPrefsKeys.liked && v is List) {
+        final local = prefs.getStringList(AudiobookPrefsKeys.liked) ?? [];
+        final remote = v.map((x) => x.toString()).toList();
+        await prefs.setStringList(
+          AudiobookPrefsKeys.liked,
+          mergeAudiobookLikedLists(local, remote),
+        );
+        notifyAudiobookPrefsChanged();
+        continue;
+      }
+      if (k == AudiobookPrefsKeys.bookmarks && v is List) {
+        final local = prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+        final remote = v.map((x) => x.toString()).toList();
+        await prefs.setStringList(
+          AudiobookPrefsKeys.bookmarks,
+          mergeAudiobookBookmarkLists(local, remote),
+        );
+        notifyAudiobookPrefsChanged();
+        continue;
+      }
+      if (k == _torrentCacheTypeKey && v is String) {
+        await setTorrentCacheType(v);
+        continue;
+      }
+      if (k == _torrentRamCacheMbKey) {
+        final n = v is int ? v : int.tryParse(v.toString());
+        if (n != null) await setTorrentRamCacheMb(n);
+      }
+    }
   }
 }

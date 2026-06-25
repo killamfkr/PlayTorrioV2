@@ -14,6 +14,7 @@ import 'api/music_player_service.dart';
 import 'api/torrent_stream_service.dart';
 import 'platform_flags.dart';
 import 'screens/audiobook_screen.dart';
+import 'services/playtorrio_cloud_sync_service.dart';
 import 'utils/app_theme.dart';
 
 /// Set when [AudioService.init] fails in [main]; shown once on the home screen.
@@ -109,6 +110,9 @@ class _StoriesBootstrapScreenState extends State<StoriesBootstrapScreen> {
             debugPrint('[Stories] Torrent engine failed: $e\n$st');
             return false;
           }),
+      PlaytorrioCloudSyncService.instance.pullOnStartup().catchError((Object e) {
+        debugPrint('[Stories] Cloud pull failed: $e');
+      }),
     ]);
 
     if (!mounted) return;
