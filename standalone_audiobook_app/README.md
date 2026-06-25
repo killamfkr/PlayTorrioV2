@@ -1,52 +1,107 @@
-# Stories (standalone)
+# Stories
 
-Self-contained **Flutter** audiobook app named **Stories**, inspired by the clean Prologue-style listening experience. Browse and search (including **Audiobook Bay** via HTML scrape + magnet/torrent streaming), continue listening, liked titles, bookmarks, offline downloads, magnet import, and EPUB-to-audiobook generation.
+Standalone **Flutter** audiobook player — browse Audiobook Bay, stream via torrent, save bookmarks/favorites/progress, and sync across devices with email login.
 
-## Create the repo and run locally
+## Publish as its own GitHub repo
+
+This folder is designed to be a **separate repository**. It does not depend on the PlayTorrio monorepo at runtime.
+
+### Option A — New repo from this folder (recommended)
 
 ```bash
-# From a machine with Flutter + Android SDK installed
-cp -r /path/to/PlayTorrioV2/standalone_audiobook_app /path/to/audiobook-app
-cd /path/to/audiobook-app
+# 1. Copy the app folder anywhere you like
+cp -r /path/to/PlayTorrioV2/standalone_audiobook_app ~/stories-app
+cd ~/stories-app
 
-# Generate android/, ios/, etc. (project ships lib/ + pubspec only)
+# 2. Initialize git (skip if you used git filter-repo / subtree — see Option B)
+git init
+git add .
+git commit -m "Initial commit: Stories audiobook app"
+
+# 3. Create an empty repo on GitHub (no README), then:
+git remote add origin https://github.com/YOUR_USER/stories.git
+git branch -M main
+git push -u origin main
+```
+
+CI is included at `.github/workflows/build_apk.yml` — it builds a release APK on every push to `main`.
+
+### Option B — Split history from PlayTorrioV2 (keeps commits)
+
+From the PlayTorrioV2 repo root:
+
+```bash
+git subtree split --prefix=standalone_audiobook_app -b stories-standalone
+git push https://github.com/YOUR_USER/stories.git stories-standalone:main
+```
+
+### Option C — GitHub “Import repository”
+
+1. Push PlayTorrioV2 to GitHub (if not already).
+2. Use **Import** or clone, then keep only `standalone_audiobook_app/` as the root of a new repo (copy files + new `git init` as in Option A).
+
+---
+
+## Run locally
+
+Requires **Flutter 3.41+** and Android SDK for mobile builds.
+
+```bash
+cd stories-app   # or standalone_audiobook_app inside the monorepo
+
+# Generate android/ + ios/ (not checked in — keeps the repo small)
 flutter create . --project-name audiobook_app --org com.playtorrio.audiobook
 bash tool/patch_android.sh
 
-# Required: patch sets MainActivity to extend AudioServiceActivity (notifications).
-
 flutter pub get
+dart run flutter_launcher_icons   # optional: regenerate launcher icons
 flutter run
 ```
 
-Then `git init`, commit, and push to a new GitHub repo.
+`tool/patch_android.sh` sets `MainActivity` to extend `AudioServiceActivity` so lock-screen controls work.
 
-## Audiobook Bay
+## Build release APK
 
-Catalog and search use the same client-side scraping as PlayTorrio against `https://audiobookbay.lu`. Playback resolves detail pages to magnet links and streams chapters through **libtorrent** (native/desktop/Android). Torrent playback is **not available on web**.
+```bash
+flutter build apk --release
+# Output: build/app/outputs/flutter-apk/app-release.apk
+```
 
-Browse falls back to Audiobook Bay when Tokybook returns no results; search merges Audiobook Bay with other sources and deduplicates by title.
+Or use **Actions → Build APK → Run workflow** on GitHub.
 
-## What is included
+## Features
 
-- `lib/screens/` — audiobook hub, player, downloads, magnet picker, generate-from-EPUB
-- `lib/api/audiobook_service.dart` — all catalog sources (ABB scrape, Tokybook API, etc.)
-- `lib/api/torrent_stream_service*.dart` — libtorrent streaming for ABB and magnets
-- `lib/api/local_server_service*.dart` — minimal Tokybook audio proxy (localhost)
-- `lib/api/settings_service.dart` — audiobook prefs + torrent cache settings
-- `lib/services/playtorrio_cloud_sync_service.dart` — no-op stub (local prefs only)
+- Audiobook Bay catalog + search (HTML scrape)
+- Magnet / torrent chapter streaming (Android, desktop — not web)
+- Continue listening, liked titles, bookmarks
+- Cloud sync (Supabase email/password — same backend as PlayTorrio, optional)
+- Literary character profile avatars
+- Offline downloads, magnet import, EPUB → audiobook generation
 
-## Syncing with main PlayTorrio
+## Cloud sync (optional)
 
-The canonical source of truth is still `PlayTorrioV2/lib/screens/audiobook_*.dart`, `lib/api/audiobook_*.dart`, and related widgets. When you change audiobooks upstream, re-copy those files into this project and keep the minimal stubs in `lib/api/settings_service.dart`, `lib/main.dart`, etc.
+Sign in under **Settings** to sync bookmarks, favorites, and progress. Uses PlayTorrio’s Supabase project by default; override at build time:
 
-## GitHub Actions
+```bash
+flutter build apk --release \
+  --dart-define=PLAYTORRIO_SUPABASE_URL=https://YOUR_PROJECT.supabase.co \
+  --dart-define=PLAYTORRIO_SUPABASE_ANON_KEY=your_anon_jwt
+```
 
-Workflow **Build Audiobook APK** (`.github/workflows/standalone_audiobook_app_apk.yml`) runs `flutter create` in `standalone_audiobook_app/` and builds a **release APK**.
+## Project layout
 
-- **Actions** → **Build Audiobook APK** → **Run workflow** (after merged to default branch)
-- Or push a change under `standalone_audiobook_app/` to run automatically
+| Path | Purpose |
+|------|---------|
+| `lib/screens/` | Library, player, settings, downloads |
+| `lib/api/` | Catalog, playback, torrent engine |
+| `lib/services/` | Cloud sync |
+| `tool/patch_android.sh` | AudioService + notification fix for Android |
+| `.github/workflows/build_apk.yml` | CI APK build |
+
+## Forking from PlayTorrio
+
+If you maintain both repos: audiobook changes historically lived in `PlayTorrioV2/standalone_audiobook_app/`. After splitting, treat **this repo as the source of truth** for Stories, or periodically merge from the monorepo subtree.
 
 ## License
 
-Match the parent PlayTorrio / your fork’s license when you publish the new repository.
+GPL-2.0 — see [LICENSE](LICENSE) (same as PlayTorrioV2).
