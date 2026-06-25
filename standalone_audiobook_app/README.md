@@ -13,7 +13,25 @@ From a machine logged into GitHub as `killamfkr` (or with push access to [killam
 bash standalone_audiobook_app/tool/publish_to_stories.sh
 ```
 
-Or manually:
+If you see `git: 'subtree' is not a git command`, either install it (`sudo apt install git-subtree` on Debian/Ubuntu) or use the script above — it falls back to a plain copy + push without subtree.
+
+**Manual publish without subtree:**
+
+```bash
+cd /path/to/PlayTorrioV2
+TMP=$(mktemp -d)
+rsync -a --exclude='.dart_tool' --exclude='build' --exclude='android' --exclude='ios' \
+  standalone_audiobook_app/ "$TMP/"
+cd "$TMP"
+git init -b main
+git add -A
+git commit -m "Publish Stories from PlayTorrioV2"
+git remote add origin https://github.com/killamfkr/Stories.git
+git push -u origin main
+rm -rf "$TMP"
+```
+
+Or with subtree (if installed):
 
 ```bash
 cd /path/to/PlayTorrioV2
