@@ -1,6 +1,78 @@
 #!/usr/bin/env bash
-# Apply Android manifest + network config after `flutter create .`
+# Apply Android manifest after `flutter create .`
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cp "$ROOT/tool/android/AndroidManifest.xml" "$ROOT/android/app/src/main/AndroidManifest.xml"
+DEST="$ROOT/android/app/src/main/AndroidManifest.xml"
+
+if [[ ! -f "$DEST" ]]; then
+  echo "error: run flutter create first (missing $DEST)" >&2
+  exit 1
+fi
+
+SRC="$ROOT/tool/android/AndroidManifest.xml"
+if [[ -f "$SRC" ]]; then
+  cp "$SRC" "$DEST"
+else
+  # Inline fallback so CI/local builds work even if the template file is absent.
+  cat > "$DEST" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <application
+        android:label="Audiobooks"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true"
+        android:extractNativeLibs="true"
+        android:largeHeap="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name="com.ryanheise.audioservice.AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+</manifest>
+EOF
+fi
+
 echo "Patched AndroidManifest.xml for audiobook app"
