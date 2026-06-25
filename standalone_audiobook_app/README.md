@@ -1,76 +1,80 @@
 # Stories
 
-Standalone **Flutter** audiobook player — browse Audiobook Bay, stream via torrent, save bookmarks/favorites/progress, and sync across devices with email login.
+**Stories** is a standalone Flutter audiobook player with a calm, book-first interface. Browse free audiobook catalogs, stream chapters over torrent when needed, pick up where you left off, and optionally sync your library across devices.
 
-**Repository:** https://github.com/killamfkr/Stories
+![Stories app icon](assets/icon/icon.png)
 
-## Publish / update this repo
+## What it does
 
-From a machine logged into GitHub as `killamfkr` (or with push access to [killamfkr/Stories](https://github.com/killamfkr/Stories)):
+Stories helps you find, listen to, and organize audiobooks without a subscription service. The home screen shows your catalog, **Continue listening**, **Liked** titles, and **Bookmarks**. Open any book to get chapter controls, playback speed, downloads, and a full-screen player with lock-screen notification support on Android.
+
+### Browse & search
+
+- **Audiobook Bay** — catalog and search via client-side scrape (`audiobookbay.lu`)
+- Additional sources (Tokybook, Audiozaic, and others) where configured
+- Search merges results and deduplicates by title
+
+### Listen
+
+- Stream chapters directly or via **magnet / torrent** (Android & desktop; not available on web)
+- Continue listening remembers chapter and position per title
+- Playback speed, autoplay next chapter, skip forward/back
+- Lock-screen and notification controls on Android (after `tool/patch_android.sh`)
+
+### Your library
+
+- **Liked** — favorite titles in one shelf
+- **Bookmarks** — save a place in a book (long-press to remove)
+- **Continue listening** — recent progress on the browse screen
+- **Offline downloads** — save chapters or full books locally
+- **Magnet import** — add a torrent by magnet link
+- **Generate** — turn an EPUB into a spoken audiobook (where supported)
+
+### Account & sync (optional)
+
+Sign in under **Settings** with email and password to sync bookmarks, favorites, and listening progress across phones and tablets. Cloud sync uses the same Supabase backend as [PlayTorrio](https://github.com/killamfkr/PlayTorrioV2) by default; you can point it at your own project at build time.
+
+Pick a **literary character avatar** (original cartoon designs inspired by classic book heroes) for your profile.
+
+---
+
+## Get started
+
+### Requirements
+
+- [Flutter](https://flutter.dev) 3.41+
+- Android SDK (for Android builds)
+- Git
+
+This repo ships **source only** — `android/` and `ios/` are generated locally to keep the repository small.
+
+### Run on your machine
 
 ```bash
-# From PlayTorrioV2 repo root — pushes standalone_audiobook_app/ as the Stories repo root
-bash standalone_audiobook_app/tool/publish_to_stories.sh
-```
+git clone https://github.com/killamfkr/Stories.git
+cd Stories
 
-Or manually:
-
-```bash
-cd /path/to/PlayTorrioV2
-git fetch origin
-git subtree split --prefix=standalone_audiobook_app -b stories-publish-main
-git push https://github.com/killamfkr/Stories.git stories-publish-main:main
-```
-
-First-time setup (empty repo already created on GitHub):
-
-```bash
-cd standalone_audiobook_app
-bash tool/init_standalone_repo.sh
-git commit -m "Initial commit: Stories audiobook app"
-git remote add origin https://github.com/killamfkr/Stories.git
-git push -u origin main
-```
-
-## Run locally
-
-Requires **Flutter 3.41+** and Android SDK for mobile builds.
-
-```bash
-cd stories-app   # or standalone_audiobook_app inside the monorepo
-
-# Generate android/ + ios/ (not checked in — keeps the repo small)
 flutter create . --project-name audiobook_app --org com.playtorrio.audiobook
 bash tool/patch_android.sh
 
 flutter pub get
-dart run flutter_launcher_icons   # optional: regenerate launcher icons
+dart run flutter_launcher_icons   # optional
 flutter run
 ```
 
-`tool/patch_android.sh` sets `MainActivity` to extend `AudioServiceActivity` so lock-screen controls work.
+`tool/patch_android.sh` configures Android for background audio and notifications.
 
-## Build release APK
+### Build a release APK
 
 ```bash
 flutter build apk --release
-# Output: build/app/outputs/flutter-apk/app-release.apk
 ```
 
-Or use **Actions → Build APK → Run workflow** on GitHub.
+APK output: `build/app/outputs/flutter-apk/app-release.apk`
 
-## Features
+On GitHub, use **Actions → Build APK → Run workflow** (if CI is enabled on this repo).
 
-- Audiobook Bay catalog + search (HTML scrape)
-- Magnet / torrent chapter streaming (Android, desktop — not web)
-- Continue listening, liked titles, bookmarks
-- Cloud sync (Supabase email/password — same backend as PlayTorrio, optional)
-- Literary character profile avatars
-- Offline downloads, magnet import, EPUB → audiobook generation
-
-## Cloud sync (optional)
-
-Sign in under **Settings** to sync bookmarks, favorites, and progress. Uses PlayTorrio’s Supabase project by default; override at build time:
+### Cloud sync build flags (optional)
 
 ```bash
 flutter build apk --release \
@@ -78,20 +82,33 @@ flutter build apk --release \
   --dart-define=PLAYTORRIO_SUPABASE_ANON_KEY=your_anon_jwt
 ```
 
-## Project layout
+---
+
+## Project structure
 
 | Path | Purpose |
 |------|---------|
-| `lib/screens/` | Library, player, settings, downloads |
-| `lib/api/` | Catalog, playback, torrent engine |
-| `lib/services/` | Cloud sync |
-| `tool/patch_android.sh` | AudioService + notification fix for Android |
-| `.github/workflows/build_apk.yml` | CI APK build |
+| `lib/screens/` | Library, player, settings, downloads, magnet picker |
+| `lib/api/` | Catalog scraping, playback, torrent engine, downloads |
+| `lib/services/` | Cloud account sync |
+| `lib/widgets/` | UI components (covers, avatars, TV focus) |
+| `tool/patch_android.sh` | Android AudioService / notification setup |
+| `assets/icon/` | App icon |
 
-## Forking from PlayTorrio
-
-If you maintain both repos: audiobook changes historically lived in `PlayTorrioV2/standalone_audiobook_app/`. After splitting, treat **this repo as the source of truth** for Stories, or periodically merge from the monorepo subtree.
+---
 
 ## License
 
-GPL-2.0 — see [LICENSE](LICENSE) (same as PlayTorrioV2).
+GPL-2.0 — see [LICENSE](LICENSE).
+
+---
+
+## Credits
+
+**Stories** was extracted and developed as a standalone app from the audiobook module in **[PlayTorrioV2](https://github.com/killamfkr/PlayTorrioV2)** (`standalone_audiobook_app/`), created by **[killamfkr](https://github.com/killamfkr)**.
+
+Torrent streaming builds on **[libtorrent_flutter](https://github.com/ayman708-UX/libtorrent_flutter)** by ayman708-UX.
+
+Parts of the design, playback fixes, cloud login, settings screen, and publishing workflow were implemented with assistance from **[Cursor](https://cursor.com) AI** (Cloud Agent).
+
+If you use Stories, a link back to this repo or PlayTorrioV2 is appreciated but not required.
