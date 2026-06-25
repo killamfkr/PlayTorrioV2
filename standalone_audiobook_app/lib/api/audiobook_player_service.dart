@@ -354,6 +354,9 @@ class AudiobookPlayerService {
     // Open without auto-playing first to allow seek to settle
     await _player.open(media, play: false);
 
+    var resumeAlreadyPlaying = false;
+    Duration? preparingPositionHint;
+
     if (_isResuming && resumePosition != null && resumePosition > Duration.zero) {
       debugPrint(
         'AudiobookPlayerService: Resuming chapter $idx at $resumePosition',
@@ -376,7 +379,7 @@ class AudiobookPlayerService {
         await _refineTorrentResumeSeek(resumePosition);
         _ignoreProgressPersistenceUntil =
             DateTime.now().add(const Duration(seconds: 3));
-        _finishPreparingPlayback(positionHint: _player.state.position);
+        preparingPositionHint = _player.state.position;
       } else {
         // Wait for duration (direct URLs) before seeking.
         final ready = Completer<void>();
@@ -395,14 +398,17 @@ class AudiobookPlayerService {
         await Future.delayed(const Duration(milliseconds: 800));
         _ignoreProgressPersistenceUntil =
             DateTime.now().add(const Duration(seconds: 2));
-        _finishPreparingPlayback(positionHint: resumePosition);
+        preparingPositionHint = resumePosition;
       }
       _isResuming = false;
-    } else {
+    }
+
+    if (!resumeAlreadyPlaying) {
       await _player.play();
       await Future.delayed(const Duration(milliseconds: 300));
-      _finishPreparingPlayback();
     }
+
+    _finishPreparingPlayback(positionHint: preparingPositionHint);
   }
 
   /// Best-effort seek for libtorrent loopback streams (position/duration often late).
