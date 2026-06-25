@@ -1,0 +1,60 @@
+# Build release APK for the standalone Audiobooks mini-app (standalone_audiobook_app/).
+# The folder is lib + pubspec only; CI runs `flutter create` to generate android/.
+
+name: Build Audiobook APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'standalone_audiobook_app/**'
+      - '.github/workflows/standalone_audiobook_app_apk.yml'
+
+env:
+  FLUTTER_CHANNEL: stable
+  FLUTTER_VERSION: '3.41.0'
+
+jobs:
+  android-apk:
+    name: Android APK (standalone Audiobooks)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: standalone_audiobook_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Generate platform folders (android/ios)
+        run: |
+          flutter create . \
+            --project-name audiobook_app \
+            --org com.playtorrio.audiobook \
+            --platforms=android,ios
+          bash tool/patch_android.sh
+
+      - run: flutter pub get
+
+      - name: Generate app icons
+        run: dart run flutter_launcher_icons
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Audiobook-Android-universal
+          path: standalone_audiobook_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
