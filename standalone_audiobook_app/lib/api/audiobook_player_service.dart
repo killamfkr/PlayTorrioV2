@@ -37,6 +37,8 @@ class AudiobookPlayerService {
   
   List<AudiobookChapter> _currentChapters = [];
   final List<StreamSubscription> _subscriptions = [];
+  bool _playerListenersAttached = false;
+  Timer? _progressTicker;
   bool _isResuming = false;
   Timer? _progressSaveDebounce;
   /// Ignore position-driven persistence briefly after resume/chapter opens — mpv often
@@ -62,30 +64,49 @@ class AudiobookPlayerService {
   }
 
   void init(BaseAudioHandler handler) {
+    attachHandler(handler);
+    ensurePlayerListeners();
+  }
+
+  void attachHandler(BaseAudioHandler handler) {
     _handler = handler as PlayTorrioAudioHandler;
-    
+  }
+
+  /// Attaches media_kit listeners. Safe to call even when [AudioService] failed.
+  void ensurePlayerListeners() {
+    if (_playerListenersAttached) return;
+    _playerListenersAttached = true;
+
     _subscriptions.add(_player.stream.position.listen((p) {
-      position.value = p;
+      if (p > Duration.zero || p != position.value) {
+        position.value = p;
+      }
       _updateSystemState();
-      // Torrent / loopback streams may report 0 for extended periods; still persist
-      // chapter index (and position when available) on a debounced timer.
       _scheduleDebouncedProgressSave();
     }));
-    
+
     _subscriptions.add(_player.stream.duration.listen((d) {
-      duration.value = d;
+      if (d > Duration.zero) {
+        duration.value = d;
+        _syncMediaItem();
+      }
       _updateSystemState();
     }));
-    
+
     _subscriptions.add(_player.stream.playing.listen((pl) {
       final wasPlaying = isPlaying.value;
       isPlaying.value = pl;
+      if (pl) {
+        _startProgressTicker();
+      } else {
+        _stopProgressTicker();
+      }
       _updateSystemState();
       if (wasPlaying && !pl && !_isResuming && currentBook.value != null) {
         unawaited(_saveProgress(force: true));
       }
     }));
-    
+
     _subscriptions.add(_player.stream.buffering.listen((b) {
       isBuffering.value = b;
       _updateSystemState();
@@ -99,6 +120,76 @@ class AudiobookPlayerService {
         }
       }
     }));
+
+    _startProgressTicker();
+  }
+
+  void _startProgressTicker() {
+    _progressTicker ??= Timer.periodic(const Duration(milliseconds: 400), (_) {
+      _pollPlayerClock();
+    });
+  }
+
+  void _stopProgressTicker() {
+    if (!isPlaying.value) {
+      _progressTicker?.cancel();
+      _progressTicker = null;
+    }
+  }
+
+  /// Torrent loopback streams often skip stream events; poll [Player.state] directly.
+  void _pollPlayerClock() {
+    final st = _player.state;
+    final p = st.position;
+    final d = st.duration;
+    var changed = false;
+
+    if (p > Duration.zero && p != position.value) {
+      position.value = p;
+      changed = true;
+    }
+    if (d > Duration.zero && d != duration.value) {
+      duration.value = d;
+      changed = true;
+      _syncMediaItem();
+    }
+
+    if (changed) {
+      _updateSystemState();
+      _scheduleDebouncedProgressSave();
+    }
+  }
+
+  void _syncMediaItem() {
+    final book = currentBook.value;
+    final handler = _handler;
+    if (book == null || handler == null) return;
+
+    final idx = currentChapterIndex.value;
+    final chapters = _currentChapters;
+    final chapterTitle = (idx >= 0 && idx < chapters.length)
+        ? chapters[idx].title
+        : '';
+
+    String artist = 'Tokybook';
+    if (book.source == 'audiozaic') artist = 'Audiozaic';
+    if (book.source == 'goldenaudiobook') artist = 'GoldenAudiobook';
+    if (book.source == 'appaudiobooks') artist = 'AppAudiobooks';
+    if (book.source == 'magnet') artist = 'Torrent';
+    if (book.source == 'audiobookbay') artist = 'Audiobook Bay';
+
+    String art = book.thumbUrl.trim();
+    if (art.isEmpty) art = book.coverImage.trim();
+
+    final dur = duration.value;
+    unawaited(handler.updateMediaItem(MediaItem(
+      id: book.audioBookId,
+      album: book.title,
+      title: chapterTitle.isEmpty ? book.title : chapterTitle,
+      artist: artist,
+      duration: dur > Duration.zero ? dur : null,
+      artUri: art.isEmpty ? null : Uri.tryParse(art),
+    )));
   }
 
   void _updateSystemState() {
@@ -124,7 +215,7 @@ class AudiobookPlayerService {
       processingState: isBuffering.value ? AudioProcessingState.buffering : AudioProcessingState.ready,
       playing: isPlaying.value,
       updatePosition: position.value,
-      bufferedPosition: position.value,
+      bufferedPosition: _player.state.buffer,
       speed: _player.state.rate,
     ));
   }
@@ -154,6 +245,10 @@ class AudiobookPlayerService {
 
     _handler?.setPlayerType(AudioPlayerType.audiobook, _player);
 
+    final chapterTitle = (idx >= 0 && idx < chapters.length)
+        ? chapters[idx].title
+        : '';
+
     String artist = 'Tokybook';
     if (book.source == 'audiozaic') artist = 'Audiozaic';
     if (book.source == 'goldenaudiobook') artist = 'GoldenAudiobook';
@@ -166,10 +261,10 @@ class AudiobookPlayerService {
 
     _handler?.updateMediaItem(MediaItem(
       id: book.audioBookId,
-      album: 'Audiobook',
-      title: book.title,
+      album: book.title,
+      title: chapterTitle.isEmpty ? book.title : chapterTitle,
       artist: artist,
-      duration: null,
+      duration: duration.value > Duration.zero ? duration.value : null,
       artUri: art.isEmpty ? null : Uri.tryParse(art),
     ));
 
@@ -328,6 +423,9 @@ class AudiobookPlayerService {
     currentChapterIndex.value = index;
     final book = currentBook.value;
     if (book == null) return;
+    position.value = Duration.zero;
+    duration.value = Duration.zero;
+    _syncMediaItem();
     _ignoreProgressPersistenceUntil =
         DateTime.now().add(const Duration(milliseconds: 1200));
     try {

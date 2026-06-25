@@ -12,6 +12,7 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   final mk.Player _musicPlayer;
   AudioPlayerType _currentType = AudioPlayerType.music;
   dynamic _activePlayer;
+  final List<StreamSubscription<dynamic>> _audiobookSubs = [];
 
   PlayTorrioAudioHandler(this._musicPlayer) {
     _activePlayer = _musicPlayer;
@@ -21,8 +22,62 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   void setPlayerType(AudioPlayerType type, dynamic player) {
+    for (final s in _audiobookSubs) {
+      s.cancel();
+    }
+    _audiobookSubs.clear();
+
     _currentType = type;
     _activePlayer = player;
+
+    if (type == AudioPlayerType.audiobook && player is mk.Player) {
+      void pushAudiobookState() {
+        if (_currentType != AudioPlayerType.audiobook) return;
+        final st = player.state;
+        playbackState.add(PlaybackState(
+          controls: [
+            MediaControl.skipToPrevious,
+            st.playing ? MediaControl.pause : MediaControl.play,
+            MediaControl.stop,
+            MediaControl.skipToNext,
+          ],
+          systemActions: const {
+            MediaAction.seek,
+            MediaAction.seekForward,
+            MediaAction.seekBackward,
+            MediaAction.playPause,
+            MediaAction.stop,
+            MediaAction.skipToNext,
+            MediaAction.skipToPrevious,
+          },
+          androidCompactActionIndices: const [0, 1, 3],
+          processingState: st.buffering
+              ? AudioProcessingState.buffering
+              : AudioProcessingState.ready,
+          playing: st.playing,
+          updatePosition: st.position,
+          bufferedPosition: st.buffer,
+          speed: st.rate,
+        ));
+      }
+
+      _audiobookSubs.addAll([
+        player.stream.position.listen((_) => pushAudiobookState()),
+        player.stream.duration.listen((d) {
+          final cur = mediaItem.value;
+          if (cur != null && d > Duration.zero && cur.duration != d) {
+            mediaItem.add(cur.copyWith(duration: d));
+          }
+          pushAudiobookState();
+        }),
+        player.stream.playing.listen((_) => pushAudiobookState()),
+        player.stream.buffering.listen((_) => pushAudiobookState()),
+        player.stream.buffer.listen((_) => pushAudiobookState()),
+      ]);
+      pushAudiobookState();
+      return;
+    }
+
     if (type == AudioPlayerType.music) {
       _updateMusicState();
     }
@@ -111,6 +166,34 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> updateMediaItem(MediaItem mediaItem) async {
     this.mediaItem.add(mediaItem);
+    if (_currentType == AudioPlayerType.audiobook) {
+      final p = _activePlayer as mk.Player?;
+      if (p != null) {
+        playbackState.add(PlaybackState(
+          controls: [
+            MediaControl.skipToPrevious,
+            p.state.playing ? MediaControl.pause : MediaControl.play,
+            MediaControl.stop,
+            MediaControl.skipToNext,
+          ],
+          systemActions: const {
+            MediaAction.seek,
+            MediaAction.playPause,
+            MediaAction.stop,
+            MediaAction.skipToNext,
+            MediaAction.skipToPrevious,
+          },
+          androidCompactActionIndices: const [0, 1, 3],
+          processingState: p.state.buffering
+              ? AudioProcessingState.buffering
+              : AudioProcessingState.ready,
+          playing: p.state.playing,
+          updatePosition: p.state.position,
+          bufferedPosition: p.state.buffer,
+          speed: p.state.rate,
+        ));
+      }
+    }
   }
 
   @override

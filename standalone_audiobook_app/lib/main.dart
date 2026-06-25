@@ -1,14 +1,17 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'api/audiobook_player_service.dart';
 import 'api/audio_handler.dart';
 import 'api/local_server_service.dart';
 import 'api/music_player_service.dart';
 import 'api/torrent_stream_service.dart';
+import 'platform_flags.dart';
 import 'screens/audiobook_screen.dart';
 import 'utils/app_theme.dart';
 
@@ -61,26 +64,38 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
   }
 
   Future<void> _bootstrap() async {
+    AudiobookPlayerService().ensurePlayerListeners();
+
     setState(() => _status = 'Starting audio…');
+
+    await _configureAudioSession();
+    if (platformIsAndroid) {
+      await Permission.notification.request();
+    }
 
     try {
       final audioHandler = await AudioService.init(
         builder: () => PlayTorrioAudioHandler(MusicPlayerService().player),
-        config: const AudioServiceConfig(
+        config: AudioServiceConfig(
           androidNotificationChannelId:
               'com.playtorrio.audiobook.channel.audio',
           androidNotificationChannelName: 'Audiobook playback',
-          androidNotificationOngoing: false,
+          androidNotificationChannelDescription:
+              'Playback controls and now playing for audiobooks',
+          androidNotificationOngoing: true,
           androidStopForegroundOnPause: false,
           androidResumeOnClick: true,
+          preloadArtwork: true,
+          fastForwardInterval: const Duration(seconds: 30),
+          rewindInterval: const Duration(seconds: 15),
         ),
       ).timeout(const Duration(seconds: 15));
       MusicPlayerService().setHandler(audioHandler);
-      AudiobookPlayerService().init(audioHandler);
+      AudiobookPlayerService().attachHandler(audioHandler);
     } catch (e, st) {
       debugPrint('[AudiobookBootstrap] AudioService failed: $e\n$st');
       _initWarning =
-          'Background controls unavailable; in-app playback still works.';
+          'Lock-screen notification unavailable; in-app playback still works.';
     }
 
     if (!mounted) return;
@@ -146,5 +161,23 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
         ),
       ),
     );
+  }
+}
+
+Future<void> _configureAudioSession() async {
+  try {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playback,
+      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.speech,
+        usage: AndroidAudioUsage.media,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+    ));
+    await session.setActive(true);
+  } catch (e) {
+    debugPrint('[AudiobookBootstrap] AudioSession: $e');
   }
 }
