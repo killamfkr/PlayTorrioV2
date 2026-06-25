@@ -33,11 +33,10 @@ Future<void> main() async {
     final audioHandler = await AudioService.init(
       builder: () => PlayTorrioAudioHandler(MusicPlayerService().player),
       config: AudioServiceConfig(
-        androidNotificationChannelId:
-            'com.playtorrio.audiobook.channel.audio',
-        androidNotificationChannelName: 'Audiobook playback',
+        androidNotificationChannelId: 'com.playtorrio.stories.channel.audio',
+        androidNotificationChannelName: 'Stories playback',
         androidNotificationChannelDescription:
-            'Playback controls and now playing for audiobooks',
+            'Playback controls and now playing for Stories',
         androidNotificationOngoing: true,
         androidStopForegroundOnPause: false,
         androidResumeOnClick: true,
@@ -48,48 +47,39 @@ Future<void> main() async {
     );
     MusicPlayerService().setHandler(audioHandler);
     AudiobookPlayerService().attachHandler(audioHandler);
-    debugPrint('[AudiobookApp] AudioService ready');
+    debugPrint('[Stories] AudioService ready');
   } catch (e, st) {
-    debugPrint('[AudiobookApp] AudioService failed: $e\n$st');
+    debugPrint('[Stories] AudioService failed: $e\n$st');
     audiobookAudioInitWarning =
         'Lock-screen notification unavailable ($e). Rebuild after running tool/patch_android.sh.';
   }
 
-  runApp(const AudiobookApp());
+  runApp(const StoriesApp());
 }
 
-class AudiobookApp extends StatelessWidget {
-  const AudiobookApp({super.key});
+class StoriesApp extends StatelessWidget {
+  const StoriesApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Audiobooks',
+      title: 'Stories',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: AppTheme.bgDark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppTheme.primaryColor,
-          brightness: Brightness.dark,
-        ),
-      ),
-      home: const AudiobookBootstrapScreen(),
+      theme: AppTheme.materialTheme,
+      home: const StoriesBootstrapScreen(),
     );
   }
 }
 
 /// Starts torrent/proxy engines, then opens the library.
-class AudiobookBootstrapScreen extends StatefulWidget {
-  const AudiobookBootstrapScreen({super.key});
+class StoriesBootstrapScreen extends StatefulWidget {
+  const StoriesBootstrapScreen({super.key});
 
   @override
-  State<AudiobookBootstrapScreen> createState() =>
-      _AudiobookBootstrapScreenState();
+  State<StoriesBootstrapScreen> createState() => _StoriesBootstrapScreenState();
 }
 
-class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
+class _StoriesBootstrapScreenState extends State<StoriesBootstrapScreen> {
   bool _ready = false;
   String? _status;
 
@@ -100,23 +90,23 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
   }
 
   Future<void> _bootstrap() async {
-    setState(() => _status = 'Starting engines…');
+    setState(() => _status = 'Opening your library…');
 
     await Future.wait([
       LocalServerService().start().catchError((Object e) {
-        debugPrint('[AudiobookBootstrap] LocalServer failed: $e');
+        debugPrint('[Stories] LocalServer failed: $e');
       }),
       TorrentStreamService()
           .start()
           .timeout(
             const Duration(seconds: 12),
             onTimeout: () {
-              debugPrint('[AudiobookBootstrap] Torrent engine timed out');
+              debugPrint('[Stories] Torrent engine timed out');
               return false;
             },
           )
           .catchError((Object e, StackTrace st) {
-            debugPrint('[AudiobookBootstrap] Torrent engine failed: $e\n$st');
+            debugPrint('[Stories] Torrent engine failed: $e\n$st');
             return false;
           }),
     ]);
@@ -132,31 +122,39 @@ class _AudiobookBootstrapScreenState extends State<AudiobookBootstrapScreen> {
     }
 
     return Scaffold(
-      body: Container(
-        decoration: AppTheme.backgroundDecoration,
-        alignment: Alignment.center,
+      backgroundColor: AppTheme.bgDark,
+      body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.menu_book_rounded,
-                size: 72, color: AppTheme.primaryColor),
-            const SizedBox(height: 24),
-            const Text(
-              'Audiobooks',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: Image.asset(
+                'assets/icon/icon.png',
+                width: 88,
+                height: 88,
+                fit: BoxFit.cover,
               ),
             ),
-            const SizedBox(height: 32),
-            const CircularProgressIndicator(color: AppTheme.primaryColor),
-            if (_status != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _status!,
-                style: const TextStyle(color: Colors.white54, fontSize: 14),
+            const SizedBox(height: 28),
+            Text('Stories', style: AppTheme.displayTitle.copyWith(fontSize: 36)),
+            const SizedBox(height: 8),
+            Text(
+              'Your audiobook library',
+              style: AppTheme.sectionTitle.copyWith(letterSpacing: 0.4),
+            ),
+            const SizedBox(height: 36),
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: AppTheme.primaryColor,
               ),
+            ),
+            if (_status != null) ...[
+              const SizedBox(height: 18),
+              Text(_status!, style: Theme.of(context).textTheme.bodySmall),
             ],
           ],
         ),
@@ -179,6 +177,6 @@ Future<void> _configureAudioSession() async {
     ));
     await session.setActive(true);
   } catch (e) {
-    debugPrint('[AudiobookApp] AudioSession: $e');
+    debugPrint('[Stories] AudioSession: $e');
   }
 }

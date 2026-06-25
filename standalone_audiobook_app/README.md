@@ -1,6 +1,6 @@
-# Audiobooks (standalone)
+# Stories (standalone)
 
-Self-contained **Flutter** app for **audiobooks**: browse and search (including **Audiobook Bay** via HTML scrape + magnet/torrent streaming), continue listening, liked titles, bookmarks, offline downloads, magnet import, and EPUB-to-audiobook generation. Extracted from PlayTorrio for use as a **separate repository**.
+Self-contained **Flutter** audiobook app named **Stories**, inspired by the clean Prologue-style listening experience. Browse and search (including **Audiobook Bay** via HTML scrape + magnet/torrent streaming), continue listening, liked titles, bookmarks, offline downloads, magnet import, and EPUB-to-audiobook generation.
 
 ## Create the repo and run locally
 

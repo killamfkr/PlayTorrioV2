@@ -303,20 +303,30 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
         _handleExit();
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF0F0418),
+        backgroundColor: AppTheme.bgDark,
         body: Stack(
           children: [
-            // Subtle background blur
             Positioned.fill(
               child: _backgroundCover(),
             ),
             Positioned.fill(
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-                child: Container(color: Colors.black.withValues(alpha: 0.4)),
+                filter: ImageFilter.blur(sigmaX: 48, sigmaY: 48),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.55),
+                        AppTheme.bgDark.withValues(alpha: 0.92),
+                        AppTheme.bgDark,
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
-            const Positioned.fill(child: _NightSkyPainter()),
             
             SafeArea(
               child: Column(
@@ -376,8 +386,13 @@ class _AudiobookPlayerScreenState extends State<AudiobookPlayerScreen> {
             onPressed: _handleExit,
           ),
           const Text(
-            'AUDIOBOOK PLAYER',
-            style: TextStyle(color: Colors.white54, letterSpacing: 2, fontSize: 13, fontWeight: FontWeight.bold),
+            'NOW PLAYING',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              letterSpacing: 1.6,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -818,39 +833,5 @@ class _MarqueeTextState extends State<MarqueeText> with SingleTickerProviderStat
       scrollDirection: Axis.horizontal,
       child: Text(widget.text, style: widget.style, maxLines: 1),
     );
-  }
-}
-
-class _NightSkyPainter extends StatelessWidget {
-  const _NightSkyPainter();
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: SkyPainter());
-  }
-}
-
-class SkyPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint();
-    final rand = _DeterministicRandom(42);
-    paint.color = Colors.white.withValues(alpha: 0.3);
-    for (int i = 0; i < 80; i++) {
-      final x = rand.nextDouble() * size.width;
-      final y = rand.nextDouble() * size.height;
-      final s = rand.nextDouble() * 1.5;
-      canvas.drawCircle(Offset(x, y), s, paint);
-    }
-  }
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _DeterministicRandom {
-  int seed;
-  _DeterministicRandom(this.seed);
-  double nextDouble() {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
   }
 }

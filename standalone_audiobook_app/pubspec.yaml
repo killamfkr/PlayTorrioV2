@@ -1,5 +1,5 @@
 name: audiobook_app
-description: Standalone PlayTorrio Audiobooks (Audiobook Bay, search, player, downloads).
+description: Stories — audiobook player (Audiobook Bay, search, player, downloads).
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -33,6 +33,16 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/icon/icon.png
+  adaptive_icon_background: '#000000'
+  adaptive_icon_foreground: assets/icon/icon.png
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icon/

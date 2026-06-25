@@ -357,19 +357,17 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      padding: const EdgeInsets.fromLTRB(24, 20, 16, 8),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Text(
-            'Audiobooks',
-            style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, fontFamily: 'Poppins'),
-          ),
+          Expanded(child: Text('Stories', style: AppTheme.displayTitle)),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 24),
+                icon: const Icon(Icons.auto_awesome_outlined,
+                    color: AppTheme.textSecondary, size: 22),
                 onPressed: () {
                   Navigator.push(
                     context,
@@ -380,7 +378,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ),
               if (!platformIsWeb)
                 IconButton(
-                  icon: const Icon(Icons.link_rounded, color: Colors.white, size: 24),
+                  icon: const Icon(Icons.link_rounded,
+                      color: AppTheme.textSecondary, size: 22),
                   tooltip: 'Add audiobook from magnet link',
                   onPressed: () async {
                     final book = await Navigator.push<Audiobook>(
@@ -398,7 +397,8 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                   },
                 ),
               IconButton(
-                icon: const Icon(Icons.download_rounded, color: Colors.white, size: 26),
+                icon: const Icon(Icons.download_rounded,
+                    color: AppTheme.textSecondary, size: 24),
                 onPressed: () {
                   Navigator.push(
                     context,
@@ -409,9 +409,13 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
               ),
               IconButton(
                 icon: Icon(
-                  _shelf == _AudiobookShelf.liked ? Icons.favorite : Icons.favorite_border,
-                  color: _shelf == _AudiobookShelf.liked ? Colors.redAccent : Colors.white,
-                  size: 28,
+                  _shelf == _AudiobookShelf.liked
+                      ? Icons.favorite
+                      : Icons.favorite_border,
+                  color: _shelf == _AudiobookShelf.liked
+                      ? AppTheme.primaryColor
+                      : AppTheme.textSecondary,
+                  size: 24,
                 ),
                 onPressed: _toggleLikedShelf,
                 tooltip: 'Liked audiobooks',
@@ -422,9 +426,9 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                       ? Icons.bookmark
                       : Icons.bookmark_border,
                   color: _shelf == _AudiobookShelf.bookmarks
-                      ? Colors.amberAccent
-                      : Colors.white,
-                  size: 28,
+                      ? AppTheme.primaryColor
+                      : AppTheme.textSecondary,
+                  size: 24,
                 ),
                 onPressed: _toggleBookmarkShelf,
                 tooltip: 'Bookmarked (syncs with account)',
@@ -438,17 +442,14 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
 
   Widget _buildSearchBar() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
       child: TextField(
         controller: _searchController,
         onSubmitted: _onSearch,
-        decoration: InputDecoration(
-          hintText: 'Search audiobooks...',
-          prefixIcon: const Icon(Icons.search, color: Colors.white54),
-          filled: true,
-          fillColor: Colors.white.withValues(alpha: 0.05),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        style: AppTheme.body.copyWith(fontSize: 15),
+        decoration: const InputDecoration(
+          hintText: 'Search stories, authors, series…',
+          prefixIcon: Icon(Icons.search, color: AppTheme.textSecondary, size: 22),
         ),
       ),
     );
@@ -466,7 +467,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('CONTINUE LISTENING', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 2, fontSize: 12)),
+              Text('CONTINUE LISTENING', style: AppTheme.sectionTitle),
               if (isDesktop && _history.length > 1)
                 Row(
                   children: [
@@ -478,7 +479,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                           curve: Curves.easeInOut,
                         );
                       },
-                      color: Colors.white54,
+                      color: AppTheme.textSecondary,
                     ),
                     IconButton(
                       icon: const Icon(Icons.arrow_forward_ios, size: 16),
@@ -488,7 +489,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                           curve: Curves.easeInOut,
                         );
                       },
-                      color: Colors.white54,
+                      color: AppTheme.textSecondary,
                     ),
                   ],
                 ),
@@ -516,9 +517,11 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.3)),
+                          color: AppTheme.bgCard,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppTheme.primaryColor.withValues(alpha: 0.35),
+                          ),
                         ),
                         child: Row(
                           children: [
@@ -667,10 +670,7 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
           : () => _openAudiobook(book),
       borderRadius: 16,
       child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(16),
-        ),
+        decoration: AppTheme.cardDecoration(radius: 14),
         clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
@@ -709,7 +709,10 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
                     book.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    style: AppTheme.body.copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],
@@ -814,13 +817,19 @@ class _AudiobookScreenState extends State<AudiobookScreen> with WidgetsBindingOb
         children: [
           ElevatedButton(
             onPressed: _currentOffset > 0 ? _prevPage : null,
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.bgCard,
+              foregroundColor: AppTheme.textPrimary,
+            ),
             child: const Text('Previous'),
           ),
           Text('Page ${(_currentOffset / _limit).floor() + 1}', style: const TextStyle(fontWeight: FontWeight.bold)),
           ElevatedButton(
             onPressed: _nextPage,
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryColor,
+              foregroundColor: const Color(0xFF1A1208),
+            ),
             child: const Text('Next Page'),
           ),
         ],
