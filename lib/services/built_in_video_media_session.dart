@@ -1,7 +1,24 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../api/music_player_service.dart';
+
+/// Android 13+ needs this for the media notification / lock-screen player card.
+Future<void> ensureAndroidMediaNotificationPermission() async {
+  if (kIsWeb || !Platform.isAndroid) return;
+  try {
+    final status = await Permission.notification.status;
+    if (!status.isGranted) {
+      await Permission.notification.request();
+    }
+  } catch (e) {
+    debugPrint('[BuiltInVideoMediaSession] notification permission: $e');
+  }
+}
 
 /// Hooks the built-in [Player] into [AudioService] so Android Auto, Bluetooth,
 /// and lock-screen controls see metadata and transport actions.
@@ -15,6 +32,7 @@ void attachBuiltInVideoMediaSession(
   Map<String, dynamic>? extras,
 }) {
   if (kIsWeb) return;
+  unawaited(ensureAndroidMediaNotificationPermission());
   try {
     final h = MusicPlayerService().playTorrioAudioHandler;
     if (h == null) return;
