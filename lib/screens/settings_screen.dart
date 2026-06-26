@@ -2608,8 +2608,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SnackBar(content: Text('Logged in to Trakt${username != null ? " as $username" : ""}!')),
           );
         }
-        // Auto-sync after login
-        _syncTrakt();
+        // Import from Trakt only — never push on login (export can restamp dates).
+        _importFromTrakt();
       } else if (result == 'expired' || result == 'denied') {
         timer.cancel();
         if (mounted) {
@@ -2652,24 +2652,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _syncTrakt() async {
+  Future<void> _importFromTrakt() async {
     if (_isTraktSyncing) return;
     setState(() => _isTraktSyncing = true);
 
     try {
-      final watchlistCount = await _trakt.importWatchlistToMyList();
-      final playbackCount = await _trakt.importPlaybackToWatchHistory();
-      final episodesImported = await _trakt.importWatchedEpisodes();
-      final exportedCount = await _trakt.exportMyListToWatchlist();
-      final episodesExported = await _trakt.exportWatchedEpisodes();
+      final result = await _trakt.importAllFromTrakt();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Trakt sync done! Imported $watchlistCount watchlist, '
-              '$playbackCount playback, $episodesImported episodes. '
-              'Exported $exportedCount watchlist, $episodesExported episodes.',
+              'Pulled from Trakt: ${result.watchlist} watchlist, '
+              '${result.playback} in progress, ${result.episodes} watched episodes.',
             ),
             duration: const Duration(seconds: 4),
           ),
@@ -2678,7 +2673,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Trakt sync error: $e')),
+          SnackBar(content: Text('Trakt import error: $e')),
         );
       }
     } finally {
@@ -2686,6 +2681,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _pushToTrakt() async {
+    if (_isTraktSyncing) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Push to Trakt?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This uploads your PlayTorrio My List and any episodes you marked '
+          'watched in the app that are not already on Trakt.\n\n'
+          'It does not upload Continue Watching. Re-sending history Trakt '
+          'already has can change watched dates — only new local marks are pushed.',
+          style: TextStyle(color: Colors.white70, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Push'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isTraktSyncing = true);
+    try {
+      final result = await _trakt.exportAllToTrakt();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Pushed to Trakt: ${result.watchlist} watchlist, '
+              '${result.episodes} new watched episodes.',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Trakt push error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isTraktSyncing = false);
+    }
+  }
   Widget _buildTraktStatsWidget() {
     final stats = _traktStats!;
     final movies = stats['movies'] as Map<String, dynamic>? ?? {};
@@ -2733,7 +2780,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Sync your watchlist and watch history with Trakt.tv',
+            'Pull watchlist, in-progress playback, and watched episodes from Trakt into PlayTorrio. Pushing back is optional and separate.',
             style: TextStyle(fontSize: 13, color: Colors.white54),
           ),
           const SizedBox(height: 8),
@@ -2821,21 +2868,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
             ],
 
-            // Sync button
+            // Pull from Trakt
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isTraktSyncing ? null : () => _syncTrakt(),
+                onPressed: _isTraktSyncing ? null : () => _importFromTrakt(),
                 icon: _isTraktSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Icon(Icons.sync),
-                label: Text(_isTraktSyncing ? 'Syncing...' : 'Sync Now'),
+                    : const Icon(Icons.download_rounded),
+                label: Text(_isTraktSyncing ? 'Syncing...' : 'Pull from Trakt'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isTraktSyncing ? null : () => _pushToTrakt(),
+                icon: const Icon(Icons.upload_rounded),
+                label: const Text('Push to Trakt'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white24),
                   minimumSize: const Size(double.infinity, 50),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
