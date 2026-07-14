@@ -25,12 +25,14 @@ import '../services/episode_watched_service.dart';
 import '../api/trakt_service.dart';
 import '../api/simkl_service.dart';
 import '../api/mdblist_service.dart';
+import '../api/movie_download_service.dart';
 import '../utils/extensions.dart';
 import '../utils/app_theme.dart';
 import '../utils/performance_tuning.dart';
 import '../platform_flags.dart';
 import '../widgets/loading_overlay.dart';
 import 'player_screen.dart';
+import 'movie_downloads_screen.dart';
 import 'stremio_catalog_screen.dart';
 import 'main_screen.dart';
 import '../widgets/movie_atmosphere.dart';
@@ -1644,6 +1646,60 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     }
   }
 
+  Future<void> _downloadStremioStream(Map<String, dynamic> stream) async {
+    if (_isLiveTvStremioChannel) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Live TV channels cannot be downloaded')),
+      );
+      return;
+    }
+    final svc = MovieDownloadService();
+    if (!svc.canDownloadStream(stream)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This stream cannot be downloaded (HLS / playlist or external link). '
+            'Pick a direct file or torrent/debrid stream.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    final isTv = _movie.mediaType == 'tv' && !_isLiveTvStremioChannel;
+    final id = await svc.startStremioDownload(
+      stream: stream,
+      movie: _movie,
+      season: isTv ? _selectedSeason : null,
+      episode: isTv ? _selectedEpisode : null,
+    );
+    if (!mounted) return;
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start download')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Download started'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MovieDownloadsScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   /// Handles a Stremio externalUrl: stremio:///detail, stremio:///search, or web URLs.
   Future<void> _handleExternalUrl(String url, {String? addonBaseUrl}) async {
     // Try parsing as a stremio:// link
@@ -1855,6 +1911,26 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
               ),
             ),
           ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FocusableControl(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const MovieDownloadsScreen(),
+                    ),
+                  );
+                },
+                borderRadius: 50,
+                child: const CircleAvatar(
+                  backgroundColor: Colors.black54,
+                  child: Icon(Icons.download_rounded, color: Colors.white),
+                ),
+              ),
+            ),
+          ],
         ),
         body: Stack(children: [
           _buildBackdropWidget(),
@@ -3395,6 +3471,12 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                 ]),
               ),
               const SizedBox(width: 8),
+              if (!isExternal &&
+                  !_isLiveTvStremioChannel &&
+                  MovieDownloadService().canDownloadStream(stream)) ...[
+                _iconBtn(Icons.download_rounded, false, () => _downloadStremioStream(stream)),
+                const SizedBox(width: 6),
+              ],
               _iconBtn(actionIcon, true, () => _playStremioStream(stream,
                 startPosition: isResumable ? Duration(milliseconds: _lastProgress!['position'] as int) : widget.startPosition,
                 useSavedHttpPlayback: isResumable)),

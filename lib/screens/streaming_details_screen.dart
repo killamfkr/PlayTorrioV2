@@ -13,12 +13,14 @@ import '../api/debrid_api.dart';
 import '../api/torrent_stream_service.dart';
 import '../api/site111477_service.dart';
 import '../api/site111477_proxy.dart' as site111477_proxy;
+import '../api/movie_download_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../services/episode_watched_service.dart';
 import '../services/watch_history_service.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
 import '../widgets/movie_atmosphere.dart';
 import 'player_screen.dart';
+import 'movie_downloads_screen.dart';
 
 class StreamingDetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -430,6 +432,51 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
     }
   }
 
+  Future<void> _downloadStremioStream(Map<String, dynamic> stream) async {
+    final svc = MovieDownloadService();
+    if (!svc.canDownloadStream(stream)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This stream cannot be downloaded (HLS / playlist or external link). '
+            'Pick a direct file or torrent/debrid stream.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    final id = await svc.startStremioDownload(
+      stream: stream,
+      movie: _movie,
+      season: _movie.mediaType == 'tv' ? _selectedSeason : null,
+      episode: _movie.mediaType == 'tv' ? _selectedEpisode : null,
+    );
+    if (!mounted) return;
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not start download')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Download started'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MovieDownloadsScreen()),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _startPlayTorrioExtraction() async {
     _extractionCancelled = false;
     showDialog(
@@ -659,6 +706,20 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
                   icon: const Icon(Icons.arrow_back, color: Colors.white),
                   onPressed: () => Navigator.pop(context),
                 ),
+                actions: [
+                  IconButton(
+                    tooltip: 'Downloads',
+                    icon: const Icon(Icons.download_rounded, color: Colors.white),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const MovieDownloadsScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
               SliverList(
                 delegate: SliverChildListDelegate([
@@ -1021,6 +1082,14 @@ class _StreamingDetailsScreenState extends State<StreamingDetailsScreen> with At
                       ],
                     ),
                   ),
+                  if (MovieDownloadService().canDownloadStream(s)) ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'Download',
+                      onPressed: () => _downloadStremioStream(s),
+                      icon: const Icon(Icons.download_rounded, color: Colors.white70),
+                    ),
+                  ],
                 ],
               ),
             ),

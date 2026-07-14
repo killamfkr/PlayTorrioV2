@@ -22,6 +22,7 @@ Made by [ayman708-UX](https://github.com/ayman708-UX), updates made by [killamfk
 - Search and browse movies/TV shows with TMDB metadata
 - Stream torrents directly with the built-in libtorrent engine
 - Stremio addon support (catalogs, streams, live channels)
+- **Download** Stremio streams (direct HTTP / debrid / local torrent) to `PlayTorrio/Movies`
 - **WebStreamr** — on-device embed scraper as a streaming source (country/extractor toggles in settings)
 - Real-Debrid and TorBox integration
 - Auto-resume and watch history tracking
