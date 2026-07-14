@@ -470,7 +470,7 @@ class MovieDownloadService {
         stream['title']?.toString() ??
         'unknown';
     final ep = (season != null && episode != null) ? '_S${season}_E$episode' : '';
-    return 'm${movie.id}$ep_${key.hashCode.abs()}';
+    return 'm${movie.id}${ep}_${key.hashCode.abs()}';
   }
 
   String _displayTitle(Movie movie, int? season, int? episode) {
