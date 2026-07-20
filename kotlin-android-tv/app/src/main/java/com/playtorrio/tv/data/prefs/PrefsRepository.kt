@@ -46,6 +46,14 @@ class PrefsRepository(context: Context) {
         prefs.edit().remove(KEY_IPTV).apply()
     }
 
+    suspend fun getIptvFavoriteIds(): Set<String> = withContext(Dispatchers.IO) {
+        prefs.getStringSet(KEY_IPTV_FAVS, emptySet())?.toSet().orEmpty()
+    }
+
+    suspend fun saveIptvFavoriteIds(ids: Set<String>) = withContext(Dispatchers.IO) {
+        prefs.edit().putStringSet(KEY_IPTV_FAVS, ids).apply()
+    }
+
     suspend fun getWatchHistory(): List<WatchEntry> = withContext(Dispatchers.IO) {
         val raw = prefs.getString(KEY_HISTORY, null) ?: return@withContext emptyList()
         runCatching { json.decodeFromString<List<WatchEntry>>(raw) }.getOrDefault(emptyList())
@@ -58,6 +66,7 @@ class PrefsRepository(context: Context) {
     companion object {
         private const val KEY_ADDONS = "stremio_addons"
         private const val KEY_IPTV = "iptv_credential"
+        private const val KEY_IPTV_FAVS = "iptv_favorites"
         private const val KEY_HISTORY = "watch_history"
     }
 }

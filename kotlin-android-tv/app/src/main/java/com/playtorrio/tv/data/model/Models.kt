@@ -111,10 +111,17 @@ data class WatchEntry(
 
 @Serializable
 data class IptvCredentials(
-    val serverUrl: String,
-    val username: String,
-    val password: String,
-)
+    /** "xtream" or "m3u" */
+    val type: String = "xtream",
+    val serverUrl: String = "",
+    val username: String = "",
+    val password: String = "",
+    /** For M3U playlist login */
+    val m3uUrl: String = "",
+) {
+    val isXtream: Boolean get() = type != "m3u"
+    val isM3u: Boolean get() = type == "m3u"
+}
 
 @Serializable
 data class IptvCategory(
@@ -129,6 +136,36 @@ data class IptvChannel(
     val streamIcon: String? = null,
     val categoryId: String? = null,
     val playUrl: String,
+    val containerExtension: String? = null,
+    /** live | movie | series_episode */
+    val kind: String = "live",
+)
+
+@Serializable
+data class IptvSeries(
+    val seriesId: String,
+    val name: String,
+    val cover: String? = null,
+    val categoryId: String? = null,
+    val plot: String? = null,
+)
+
+@Serializable
+data class IptvEpisode(
+    val episodeId: String,
+    val title: String,
+    val season: Int,
+    val episodeNum: Int,
+    val containerExtension: String = "mp4",
+    val playUrl: String,
+)
+
+@Serializable
+data class IptvEpgEntry(
+    val title: String,
+    val description: String = "",
+    val start: String? = null,
+    val end: String? = null,
 )
 
 @Serializable
