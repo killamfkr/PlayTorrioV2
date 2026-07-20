@@ -26,7 +26,7 @@ android {
         applicationId = "com.example.play_torrio_native"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -68,4 +68,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Official `com.arthenica:ffmpeg-kit-*` artifacts were removed from Maven Central (~Apr 2025).
+    // Community rebuild (same FFmpeg Kit JNI surface): https://github.com/moizhassankh/ffmpeg-kit-android-16KB
+    implementation("com.moizhassan.ffmpeg:ffmpeg-kit-16kb:6.1.1")
 }

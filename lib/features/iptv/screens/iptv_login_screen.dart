@@ -7,6 +7,7 @@ import '../models/iptv_credential.dart';
 import '../services/iptv_service.dart';
 import '../../../utils/iframe_sandbox_strip_js.dart';
 import 'iptv_home_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvLoginScreen extends StatefulWidget {
   const IptvLoginScreen({super.key});
@@ -179,7 +180,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
   }
 
   Widget _buildModeButton(String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -441,7 +442,7 @@ class _IptvLoginScreenState extends State<IptvLoginScreen> with SingleTickerProv
                           padding: const EdgeInsets.only(bottom: 8),
                           child: Material(
                             color: Colors.transparent,
-                            child: InkWell(
+                            child: TvInkWell(
                               borderRadius: BorderRadius.circular(12),
                               onTap: () async {
                                 setState(() => _loading = true);

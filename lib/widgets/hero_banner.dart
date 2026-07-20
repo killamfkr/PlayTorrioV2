@@ -10,6 +10,7 @@ import '../services/my_list_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/extensions.dart';
 import '../utils/performance_tuning.dart';
+import 'tv_interactive.dart';
 
 class HeroBanner extends StatefulWidget {
   final List<Movie> movies;
@@ -62,8 +63,9 @@ class _HeroBannerState extends State<HeroBanner> {
             ),
             items: featuredMovies.map((movie) {
               final imageUrl = TmdbApi.getBackdropUrl(movie.backdropPath);
-              return InkWell(
+              return TvInkWell(
                 onTap: () => _navigateToDetails(movie),
+                cornerRadius: 0,
                 focusColor: AppTheme.primaryColor.withValues(alpha: 0.15),
                 child: Stack(
                   fit: StackFit.expand,
@@ -198,7 +200,8 @@ class _HeroBannerState extends State<HeroBanner> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: featuredMovies.asMap().entries.map((entry) {
-              return GestureDetector(
+              return TvGestureTap(
+                borderRadius: 8,
                 onTap: () => _carouselController.animateToPage(entry.key),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 300),

@@ -6,6 +6,7 @@ import 'comic_details_screen.dart';
 import 'comic_reader_screen.dart';
 import '../api/comics_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class ComicsScreen extends StatefulWidget {
   final String? initialSearch;
@@ -353,7 +354,7 @@ class _ComicsScreenState extends State<ComicsScreen> {
                     ),
                     Positioned(
                       top: 4, right: 4,
-                      child: GestureDetector(
+                      child: TvGestureTap(
                         onTap: () => _removeFromHistory(comic.url),
                         child: Container(
                           padding: const EdgeInsets.all(4),
@@ -550,7 +551,7 @@ class _ComicCardState extends State<_ComicCard> {
             Positioned(
               top: 8,
               right: 8,
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: _toggleLike,
                 child: Container(
                   padding: const EdgeInsets.all(6),

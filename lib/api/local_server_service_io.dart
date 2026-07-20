@@ -7,6 +7,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import '../scrapers/scraper_aggregator.dart';
 
 class LocalServerService {
@@ -28,11 +29,80 @@ class LocalServerService {
   String? _hlsHeadersJsonCache;
   String? _hlsHeadersTokenCache;
 
+  /// Output dirs for Android HW-transcoded HLS (`/cast-hw/<id>/…`).
+  final Map<String, String> _castHwSessionRoots = {};
+
   int get port => _port;
 
   /// Use numeric loopback — Android's native HTTP stack often resolves `localhost`
   /// to IPv6 ::1 while we bind IPv4-only, which breaks mpv talking to this proxy.
   String get baseUrl => 'http://127.0.0.1:$_port';
+
+  /// Shelf proxy origin to embed in rewritten playlists. Uses [request]'s Host so
+  /// Chromecast (requesting via LAN IP) gets child URLs it can reach; loopback
+  /// stays on 127.0.0.1 for on-device mpv.
+  String _proxyOriginFromRequest(Request request) {
+    final u = request.requestedUri;
+    if (u.host == '127.0.0.1' || u.host == 'localhost') {
+      return baseUrl;
+    }
+    return '${u.scheme}://${u.authority}';
+  }
+
+  /// IPv4 on Wi‑Fi / Ethernet for Chromecast on the same LAN (skips loopback / APIPA).
+  Future<String?> preferredLanIpv4() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+      );
+      const preferredHints = {'wlan', 'en', 'eth', 'wifi', 'radio'};
+      List<NetworkInterface> sorted = [...interfaces];
+      sorted.sort((a, b) {
+        final an = a.name.toLowerCase();
+        final bn = b.name.toLowerCase();
+        bool pref(String n) => preferredHints.any((h) => n.contains(h));
+        final ap = pref(an);
+        final bp = pref(bn);
+        if (ap != bp) return ap ? -1 : 1;
+        return an.compareTo(bn);
+      });
+      for (final iface in sorted) {
+        for (final addr in iface.addresses) {
+          if (addr.isLoopback) continue;
+          if (addr.type != InternetAddressType.IPv4) continue;
+          final ip = addr.address;
+          if (ip.startsWith('169.254.')) continue;
+          return ip;
+        }
+      }
+    } catch (e) {
+      debugPrint('[LocalServer] LAN IP detection: $e');
+    }
+    return null;
+  }
+
+  /// Rewrites our loopback proxy URLs so Cast targets can open them over the LAN.
+  Future<String?> urlWithLanHostForCast(String url) async {
+    if (_port <= 0) return null;
+    final trimmed = url.trim();
+    if (!trimmed.contains('127.0.0.1') && !trimmed.contains('localhost')) {
+      return null;
+    }
+    final lan = await preferredLanIpv4();
+    if (lan == null) return null;
+    var out = trimmed.replaceAll(baseUrl, 'http://$lan:$_port');
+    out = out.replaceAll('http://localhost:$_port', 'http://$lan:$_port');
+    return out;
+  }
+
+  void registerCastHwSession(String sessionId, String absoluteOutputDir) {
+    _castHwSessionRoots[sessionId] = absoluteOutputDir;
+  }
+
+  void unregisterCastHwSession(String sessionId) {
+    _castHwSessionRoots.remove(sessionId);
+  }
 
   Future<void> start() async {
     if (_server != null) return;
@@ -40,15 +110,16 @@ class LocalServerService {
     _setupRoutes();
 
     try {
-      _server = await io.serve(_router.call, InternetAddress.loopbackIPv4, 0);
+      _server = await io.serve(_router.call, InternetAddress.anyIPv4, 0);
       _port = _server!.port;
-      debugPrint('[LocalServer] Started on $baseUrl');
+      debugPrint('[LocalServer] Started on $baseUrl (LAN clients may use this host\'s IPv4)');
     } catch (e) {
       debugPrint('[LocalServer] Error starting server: $e');
     }
   }
 
   void _setupRoutes() {
+    _router.get('/cast-hw/<session>/<file>', _handleCastHwFile);
     _router.get('/api/ultimate', (Request request) async {
       final params = request.url.queryParameters;
       final query = params['query'];
@@ -274,7 +345,7 @@ class LocalServerService {
                   final fullUri = uri.startsWith('http') ? uri
                       : uri.startsWith('/') ? '$serverBase$uri'
                       : '$basePath$uri';
-                  return 'URI="${getJellyfinProxyUrl(fullUri, authHeader)}"';
+                  return 'URI="${_jellyfinProxyUrlForRequest(request, fullUri, authHeader)}"';
                 },
               );
             }
@@ -284,7 +355,7 @@ class LocalServerService {
           final fullUrl = trimmed.startsWith('http') ? trimmed
               : trimmed.startsWith('/') ? '$serverBase$trimmed'
               : '$basePath$trimmed';
-          return getJellyfinProxyUrl(fullUrl, authHeader);
+          return _jellyfinProxyUrlForRequest(request, fullUrl, authHeader);
         }).toList();
 
         return Response.ok(
@@ -324,9 +395,20 @@ class LocalServerService {
     }
   }
 
-  /// Returns a local proxy URL for a Jellyfin stream.
+  /// Returns a local proxy URL for a Jellyfin stream (loopback — for on-device playback).
   String getJellyfinProxyUrl(String targetUrl, String authHeaderValue) {
     return '$baseUrl/jellyfin-stream'
+        '?url=${Uri.encodeComponent(targetUrl)}'
+        '&auth=${Uri.encodeComponent(authHeaderValue)}';
+  }
+
+  String _jellyfinProxyUrlForRequest(
+    Request request,
+    String targetUrl,
+    String authHeaderValue,
+  ) {
+    final origin = _proxyOriginFromRequest(request);
+    return '$origin/jellyfin-stream'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&auth=${Uri.encodeComponent(authHeaderValue)}';
   }
@@ -527,6 +609,8 @@ class LocalServerService {
                 ? null
                 : _registerHlsProxyHeaders(customHeaders));
 
+        final proxyOrigin = _proxyOriginFromRequest(request);
+
         final rewrittenLines = body.split('\n').map((line) {
           final trimmed = line.trim();
           if (trimmed.isEmpty || trimmed.startsWith('#')) {
@@ -542,7 +626,7 @@ class LocalServerService {
                   if (hdrForRewrite == null) {
                     return 'URI="$fullUri"';
                   }
-                  return 'URI="${_hlsProxyUrlWithHdrToken(fullUri, hdrForRewrite)}"';
+                  return 'URI="${_hlsProxyUrlWithHdrToken(fullUri, hdrForRewrite, proxyOrigin)}"';
                 },
               );
             }
@@ -553,7 +637,7 @@ class LocalServerService {
               : trimmed.startsWith('/') ? '$serverBase$trimmed'
               : '$basePath$trimmed';
           if (hdrForRewrite == null) return fullUrl;
-          return _hlsProxyUrlWithHdrToken(fullUrl, hdrForRewrite);
+          return _hlsProxyUrlWithHdrToken(fullUrl, hdrForRewrite, proxyOrigin);
         }).toList();
 
         return Response.ok(
@@ -625,10 +709,54 @@ class LocalServerService {
   }
 
   /// Internal: rewritten playlist lines share one [hdr] token (tiny URLs).
-  String _hlsProxyUrlWithHdrToken(String targetUrl, String hdrToken) {
-    return '$baseUrl/hls-proxy'
+  String _hlsProxyUrlWithHdrToken(
+    String targetUrl,
+    String hdrToken, [
+    String? proxyOrigin,
+  ]) {
+    final origin = proxyOrigin ?? baseUrl;
+    return '$origin/hls-proxy'
         '?url=${Uri.encodeComponent(targetUrl)}'
         '&hdr=${Uri.encodeComponent(hdrToken)}';
+  }
+
+  Future<Response> _handleCastHwFile(
+    Request request,
+    String session,
+    String file,
+  ) async {
+    final root = _castHwSessionRoots[session];
+    if (root == null) {
+      return Response.notFound('cast-hw session');
+    }
+    final safe = p.basename(file);
+    if (safe.isEmpty || safe == '.' || safe == '..') {
+      return Response.forbidden('bad file');
+    }
+    final rootCanon = p.normalize(root);
+    final full = p.normalize(p.join(root, safe));
+    if (!full.startsWith(rootCanon)) {
+      return Response.forbidden('path escape');
+    }
+    final f = File(full);
+    if (!await f.exists()) {
+      return Response.notFound('missing');
+    }
+    final bytes = await f.readAsBytes();
+    final lower = safe.toLowerCase();
+    final ct = lower.endsWith('.m3u8')
+        ? 'application/vnd.apple.mpegurl'
+        : lower.endsWith('.ts')
+            ? 'video/mp2t'
+            : 'application/octet-stream';
+    return Response.ok(
+      bytes,
+      headers: {
+        'Content-Type': ct,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      },
+    );
   }
 
   Future<void> stop() async {

@@ -12,6 +12,7 @@ import '../utils/stremio_tv_schedule.dart';
 import '../utils/tv_guide_refresh.dart';
 import 'details_screen.dart';
 import 'epg_channel_mapping_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 /// Time-blocked listing for Stremio live-TV channels.
 ///
@@ -313,7 +314,7 @@ class _StremioTvGuideScreenState extends State<StremioTvGuideScreen> {
                             child: Material(
                               color: AppTheme.bgCard,
                               borderRadius: BorderRadius.circular(14),
-                              child: InkWell(
+                              child: TvInkWell(
                                 borderRadius: BorderRadius.circular(14),
                                 onTap: () => _openChannel(row),
                                 child: Padding(

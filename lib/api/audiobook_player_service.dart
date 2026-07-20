@@ -583,6 +583,104 @@ class AudiobookPlayerService {
     }
   }
 
+  // --- Bookmarks (synced via SettingsService → cloud when logged in) ---
+
+  Future<List<Map<String, dynamic>>> getBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+    final out = <Map<String, dynamic>>[];
+    for (final s in raw) {
+      try {
+        final decoded = json.decode(s);
+        if (decoded is Map) {
+          out.add(Map<String, dynamic>.from(decoded as Map));
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  Future<Set<String>> getBookmarkedAudioBookIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final strings = prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+    final ids = <String>{};
+    for (final s in strings) {
+      try {
+        final m = json.decode(s) as Map<String, dynamic>;
+        final b = m['book'];
+        if (b is Map && b['audioBookId'] != null) {
+          ids.add('${b['audioBookId']}');
+        }
+      } catch (_) {}
+    }
+    return ids;
+  }
+
+  Future<bool> isBookmarked(String audioBookId) async {
+    final ids = await getBookmarkedAudioBookIds();
+    return ids.contains(audioBookId);
+  }
+
+  Future<void> removeBookmark(String audioBookId) async {
+    final prefs = await SharedPreferences.getInstance();
+    var strings = prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+    strings.removeWhere((s) {
+      try {
+        final d = json.decode(s) as Map<String, dynamic>;
+        final b = d['book'];
+        if (b is Map) return '${b['audioBookId']}' == audioBookId;
+      } catch (_) {}
+      return false;
+    });
+    await prefs.setStringList(AudiobookPrefsKeys.bookmarks, strings);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+  }
+
+  /// Replace or insert bookmark for [book] (most recent first).
+  Future<void> upsertBookmarkWithProgress(
+    Audiobook book, {
+    required int chapterIndex,
+    required int positionMs,
+    bool placeholderOnly = false,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    var strings = prefs.getStringList(AudiobookPrefsKeys.bookmarks) ?? [];
+    strings.removeWhere((s) {
+      try {
+        final d = json.decode(s) as Map<String, dynamic>;
+        final b = d['book'];
+        if (b is Map) return '${b['audioBookId']}' == book.audioBookId;
+      } catch (_) {}
+      return false;
+    });
+    strings.insert(
+      0,
+      json.encode({
+        'book': book.toJson(),
+        'chapterIndex': chapterIndex,
+        'positionMs': positionMs < 0 ? 0 : positionMs,
+        'savedAt': DateTime.now().millisecondsSinceEpoch,
+        if (placeholderOnly) 'placeholderBookmark': true,
+      }),
+    );
+    await prefs.setStringList(AudiobookPrefsKeys.bookmarks, strings);
+    PlaytorrioCloudSyncService.instance.scheduleSettingsPush();
+  }
+
+  /// From grid: add bookmark without a saved position, or remove if already present.
+  Future<void> toggleBookmarkGrid(Audiobook book) async {
+    if (await isBookmarked(book.audioBookId)) {
+      await removeBookmark(book.audioBookId);
+    } else {
+      await upsertBookmarkWithProgress(
+        book,
+        chapterIndex: 0,
+        positionMs: 0,
+        placeholderOnly: true,
+      );
+    }
+  }
+
   void dispose() {
     _progressSaveDebounce?.cancel();
     for (var s in _subscriptions) { s.cancel(); }

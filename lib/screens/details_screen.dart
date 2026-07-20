@@ -36,6 +36,7 @@ import 'movie_downloads_screen.dart';
 import 'stremio_catalog_screen.dart';
 import 'main_screen.dart';
 import '../widgets/movie_atmosphere.dart';
+import '../widgets/tv_interactive.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
@@ -582,7 +583,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(10, (i) {
                   final val = i + 1;
-                  return GestureDetector(
+                  return TvGestureTap(
                     onTap: () => setDialogState(() => selected = val),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 1),
@@ -795,7 +796,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(10, (i) {
                   final val = i + 1;
-                  return GestureDetector(
+                  return TvGestureTap(
                     onTap: () => setDialogState(() => selected = val),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 1),
@@ -2137,7 +2138,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2664,7 +2665,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
                           ),
                           Positioned(
                             top: 4, right: 4,
-                            child: GestureDetector(
+                            child: TvGestureTap(
                               onTap: () => _toggleEpisodeWatched(_selectedSeason, epNum),
                               child: Container(
                                 padding: const EdgeInsets.all(3),
@@ -2741,7 +2742,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
   }
 
   Widget _sourceTab(String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -2790,7 +2791,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
           final sel = _selectedSourceId == chip['id'];
           return Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: GestureDetector(
+            child: TvGestureTap(
               onTap: () {
                 final id = chip['id'] as String;
                 setState(() => _selectedSourceId = id);
@@ -3528,7 +3529,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
     child: Text(codec,
       style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 10, fontWeight: FontWeight.w600)));
 
-  Widget _iconBtn(IconData icon, bool highlight, VoidCallback onTap) => GestureDetector(
+  Widget _iconBtn(IconData icon, bool highlight, VoidCallback onTap) => TvGestureTap(
     onTap: onTap,
     child: Container(
       width: 32, height: 32,
@@ -3538,7 +3539,7 @@ class _DetailsScreenState extends State<DetailsScreen> with AtmosphereMixin {
         border: Border.all(color: highlight ? AppTheme.primaryColor.withValues(alpha: 0.4) : Colors.white12)),
       child: Icon(icon, size: 17, color: highlight ? AppTheme.primaryColor : Colors.white54)));
 
-  Widget _scrollArrow(IconData icon, VoidCallback onTap) => GestureDetector(
+  Widget _scrollArrow(IconData icon, VoidCallback onTap) => TvGestureTap(
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -3924,7 +3925,7 @@ class _ExpandableSynopsisState extends State<_ExpandableSynopsis> {
           crossFadeState: _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
         ),
         const SizedBox(height: 4),
-        GestureDetector(
+        TvGestureTap(
           onTap: () => setState(() => _expanded = !_expanded),
           child: Text(_expanded ? 'Show less' : 'Show more',
             style: TextStyle(color: AppTheme.primaryColor.withValues(alpha: 0.9),
@@ -3988,7 +3989,7 @@ class _AudioFilterMenuState extends State<_AudioFilterMenu> {
                             letterSpacing: 0.5)),
                   ),
                   if (_selected.isNotEmpty)
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: () {
                         setState(() => _selected.clear());
                         widget.onChanged({});
@@ -4004,7 +4005,7 @@ class _AudioFilterMenuState extends State<_AudioFilterMenu> {
             const Divider(color: Colors.white12, height: 8),
             ...widget.allTags.map((tag) {
               final on = _selected.contains(tag);
-              return InkWell(
+              return TvInkWell(
                 onTap: () {
                   setState(() {
                     if (on) { _selected.remove(tag); } else { _selected.add(tag); }

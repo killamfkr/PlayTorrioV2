@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../services/iptv_service.dart';
 import '../models/iptv_series.dart';
 import '../../../screens/player_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class SeriesDetailScreen extends StatefulWidget {
   final IptvSeries series;
@@ -312,7 +313,7 @@ class _EpisodeTile extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Padding(
