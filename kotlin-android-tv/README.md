@@ -10,7 +10,7 @@ Native Kotlin / Jetpack Compose app for **phones, tablets, and Android TV**. Por
 - **Search** — TMDB multi-search
 - **Details + Play** — IMDb-backed Stremio addon streams via Media3 (ExoPlayer + HLS)
 - **Stremio addons** — install/remove manifests (defaults to `https://dlstreams.top/manifest.json`)
-- **IPTV** — Xtream Codes login, live categories & channels
+- **IPTV** — full Xtream live / movies / series + M3U playlists, favorites, short EPG
 - **Dual UI** — bottom nav on phone; side nav + D-pad focus on Android TV
 - Leanback launcher + phone launcher in one APK
 
