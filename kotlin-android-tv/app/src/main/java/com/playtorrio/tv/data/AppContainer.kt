@@ -2,6 +2,7 @@ package com.playtorrio.tv.data
 
 import android.content.Context
 import com.playtorrio.tv.data.iptv.IptvRepository
+import com.playtorrio.tv.data.iptv.IptvScraper
 import com.playtorrio.tv.data.prefs.PrefsRepository
 import com.playtorrio.tv.data.stremio.StremioRepository
 import com.playtorrio.tv.data.tmdb.TmdbRepository
@@ -20,6 +21,7 @@ class AppContainer(context: Context) {
     val prefs = PrefsRepository(context)
     val tmdb = TmdbRepository(http)
     val stremio = StremioRepository(http, prefs)
-    val iptv = IptvRepository(http, prefs)
+    val scraper = IptvScraper(http)
+    val iptv = IptvRepository(http, prefs, scraper)
     val watchHistory = WatchHistoryRepository(prefs)
 }

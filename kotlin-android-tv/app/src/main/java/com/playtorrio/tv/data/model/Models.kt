@@ -168,6 +168,64 @@ data class IptvEpgEntry(
     val end: String? = null,
 )
 
+
+@Serializable
+data class IptvPortal(
+    val url: String,
+    val username: String,
+    val password: String,
+    val source: String = "",
+) {
+    val key: String get() = "$url|$username|$password".lowercase()
+    val credKey: String get() = "$username|$password".lowercase()
+}
+
+@Serializable
+data class VerifiedPortal(
+    val portal: IptvPortal,
+    val name: String = "",
+    val expiry: String = "",
+    val maxConnections: String = "1",
+    val activeConnections: String = "0",
+) {
+    val key: String get() = portal.key
+}
+
+@Serializable
+data class ScrapePage(
+    val portals: List<IptvPortal> = emptyList(),
+    val nextAfter: String? = null,
+    val error: String? = null,
+) {
+    val hasMore: Boolean get() = !nextAfter.isNullOrBlank()
+}
+
+@Serializable
+data class TvGuideSlot(
+    val portal: VerifiedPortal,
+    val channel: IptvChannel,
+    val programs: List<IptvEpgProgram> = emptyList(),
+) {
+    val host: String
+        get() = runCatching {
+            java.net.URI(portal.portal.url).host.orEmpty()
+        }.getOrDefault(portal.portal.url)
+}
+
+@Serializable
+data class IptvEpgProgram(
+    val title: String,
+    val description: String = "",
+    val startMs: Long = 0,
+    val stopMs: Long = 0,
+) {
+    val isNow: Boolean
+        get() {
+            val now = System.currentTimeMillis()
+            return now in startMs until stopMs
+        }
+}
+
 @Serializable
 data class TmdbPagedResponse(
     val results: List<TmdbResult> = emptyList(),
