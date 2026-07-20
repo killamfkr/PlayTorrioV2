@@ -93,8 +93,9 @@ Future<void> bootstrap() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.playtorrio.native.channel.audio',
       androidNotificationChannelName: 'Media playback',
+      // Ongoing requires stopForegroundOnPause=true (audio_service assertion).
       androidNotificationOngoing: true,
-      androidStopForegroundOnPause: false,
+      androidStopForegroundOnPause: true,
       androidResumeOnClick: true,
       fastForwardInterval: Duration(seconds: 30),
       rewindInterval: Duration(seconds: 30),

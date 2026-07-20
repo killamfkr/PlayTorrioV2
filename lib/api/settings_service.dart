@@ -322,6 +322,15 @@ class SettingsService {
   static final ValueNotifier<bool> continuePlaybackInBackgroundNotifier =
       ValueNotifier<bool>(true);
 
+  /// Incremented when preferences change from the TV LAN “phone remote” page so
+  /// Settings (and similar listeners) can reload from disk.
+  static final ValueNotifier<int> remoteLanSettingsRevision =
+      ValueNotifier<int>(0);
+
+  static void bumpRemoteLanSettingsRevision() {
+    remoteLanSettingsRevision.value++;
+  }
+
   // External player setting
   static const String _externalPlayerKey = 'external_player';
 
@@ -378,6 +387,26 @@ class SettingsService {
   Future<void> setPlaytorrioProfileGateEnabled(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_ptProfileGateKey, v);
+  }
+
+  /// Normalizes profile display [name] from stored JSON (handles String, List, etc.).
+  /// Avoids `as String?` crashes when prefs or merges contain unexpected shapes.
+  static String? coerceProfileDisplayName(dynamic v) {
+    if (v == null) return null;
+    if (v is String) {
+      final t = v.trim();
+      return t.isEmpty ? null : t;
+    }
+    if (v is List) {
+      final parts = v
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (parts.isEmpty) return null;
+      return parts.join(' ');
+    }
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
   }
 
   /// Local only: { "1": {"name": "....", "avatar": 0}, ... } for the picker UI.
