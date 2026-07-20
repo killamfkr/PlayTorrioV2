@@ -5,9 +5,16 @@ import com.playtorrio.tv.data.model.IptvChannel
 import com.playtorrio.tv.data.model.IptvCredentials
 import com.playtorrio.tv.data.model.IptvEpisode
 import com.playtorrio.tv.data.model.IptvEpgEntry
+import com.playtorrio.tv.data.model.IptvEpgProgram
+import com.playtorrio.tv.data.model.IptvPortal
 import com.playtorrio.tv.data.model.IptvSeries
+import com.playtorrio.tv.data.model.TvGuideSlot
+import com.playtorrio.tv.data.model.VerifiedPortal
 import com.playtorrio.tv.data.prefs.PrefsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -30,6 +37,7 @@ import java.util.Base64
 class IptvRepository(
     private val http: OkHttpClient,
     private val prefs: PrefsRepository,
+    private val scraper: IptvScraper = IptvScraper(http),
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -69,6 +77,10 @@ class IptvRepository(
                 password = password,
             )
             prefs.saveIptvCredentials(creds)
+            // Also keep as verified portal for TV Guide starring
+            runCatching {
+                verifyAndSave(IptvPortal(url = base, username = username, password = password, source = "manual"))
+            }
             creds
         }
 
@@ -276,6 +288,182 @@ class IptvRepository(
     private fun attr(line: String, key: String): String? {
         val re = Regex("""$key="([^"]*)"""")
         return re.find(line)?.groupValues?.getOrNull(1)
+    }
+
+    // ── Catalog scraper + verified portals + TV Guide ───────────────────
+
+    suspend fun scrapeCatalog(
+        source: CatalogSource,
+        maxPages: Int = 3,
+        onStatus: (String) -> Unit = {},
+    ): List<IptvPortal> = withContext(Dispatchers.IO) {
+        val all = linkedMapOf<String, IptvPortal>()
+        var after: String? = null
+        for (page in 0 until maxPages) {
+            onStatus("Scraping page ${page + 1}…")
+            val result = scraper.scrapePage(source, after)
+            if (result.error != null && result.portals.isEmpty()) {
+                onStatus(result.error)
+                break
+            }
+            result.portals.forEach { all.putIfAbsent(it.key, it) }
+            after = result.nextAfter
+            if (after.isNullOrBlank()) break
+        }
+        onStatus("Found ${all.size} portal candidate(s)")
+        all.values.toList()
+    }
+
+    suspend fun verifiedPortals(): List<VerifiedPortal> = prefs.getVerifiedPortals()
+
+    suspend fun clearVerifiedPortals() = prefs.clearVerifiedPortals()
+
+    suspend fun verifyAndSave(portal: IptvPortal): VerifiedPortal = withContext(Dispatchers.IO) {
+        val url = "${portal.url.trimEnd('/')}/player_api.php".toHttpUrl().newBuilder()
+            .addQueryParameter("username", portal.username)
+            .addQueryParameter("password", portal.password)
+            .build()
+        val body = get(url.toString())
+        val root = json.parseToJsonElement(body).jsonObject
+        val info = root["user_info"]?.jsonObject ?: root
+        val auth = info["auth"]?.jsonPrimitive?.contentOrNull
+        val status = info["status"]?.jsonPrimitive?.contentOrNull?.lowercase()
+        val ok = auth == "1" || status == "active" || root.containsKey("user_info")
+        if (!ok) error("Portal login failed")
+        val verified = VerifiedPortal(
+            portal = portal,
+            name = info.str("username") ?: portal.username,
+            expiry = info.str("exp_date").orEmpty(),
+            maxConnections = info.str("max_connections") ?: "1",
+            activeConnections = info.str("active_cons") ?: "0",
+        )
+        val next = prefs.getVerifiedPortals()
+            .filterNot { it.key == verified.key || it.portal.credKey == verified.portal.credKey } +
+            verified
+        prefs.saveVerifiedPortals(next)
+        verified
+    }
+
+    /** Verify up to [target] alive portals from [candidates] (parallelism 4). */
+    suspend fun verifyBatch(
+        candidates: List<IptvPortal>,
+        target: Int = 5,
+        onProgress: (checked: Int, alive: Int) -> Unit = { _, _ -> },
+    ): List<VerifiedPortal> = coroutineScope {
+        val alive = mutableListOf<VerifiedPortal>()
+        var checked = 0
+        val queue = candidates.toMutableList()
+        while (queue.isNotEmpty() && alive.size < target) {
+            val batch = List(minOf(4, queue.size)) { queue.removeAt(0) }
+            val results = batch.map { p ->
+                async(Dispatchers.IO) {
+                    runCatching { verifyAndSave(p) }.getOrNull()
+                }
+            }.awaitAll()
+            checked += batch.size
+            results.filterNotNull().forEach { alive += it }
+            onProgress(checked, alive.size)
+        }
+        alive
+    }
+
+
+    suspend fun openVerifiedAsSession(v: VerifiedPortal): IptvCredentials {
+        val creds = IptvCredentials(
+            type = "xtream",
+            serverUrl = v.portal.url.trimEnd('/'),
+            username = v.portal.username,
+            password = v.portal.password,
+        )
+        prefs.saveIptvCredentials(creds)
+        return creds
+    }
+
+    suspend fun guideFavoriteIds(portalKey: String): Set<String> =
+        prefs.getGuideFavoriteIds(portalKey)
+
+    suspend fun toggleGuideFavorite(portalKey: String, streamId: String): Set<String> {
+        val cur = prefs.getGuideFavoriteIds(portalKey).toMutableSet()
+        if (!cur.add(streamId)) cur.remove(streamId)
+        prefs.saveGuideFavoriteIds(portalKey, cur)
+        return cur
+    }
+
+    /** Build TV Guide slots from starred live channels across verified portals. */
+    suspend fun buildTvGuideSlots(): List<TvGuideSlot> = withContext(Dispatchers.IO) {
+        val portals = prefs.getVerifiedPortals()
+        val slots = mutableListOf<TvGuideSlot>()
+        for (v in portals) {
+            val favIds = prefs.getGuideFavoriteIds(v.key)
+            if (favIds.isEmpty()) continue
+            val creds = IptvCredentials(
+                type = "xtream",
+                serverUrl = v.portal.url.trimEnd('/'),
+                username = v.portal.username,
+                password = v.portal.password,
+            )
+            val live = runCatching { liveStreams(creds, null) }.getOrDefault(emptyList())
+            val byId = live.associateBy { it.streamId }
+            for (id in favIds) {
+                val ch = byId[id] ?: IptvChannel(
+                    streamId = id,
+                    name = "Starred channel",
+                    playUrl = "${creds.serverUrl}/live/${enc(creds.username)}/${enc(creds.password)}/$id.ts",
+                    kind = "live",
+                    containerExtension = "ts",
+                )
+                val programs = runCatching {
+                    shortEpgPrograms(creds, ch.streamId, limit = 6)
+                }.getOrDefault(emptyList())
+                slots += TvGuideSlot(portal = v, channel = ch, programs = programs)
+            }
+        }
+        slots.sortedWith(
+            compareBy({ it.portal.name.ifBlank { it.portal.portal.username } }, { it.channel.name }),
+        )
+    }
+
+    suspend fun shortEpgPrograms(
+        creds: IptvCredentials,
+        streamId: String,
+        limit: Int = 12,
+    ): List<IptvEpgProgram> = withContext(Dispatchers.IO) {
+        if (creds.isM3u || streamId.isBlank()) return@withContext emptyList()
+        runCatching {
+            val body = get(
+                api(creds, "get_short_epg", mapOf("stream_id" to streamId, "limit" to "$limit")),
+            )
+            val root = json.parseToJsonElement(body)
+            val arr = when {
+                root is JsonObject -> root["epg_listings"]?.jsonArray
+                else -> null
+            } ?: return@runCatching emptyList()
+            arr.mapNotNull { el ->
+                val o = el as? JsonObject ?: return@mapNotNull null
+                val start = parseEpgTs(o["start_timestamp"]) ?: parseEpgTs(o["start"])
+                    ?: return@mapNotNull null
+                val stop = parseEpgTs(o["stop_timestamp"]) ?: parseEpgTs(o["end"])
+                    ?: return@mapNotNull null
+                IptvEpgProgram(
+                    title = decodeMaybeBase64(o.str("title").orEmpty()).ifBlank { "Program" },
+                    description = decodeMaybeBase64(o.str("description").orEmpty()),
+                    startMs = start,
+                    stopMs = stop,
+                )
+            }.sortedBy { it.startMs }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun parseEpgTs(v: kotlinx.serialization.json.JsonElement?): Long? {
+        val s = v?.jsonPrimitive?.contentOrNull ?: return null
+        val secs = s.toLongOrNull()
+        if (secs != null && secs > 1_000_000_000L) return secs * 1000L
+        return runCatching {
+            java.time.LocalDateTime.parse(s.replace(' ', 'T'))
+                .atZone(java.time.ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        }.getOrNull()
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
