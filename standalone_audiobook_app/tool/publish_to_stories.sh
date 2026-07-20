@@ -16,7 +16,7 @@ fi
 echo "Splitting standalone_audiobook_app/ → branch $BRANCH"
 git subtree split --prefix=standalone_audiobook_app -b "$BRANCH"
 
-echo "Pushing to $STORIES_REPO (main)"
-git push "$STORIES_REPO" "$BRANCH:main"
+echo "Pushing to $STORIES_REPO (main, force — fresh subtree history each run)"
+git push --force "$STORIES_REPO" "$BRANCH:main"
 
 echo "Done: https://github.com/killamfkr/Stories"

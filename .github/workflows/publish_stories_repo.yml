@@ -9,8 +9,8 @@
 #      New secret: STORIES_PUSH_TOKEN = that token
 #   3. Actions → "Publish Stories repo" → Run workflow
 #
-# Works even when Stories is an empty repo (no main branch yet).
-# By default .github/workflows is omitted so a Contents-only token works.
+# Works on an empty Stories repo or when republishing over an existing main branch.
+# Each run replaces Stories/main with the current standalone_audiobook_app/ snapshot.
 
 name: Publish Stories repo
 
@@ -48,7 +48,7 @@ jobs:
             rm -rf stories-export/.github
           fi
 
-      - name: Push to killamfkr/Stories (creates main if repo is empty)
+      - name: Push to killamfkr/Stories (replaces main)
         env:
           STORIES_PUSH_TOKEN: ${{ secrets.STORIES_PUSH_TOKEN }}
         run: |
@@ -63,4 +63,5 @@ jobs:
           git add -A
           git commit -m "Publish Stories from PlayTorrioV2"
           git remote add origin "https://x-access-token:${STORIES_PUSH_TOKEN}@github.com/killamfkr/Stories.git"
-          git push -u origin main
+          # Fresh history each run — force replaces remote main (mirror of PlayTorrioV2).
+          git push --force origin main
