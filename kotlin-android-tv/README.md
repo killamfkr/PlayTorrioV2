@@ -1,42 +1,50 @@
-# PlayTorrio TV (Kotlin)
+# PlayTorrio (Kotlin) — Android & Android TV
 
-Native **Android TV** shell for PlayTorrio, intended as a **separate repository** from the Flutter codebase.
+Native Kotlin / Jetpack Compose app for **phones, tablets, and Android TV**. Port of the core PlayTorrio streaming experience from the Flutter app.
 
-This is a **starting point**: Gradle project, TV manifest, Compose for TV navigation scaffold, and package `com.playtorrio.tv`. Port features incrementally from the Flutter app.
+**Package:** `com.playtorrio.tv`
 
-## Use as another repository
+## Features
 
-```bash
-cd /path/to/parent
-cp -r path/to/PlayTorrioV2/kotlin-android-tv playtorrio-android-tv
-cd playtorrio-android-tv
-git init
-git add .
-git commit -m "Initial Android TV Kotlin scaffold"
-git remote add origin https://github.com/YOUR_ORG/playtorrio-android-tv.git
-git push -u origin main
-```
-
-Or create an empty repo on GitHub and push this folder’s contents into it.
+- **Home** — TMDB trending / popular / now playing / top rated, continue watching
+- **Search** — TMDB multi-search
+- **Details + Play** — IMDb-backed Stremio addon streams via Media3 (ExoPlayer + HLS)
+- **Stremio addons** — install/remove manifests (defaults to `https://dlstreams.top/manifest.json`)
+- **IPTV** — Xtream Codes login, live categories & channels
+- **Dual UI** — bottom nav on phone; side nav + D-pad focus on Android TV
+- Leanback launcher + phone launcher in one APK
 
 ## Open in Android Studio
 
-1. **File → Open** → select the `kotlin-android-tv` directory (not the Flutter repo root).
-2. Let Gradle sync. If `gradlew` is missing, Android Studio usually generates it; or install Gradle locally and run `gradle wrapper --gradle-version 8.9` in this folder.
-3. Run on an **Android TV** emulator or device (API 24+).
+1. **File → Open** → select this `kotlin-android-tv` directory (not the Flutter repo root).
+2. Sync Gradle, then run on a phone emulator, device, or Android TV emulator (API 24+).
 
-## What’s included
+```bash
+./gradlew :app:assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
 
-- `LEANBACK` launcher, touchscreen not required, TV banner.
-- Jetpack **Compose** + **Compose Material3** + TV-friendly theme.
-- Min SDK **24**, compile/target **35**, Kotlin **2.0**, Java **17**.
+./gradlew :app:assembleRelease
+```
 
-## Next steps (suggested)
+## Architecture
 
-- Integrate **media playback** (e.g. Media3 / ExoPlayer) for IPTV and local streams.
-- Add **Supabase** Kotlin client for auth + sync (mirror `PlaytorrioCloudSyncService` concepts).
-- Implement **browse / details** flows using `androidx.tv` libraries when you adopt the TV-specific UI kit.
+```
+app/src/main/java/com/playtorrio/tv/
+  data/          TMDB, Stremio, IPTV, prefs, watch history
+  ui/            Compose screens + Media3 PlayerActivity
+  util/          TV detection
+```
+
+Streams use the Stremio protocol: `{addon}/stream/movie|series/{imdbId[:s:e]}.json` with optional `behaviorHints.proxyHeaders.request` passed into ExoPlayer.
+
+## Split into its own repo
+
+```bash
+cp -r kotlin-android-tv playtorrio-android-native
+cd playtorrio-android-native
+git init && git add . && git commit -m "PlayTorrio Kotlin Android + TV"
+```
 
 ## License
 
-Match the parent PlayTorrio project’s license when you split this into its own repo.
+Same as the parent PlayTorrio project.
