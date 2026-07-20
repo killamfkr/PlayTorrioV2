@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.PlayTorrioTV" parent="android:Theme.Material.NoActionBar.Fullscreen">
+    <style name="Theme.PlayTorrioTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/pt_bg</item>
+        <item name="android:statusBarColor">@color/pt_bg</item>
+        <item name="android:navigationBarColor">@color/pt_bg</item>
+        <item name="android:colorPrimary">@color/pt_accent</item>
+    </style>
+    <style name="Theme.PlayTorrioTV.Player" parent="Theme.PlayTorrioTV">
+        <item name="android:windowFullscreen">true</item>
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 </resources>

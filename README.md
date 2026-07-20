@@ -114,6 +114,17 @@ flutter build linux
 flutter build apk
 ```
 
+### Native Kotlin (Android + Android TV)
+
+A Compose / Media3 port of the core browse → Stremio streams → play + IPTV flow lives in [`kotlin-android-tv/`](kotlin-android-tv/):
+
+```
+cd kotlin-android-tv
+./gradlew :app:assembleDebug
+```
+
+Open that folder in Android Studio (not the Flutter root). Phone and Android TV share one APK (`com.playtorrio.tv`).
+
 ### Web (experimental)
 
 A **browser build** is supported for browsing and streaming where the platform allows (no magnet/torrent engine, no local Shelf proxy, simplified player, some tabs stubbed). Build static files with:

@@ -12,3 +12,9 @@ captures/
 *.ap_
 *.dex
 *.class
+
+.gradle/
+build/
+**/build/
+local.properties
+*.apk
