@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../api/manga_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/tv_interactive.dart';
 
 class MangaReaderScreen extends StatefulWidget {
   final Manga manga;

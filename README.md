@@ -26,8 +26,9 @@ Made by [ayman708-UX](https://github.com/ayman708-UX), updates made by [killamfk
 - **WebStreamr** — on-device embed scraper as a streaming source (country/extractor toggles in settings)
 - Real-Debrid and TorBox integration
 - Auto-resume and watch history tracking
-- **Trakt** and **Simkl** integration
+- **Trakt** and **Simkl** integration (Pull imports history; Push is separate and confirmed)
 - Jellyfin server integration
+- **Chromecast** — cast from the built-in player (optional Android hardware transcode in Settings)
 
 ### Live TV (Stremio)
 
@@ -70,18 +71,24 @@ Three related tabs; hide or reorder any of them in **Settings → Navigation**:
 - Comics support with history
 - Books library
 - Anime browsing and streaming
+- **Asian Drama** — KissKh / Videasy / Vidsrc browsing and playback
+
+### Media Downloader
+
+- Dedicated **Media Downloader** tab for grabbing streams and saving media locally
 
 ### Cloud & account
 
 - **PlayTorrio Cloud** — optional Supabase-backed sync for watch progress, app settings, and audiobook bookmarks (sign in from Settings)
-- **Trakt** — connect your Trakt account for history and stats
+- **Trakt** — **Pull from Trakt** imports watched history without rewriting Trakt dates; **Push to Trakt** is a separate confirmed action
 
 ### Other
 
 - **Magnet** tab — paste a magnet link and play
 - Torrent search with Prowlarr/Jackett integration
 - Customizable bottom/side navigation (show, hide, reorder tabs)
-- **Android TV** — TV-optimized focus handling and LAN settings import from your phone
+- **Android TV** — TV-optimized focus handling, QR/settings import from your phone
+- **Lock screen / notifications** — media session controls while video plays in the background (Android)
 - Cross-platform: **Windows**, **Linux**, **macOS**, **Android**
 - Dark theme because obviously
 

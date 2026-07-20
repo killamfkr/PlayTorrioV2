@@ -9,6 +9,7 @@ import '../data/models.dart';
 import '../m3u/m3u_playlists_screen.dart';
 import 'iptv_pt_player_screen.dart';
 import 'iptv_pt_tv_guide_view.dart';
+import '../../../../widgets/tv_interactive.dart';
 
 /// Mask a URL for safe display: keeps host, masks each path segment to first 2 chars + ***.
 /// Returns '—' for empty/invalid input. Strips query and fragment.
@@ -278,7 +279,7 @@ class _PrimaryButton extends StatelessWidget {
                 : Colors.transparent,
           ),
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: busy ? null : onPressed,
           child: Padding(
@@ -723,7 +724,7 @@ class _PortalCard extends StatelessWidget {
             ),
           ],
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           onLongPress: onLongPress,
@@ -956,7 +957,7 @@ class _SectionTile extends StatelessWidget {
             ),
           ],
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: onTap,
           child: Center(
@@ -1281,7 +1282,7 @@ class _BrowserViewState extends State<_BrowserView> {
         itemBuilder: (_, i) {
           final c = cats[i];
           final selected = c.id == ctrl.browserSelectedCategoryId;
-          return InkWell(
+          return TvInkWell(
             onTap: () => ctrl.selectBrowserCategory(c.id),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1419,7 +1420,7 @@ class _StreamCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           onLongPress: stream.kind == 'live'
@@ -1794,7 +1795,7 @@ class _EpisodeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: TvInkWell(
         borderRadius: BorderRadius.circular(10),
         onTap: () {
           final p = ctrl.activePortal;
@@ -2017,7 +2018,7 @@ class _ChannelTile extends StatelessWidget {
             ),
           ],
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           child: Padding(
@@ -2485,7 +2486,7 @@ class _ChannelHitCard extends StatelessWidget {
             width: selected ? 2 : 1,
           ),
         ),
-        child: InkWell(
+        child: TvInkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           onLongPress: onLongPress,

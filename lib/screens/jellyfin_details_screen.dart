@@ -4,6 +4,7 @@ import 'package:shimmer/shimmer.dart';
 import '../services/jellyfin_service.dart';
 import '../utils/app_theme.dart';
 import 'player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 // ─── Jellyfin Palette ────────────────────────────────────────────────────────
 const _jfBlue = Color(0xFF00A4DC);
@@ -375,7 +376,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
       surfaceTintColor: Colors.transparent,
       leading: Padding(
         padding: const EdgeInsets.all(8),
-        child: GestureDetector(
+        child: TvGestureTap(
           onTap: () => Navigator.pop(context),
           child: Container(
             decoration: BoxDecoration(
@@ -391,7 +392,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
         // Favorite
         Padding(
           padding: const EdgeInsets.all(8),
-          child: GestureDetector(
+          child: TvGestureTap(
             onTap: () async {
               await _jf.toggleFavorite(item.id, item.isFavorite);
               if (mounted) _loadDetails();
@@ -414,7 +415,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
         // Watched
         Padding(
           padding: const EdgeInsets.only(right: 8, top: 8, bottom: 8),
-          child: GestureDetector(
+          child: TvGestureTap(
             onTap: () async {
               if (item.isPlayed) {
                 await _jf.markUnplayed(item.id);
@@ -577,7 +578,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
           ],
           // Overview
           if (item.overview != null && item.overview!.isNotEmpty) ...[
-            GestureDetector(
+            TvGestureTap(
               onTap: () => setState(() => _overviewExpanded = !_overviewExpanded),
               child: AnimatedCrossFade(
                 firstChild: Text(item.overview!,
@@ -596,7 +597,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
             if (item.overview!.length > 200)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: GestureDetector(
+                child: TvGestureTap(
                   onTap: () => setState(() => _overviewExpanded = !_overviewExpanded),
                   child: Text(
                     _overviewExpanded ? 'Show less' : 'Show more',
@@ -624,7 +625,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
           SizedBox(
             width: double.infinity,
             height: 52,
-            child: GestureDetector(
+            child: TvGestureTap(
               onTap: () => _playItem(item),
               child: Container(
                 decoration: BoxDecoration(
@@ -654,7 +655,7 @@ class _JellyfinDetailsScreenState extends State<JellyfinDetailsScreen> {
             SizedBox(
               width: double.infinity,
               height: 48,
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () => _playResume(item),
                 child: Container(
                   decoration: BoxDecoration(

@@ -1341,18 +1341,80 @@ class TraktService {
     return imported;
   }
 
-  /// Export all locally marked watched episodes to Trakt history.
-  Future<int> exportWatchedEpisodes() async {
+  static String episodeKey(int tmdbId, int season, int episode) =>
+      '${tmdbId}_S${season}_E$episode';
+
+  /// Episode keys already present in the user's Trakt watch history.
+  Future<Set<String>> getTraktWatchedEpisodeKeys() async {
+    final token = await _getValidToken();
+    if (token == null) return {};
+
+    final keys = <String>{};
+    try {
+      final resp = await http.get(
+        Uri.parse('$_baseUrl/sync/watched/shows'),
+        headers: await _authHeaders(token),
+      );
+      if (resp.statusCode != 200) return keys;
+
+      final List shows = json.decode(resp.body);
+      for (final show in shows) {
+        final showData = show['show'] as Map<String, dynamic>? ?? {};
+        final ids = showData['ids'] as Map<String, dynamic>? ?? {};
+        final tmdbId = ids['tmdb'] as int?;
+        if (tmdbId == null) continue;
+
+        final seasons = show['seasons'] as List? ?? [];
+        for (final s in seasons) {
+          final sNum = s['number'] as int? ?? 0;
+          if (sNum == 0) continue;
+          final episodes = s['episodes'] as List? ?? [];
+          for (final ep in episodes) {
+            final eNum = ep['number'] as int? ?? 0;
+            if (eNum == 0) continue;
+            keys.add(episodeKey(tmdbId, sNum, eNum));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Trakt] getTraktWatchedEpisodeKeys error: $e');
+    }
+    return keys;
+  }
+
+  /// Pull Trakt data into PlayTorrio (safe default — does not write to Trakt).
+  Future<({int watchlist, int playback, int episodes})> importAllFromTrakt() async {
+    final watchlist = await importWatchlistToMyList();
+    final playback = await importPlaybackToWatchHistory();
+    final episodes = await importWatchedEpisodes();
+    return (watchlist: watchlist, playback: playback, episodes: episodes);
+  }
+
+  /// Push local PlayTorrio data to Trakt. Episode history only includes
+  /// episodes marked watched in-app that are not already on Trakt (avoids
+  /// re-stamping watched dates on login round-trips).
+  Future<({int watchlist, int episodes})> exportAllToTrakt() async {
+    final watchlist = await exportMyListToWatchlist();
+    final episodes = await exportWatchedEpisodes(onlyNotOnTrakt: true);
+    return (watchlist: watchlist, episodes: episodes);
+  }
+
+  /// Export locally marked watched episodes to Trakt history.
+  Future<int> exportWatchedEpisodes({bool onlyNotOnTrakt = true}) async {
     final token = await _getValidToken();
     if (token == null) return 0;
 
     final cache = await _getEpisodeWatchedCache();
     if (cache.isEmpty) return 0;
 
+    final alreadyOnTrakt =
+        onlyNotOnTrakt ? await getTraktWatchedEpisodeKeys() : <String>{};
+
     // Group by tmdbId
     final Map<int, List<Map<String, int>>> grouped = {};
     for (final key in cache.keys) {
       if (cache[key] != true) continue;
+      if (onlyNotOnTrakt && alreadyOnTrakt.contains(key)) continue;
       final match = RegExp(r'^(\d+)_S(\d+)_E(\d+)$').firstMatch(key);
       if (match == null) continue;
       final tmdbId = int.parse(match.group(1)!);
@@ -1360,6 +1422,11 @@ class TraktService {
       final episode = int.parse(match.group(3)!);
       grouped.putIfAbsent(tmdbId, () => []);
       grouped[tmdbId]!.add({'season': season, 'episode': episode});
+    }
+
+    if (grouped.isEmpty) {
+      debugPrint('[Trakt] No new local episodes to export');
+      return 0;
     }
 
     int exported = 0;

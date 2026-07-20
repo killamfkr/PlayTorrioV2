@@ -54,6 +54,7 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         pipCallbackHelper.configureFlutterEngine(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
+        CastHwTranscodeChannel.register(flutterEngine, this)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.example.play_torrio_native/device",

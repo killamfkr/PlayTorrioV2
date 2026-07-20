@@ -6,6 +6,7 @@ import '../services/iptv_service.dart';
 import '../models/iptv_category.dart';
 import '../models/iptv_series.dart';
 import 'series_detail_screen.dart';
+import '../../../widgets/tv_interactive.dart';
 
 class IptvShowsScreen extends StatefulWidget {
   const IptvShowsScreen({super.key});
@@ -289,7 +290,7 @@ class _SeriesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return TvGestureTap(
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -381,7 +382,7 @@ class _CategoryArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Padding(

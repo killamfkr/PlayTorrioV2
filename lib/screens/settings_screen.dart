@@ -28,6 +28,7 @@ import 'epg_channel_mapping_screen.dart';
 import 'settings_export.dart';
 import 'webstreamr_settings_screen.dart';
 import '../services/playtorrio_cloud_sync_service.dart';
+import '../widgets/tv_interactive.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -121,6 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _continuePlaybackInBackground = true;
   bool _showAndroidPipButton = true;
   bool _autoEnterPipAndroid = false;
+  bool _androidCastHwTranscode = false;
   bool _builtinPlayerSubtitlesEnabled = true;
   bool _autoAdvanceNextEpisode = false;
 
@@ -129,6 +131,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// LAN URL with token for phone → TV settings import (Android TV).
   String? _tvRemoteSettingsUrl;
+
+  bool _tvRemoteBusy = false;
 
   // PlayTorrio cloud (your Supabase project — email/password)
   final TextEditingController _ptCloudEmailController = TextEditingController();
@@ -147,7 +151,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    SettingsService.remoteLanSettingsRevision
+        .addListener(_onRemoteLanSettingsRevision);
     _loadSettings();
+  }
+
+  void _onRemoteLanSettingsRevision() {
+    if (mounted) _loadSettings();
+  }
+
+  Future<void> _retryTvRemoteLanServer() async {
+    setState(() => _tvRemoteBusy = true);
+    try {
+      await TvSettingsRemoteService().ensureStarted();
+      await TvSettingsRemoteService().refreshLanIp();
+      await _loadSettings();
+    } finally {
+      if (mounted) setState(() => _tvRemoteBusy = false);
+    }
+  }
+
+  Future<void> _restartTvRemoteLanServer() async {
+    setState(() => _tvRemoteBusy = true);
+    try {
+      await TvSettingsRemoteService().restart();
+      await TvSettingsRemoteService().refreshLanIp();
+      await _loadSettings();
+    } finally {
+      if (mounted) setState(() => _tvRemoteBusy = false);
+    }
   }
 
   String _androidTvStreamBitrateLabel() {
@@ -232,6 +264,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final bgPlay = await _settings.continuePlaybackInBackground();
     final pipBtn = await _settings.showAndroidPipButton();
     final autoPip = await _settings.autoEnterPipAndroid();
+    final castHw =
+        platformIsAndroid ? await _settings.androidCastHwTranscodeEnabled() : false;
     final builtinSubs = await _settings.getBuiltinPlayerSubtitlesEnabled();
     final autoNextEp = await _settings.getAutoAdvanceNextEpisode();
     final tvBitrateCap = platformIsAndroid && DeviceProfile.isAndroidTv
@@ -317,6 +351,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _continuePlaybackInBackground = bgPlay;
         _showAndroidPipButton = pipBtn;
         _autoEnterPipAndroid = autoPip;
+        _androidCastHwTranscode = castHw;
         _builtinPlayerSubtitlesEnabled = builtinSubs;
         _autoAdvanceNextEpisode = autoNextEp;
         if (platformIsAndroid && DeviceProfile.isAndroidTv) {
@@ -336,9 +371,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildTvRemoteSettingsCard() {
+  Widget _buildAndroidTvPhoneRemoteSection() {
     final url = _tvRemoteSettingsUrl;
-    if (url == null) return const SizedBox.shrink();
     return FocusableControl(
       onTap: () {},
       scaleOnFocus: 1.0,
@@ -348,37 +382,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Edit settings from your phone',
+              'QR link for your phone',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Scan with your phone on the same Wi‑Fi. The QR encodes this TV’s real LAN address (not a placeholder). Paste exported settings JSON to import; the URL includes a secret token.',
-              style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.35),
+            Text(
+              _tvRemoteBusy
+                  ? 'Working…'
+                  : 'Your remote highlights focused controls on TV; use a phone browser for long text, imports, and quick toggles. Stay on the same Wi‑Fi.',
+              style: const TextStyle(
+                  fontSize: 13, color: Colors.white54, height: 1.35),
             ),
             const SizedBox(height: 16),
-            Center(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: QrImageView(
-                    data: url,
-                    version: QrVersions.auto,
-                    size: 200,
-                    gapless: true,
+            if (url != null) ...[
+              Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: QrImageView(
+                      data: url,
+                      version: QrVersions.auto,
+                      size: 260,
+                      gapless: true,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            SelectableText(
-              url,
-              style: const TextStyle(fontSize: 11, color: Colors.white38),
-            ),
+              const SizedBox(height: 12),
+              SelectableText(
+                url,
+                style: const TextStyle(fontSize: 11, color: Colors.white38),
+              ),
+              const SizedBox(height: 12),
+              FocusableControl(
+                onTap: _tvRemoteBusy ? () {} : _restartTvRemoteLanServer,
+                scaleOnFocus: 1.0,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.refresh_rounded,
+                        color: AppTheme.primaryColor
+                            .withValues(alpha: _tvRemoteBusy ? 0.35 : 1),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _tvRemoteBusy
+                              ? 'Please wait…'
+                              : 'New QR & link (invalidates old phone bookmarks)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white
+                                .withValues(alpha: _tvRemoteBusy ? 0.4 : 1),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              const Text(
+                'LAN settings server did not start (no Wi‑Fi IPv4, or ports 8787–8792 busy).',
+                style: TextStyle(fontSize: 13, color: Colors.white54),
+              ),
+              const SizedBox(height: 12),
+              FocusableControl(
+                onTap: _tvRemoteBusy ? () {} : _retryTvRemoteLanServer,
+                scaleOnFocus: 1.0,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.wifi_find_rounded,
+                        color: AppTheme.primaryColor
+                            .withValues(alpha: _tvRemoteBusy ? 0.35 : 1),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _tvRemoteBusy
+                              ? 'Please wait…'
+                              : 'Retry — connect Wi‑Fi, then try again',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white
+                                .withValues(alpha: _tvRemoteBusy ? 0.4 : 1),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -416,6 +524,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    SettingsService.remoteLanSettingsRevision
+        .removeListener(_onRemoteLanSettingsRevision);
     _addonController.dispose();
     _xmltvEpgUrlController.dispose();
     _torboxController.dispose();
@@ -512,6 +622,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.all(24),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate([
+                    if (platformIsAndroid && DeviceProfile.isAndroidTv) ...[
+                      _buildSectionHeader('Phone remote control'),
+                      _buildAndroidTvPhoneRemoteSection(),
+                      const SizedBox(height: 32),
+                    ],
                     _buildSectionHeader('Backup & Restore'),
                     _buildBackupRestore(),
                     const SizedBox(height: 32),
@@ -639,6 +754,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             setState(() => _autoEnterPipAndroid = val);
                           },
                         ),
+                        _buildFocusableToggle(
+                          'Chromecast: hardware transcode on phone (Android)',
+                          'Experimental. Uses the phone GPU (MediaCodec H.264) to produce Cast-friendly HLS when direct casting fails. Increases battery use and adds APK size (FFmpeg Kit).',
+                          _androidCastHwTranscode,
+                          (val) async {
+                            await _settings.setAndroidCastHwTranscodeEnabled(val);
+                            setState(() => _androidCastHwTranscode = val);
+                          },
+                        ),
                       ],
                       if (platformIsAndroid && DeviceProfile.isAndroidTv) ...[
                         const SizedBox(height: 16),
@@ -680,10 +804,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           },
                         ),
-                        if (_tvRemoteSettingsUrl != null) ...[
-                          const SizedBox(height: 24),
-                          _buildTvRemoteSettingsCard(),
-                        ],
                       ],
                     ] else ...[
                       const Padding(
@@ -932,7 +1052,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: SafeArea(
           child: DeviceProfile.isAndroidTv
               ? FocusTraversalGroup(
-                  policy: OrderedTraversalPolicy(),
+                  policy: ReadingOrderTraversalPolicy(),
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(context).copyWith(
                       scrollbars: false,
@@ -1152,6 +1272,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'manga':        {'icon': Icons.book,                       'label': 'Manga'},
     'jellyfin':     {'icon': Icons.dns_rounded,                'label': 'Jellyfin'},
     'anime':        {'icon': Icons.play_circle_filled,         'label': 'Anime'},
+    'asian_drama':  {'icon': Icons.video_library_rounded,      'label': 'Asian Drama'},
+    'media_downloader': {'icon': Icons.download_rounded,       'label': 'Media Downloader'},
   };
 
   void _saveNavbarConfig() {
@@ -2608,8 +2730,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SnackBar(content: Text('Logged in to Trakt${username != null ? " as $username" : ""}!')),
           );
         }
-        // Auto-sync after login
-        _syncTrakt();
+        // Import from Trakt only — never push on login (export can restamp dates).
+        _importFromTrakt();
       } else if (result == 'expired' || result == 'denied') {
         timer.cancel();
         if (mounted) {
@@ -2652,24 +2774,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _syncTrakt() async {
+  Future<void> _importFromTrakt() async {
     if (_isTraktSyncing) return;
     setState(() => _isTraktSyncing = true);
 
     try {
-      final watchlistCount = await _trakt.importWatchlistToMyList();
-      final playbackCount = await _trakt.importPlaybackToWatchHistory();
-      final episodesImported = await _trakt.importWatchedEpisodes();
-      final exportedCount = await _trakt.exportMyListToWatchlist();
-      final episodesExported = await _trakt.exportWatchedEpisodes();
+      final result = await _trakt.importAllFromTrakt();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Trakt sync done! Imported $watchlistCount watchlist, '
-              '$playbackCount playback, $episodesImported episodes. '
-              'Exported $exportedCount watchlist, $episodesExported episodes.',
+              'Pulled from Trakt: ${result.watchlist} watchlist, '
+              '${result.playback} in progress, ${result.episodes} watched episodes.',
             ),
             duration: const Duration(seconds: 4),
           ),
@@ -2678,7 +2795,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Trakt sync error: $e')),
+          SnackBar(content: Text('Trakt import error: $e')),
         );
       }
     } finally {
@@ -2686,6 +2803,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _pushToTrakt() async {
+    if (_isTraktSyncing) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Push to Trakt?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This uploads your PlayTorrio My List and any episodes you marked '
+          'watched in the app that are not already on Trakt.\n\n'
+          'It does not upload Continue Watching. Re-sending history Trakt '
+          'already has can change watched dates — only new local marks are pushed.',
+          style: TextStyle(color: Colors.white70, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Push'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isTraktSyncing = true);
+    try {
+      final result = await _trakt.exportAllToTrakt();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Pushed to Trakt: ${result.watchlist} watchlist, '
+              '${result.episodes} new watched episodes.',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Trakt push error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isTraktSyncing = false);
+    }
+  }
   Widget _buildTraktStatsWidget() {
     final stats = _traktStats!;
     final movies = stats['movies'] as Map<String, dynamic>? ?? {};
@@ -2733,7 +2902,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Sync your watchlist and watch history with Trakt.tv',
+            'Pull watchlist, in-progress playback, and watched episodes from Trakt into PlayTorrio. Pushing back is optional and separate.',
             style: TextStyle(fontSize: 13, color: Colors.white54),
           ),
           const SizedBox(height: 8),
@@ -2821,21 +2990,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
             ],
 
-            // Sync button
+            // Pull from Trakt
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isTraktSyncing ? null : () => _syncTrakt(),
+                onPressed: _isTraktSyncing ? null : () => _importFromTrakt(),
                 icon: _isTraktSyncing
                     ? const SizedBox(
                         width: 18, height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Icon(Icons.sync),
-                label: Text(_isTraktSyncing ? 'Syncing...' : 'Sync Now'),
+                    : const Icon(Icons.download_rounded),
+                label: Text(_isTraktSyncing ? 'Syncing...' : 'Pull from Trakt'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isTraktSyncing ? null : () => _pushToTrakt(),
+                icon: const Icon(Icons.upload_rounded),
+                label: const Text('Push to Trakt'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white24),
                   minimumSize: const Size(double.infinity, 50),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
@@ -3413,7 +3597,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           itemBuilder: (context, index) {
             final preset = AppTheme.presets[index];
             final isSelected = preset.id == _selectedThemeId;
-            return GestureDetector(
+            return TvGestureTap(
               onTap: () async {
                 await AppTheme.setPreset(preset.id);
                 setState(() => _selectedThemeId = preset.id);
@@ -3498,11 +3682,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            Switch(
-              value: value,
-              onChanged: onChanged,
-              activeTrackColor: AppTheme.primaryColor,
-            ),
+            DeviceProfile.isAndroidTv
+                ? Focus(
+                    canRequestFocus: false,
+                    skipTraversal: true,
+                    child: Switch(
+                      value: value,
+                      onChanged: onChanged,
+                      activeTrackColor: AppTheme.primaryColor,
+                    ),
+                  )
+                : Switch(
+                    value: value,
+                    onChanged: onChanged,
+                    activeTrackColor: AppTheme.primaryColor,
+                  ),
           ],
         ),
       ),

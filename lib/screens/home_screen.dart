@@ -30,6 +30,7 @@ import '../utils/device_profile.dart';
 import '../utils/dlstreams_top_home.dart';
 import '../utils/performance_tuning.dart';
 import '../widgets/hero_banner.dart';
+import '../widgets/tv_interactive.dart';
 
 /// Converts nested maps from JSON decode into String maps for HTTP headers.
 Map<String, String>? _watchHistoryParseHeaders(dynamic raw) {
@@ -98,6 +99,10 @@ Future<bool> _tryResumeSavedStreamDirect(
         startPosition: startPos,
         stremioId: item['stremioId'] as String?,
         stremioAddonBaseUrl: item['stremioAddonBaseUrl'] as String?,
+        stremioStreamType: StremioService.streamTypeForStremioMetaType(
+          item['stremioType']?.toString(),
+          fallbackMediaType: season != null ? 'tv' : 'movie',
+        ),
       ),
     ),
   );
@@ -607,7 +612,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               final showIds = show['ids'] as Map<String, dynamic>? ?? {};
               final tmdbId = showIds['tmdb'] as int?;
 
-              return GestureDetector(
+              return TvGestureTap(
                 onTap: () async {
                   if (tmdbId == null) return;
                   try {
@@ -725,7 +730,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
               final movieIds = movie['ids'] as Map<String, dynamic>? ?? {};
               final tmdbId = movieIds['tmdb'] as int?;
 
-              return GestureDetector(
+              return TvGestureTap(
                 onTap: () async {
                   if (tmdbId == null) return;
                   try {
@@ -1446,7 +1451,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                         child: Material(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(28),
-                          child: InkWell(
+                          child: TvInkWell(
                             onTap: () => _openDetails(heroMovie),
                             borderRadius: BorderRadius.circular(28),
                             child: const Padding(
@@ -1516,7 +1521,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             top: 0,
             bottom: 0,
             child: Center(
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () {
                   if (_heroController.hasClients && _heroIndex > 0) {
                     _heroController.animateToPage(
@@ -1537,7 +1542,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             top: 0,
             bottom: 0,
             child: Center(
-              child: GestureDetector(
+              child: TvGestureTap(
                 onTap: () {
                   if (_heroController.hasClients && _heroIndex < movies.length - 1) {
                     _heroController.animateToPage(
@@ -1583,7 +1588,7 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     final inner = Material(
       color: Colors.white.withValues(alpha: 0.12),
       borderRadius: BorderRadius.circular(28),
-      child: InkWell(
+      child: TvInkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(28),
         child: child,
@@ -1791,12 +1796,12 @@ class _MovieSectionState extends State<_MovieSection> {
                       ],
                     ),
                   ),
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: _scrollLeft,
                     child: _buildSmallFrostedArrow(Icons.arrow_back_ios_new_rounded),
                   ),
                   const SizedBox(width: 6),
-                  GestureDetector(
+                  TvGestureTap(
                     onTap: _scrollRight,
                     child: _buildSmallFrostedArrow(Icons.arrow_forward_ios_rounded),
                   ),
@@ -1933,12 +1938,12 @@ class _StaticMovieSectionState extends State<_StaticMovieSection> {
                   ],
                 ),
               ),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollLeft,
                 child: _buildSmallFrostedArrow(Icons.arrow_back_ios_new_rounded),
               ),
               const SizedBox(width: 6),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollRight,
                 child: _buildSmallFrostedArrow(Icons.arrow_forward_ios_rounded),
               ),
@@ -2535,6 +2540,10 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
               startPosition: startPos,
               stremioId: stremioItemId,
               stremioAddonBaseUrl: stremioAddonBase,
+              stremioStreamType: StremioService.streamTypeForStremioMetaType(
+                row['stremioType']?.toString(),
+                fallbackMediaType: season != null ? 'tv' : 'movie',
+              ),
             ),
           ),
         );
@@ -2709,12 +2718,12 @@ class _ContinueWatchingSectionState extends State<_ContinueWatchingSection> {
                     ),
                   ),
                   if (history.isNotEmpty) ...[
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: _scrollLeft,
                       child: _buildCWSectionArrow(Icons.arrow_back_ios_new_rounded),
                     ),
                     const SizedBox(width: 6),
-                    GestureDetector(
+                    TvGestureTap(
                       onTap: _scrollRight,
                       child: _buildCWSectionArrow(Icons.arrow_forward_ios_rounded),
                     ),
@@ -2868,7 +2877,7 @@ class _HistoryCard extends StatelessWidget {
                 children: [
                   Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: onRemove,
                       child: Container(
@@ -2881,7 +2890,7 @@ class _HistoryCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Material(
                     color: Colors.transparent,
-                    child: InkWell(
+                    child: TvInkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: onInfo,
                       child: Container(
@@ -3172,12 +3181,12 @@ class _StremioCatalogSectionState extends State<_StremioCatalogSection> {
                 const SizedBox(width: 10),
               ],
               const SizedBox(width: 8),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollLeft,
                 child: _buildStremioArrow(Icons.arrow_back_ios_new_rounded),
               ),
               const SizedBox(width: 6),
-              GestureDetector(
+              TvGestureTap(
                 onTap: _scrollRight,
                 child: _buildStremioArrow(Icons.arrow_forward_ios_rounded),
               ),
@@ -3333,7 +3342,7 @@ class _MyListButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(_uniqueId);
-        return GestureDetector(
+        return TvGestureTap(
           onTap: () async {
             if (movie != null) {
               final added = await MyListService().toggleMovie(

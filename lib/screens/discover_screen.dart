@@ -9,6 +9,7 @@ import '../utils/app_theme.dart';
 import '../utils/performance_tuning.dart';
 import 'details_screen.dart';
 import 'streaming_details_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({super.key});
@@ -647,8 +648,9 @@ class _CompactFilterDialog extends StatelessWidget {
                 Expanded(
                   child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
                 ),
-                GestureDetector(
+                TvGestureTap(
                   onTap: () => Navigator.pop(context),
+                  borderRadius: 8,
                   child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
@@ -745,7 +747,9 @@ class _AddToMyListButton extends StatelessWidget {
       valueListenable: MyListService.changeNotifier,
       builder: (context, _, _) {
         final inList = MyListService().contains(uid);
-        return GestureDetector(
+        return TvGestureTap(
+          borderRadius: 999,
+          behavior: HitTestBehavior.opaque,
           onTap: () async {
             final added = await MyListService().toggleMovie(
               tmdbId: movie.id,

@@ -5,6 +5,7 @@ import '../api/anime_service.dart';
 import '../api/animerealms_extractor.dart';
 import '../utils/app_theme.dart';
 import 'anime_player_screen.dart';
+import '../widgets/tv_interactive.dart';
 
 class AnimeDetailsScreen extends StatefulWidget {
   final AnimeCard anime;
@@ -447,7 +448,7 @@ class _AnimeDetailsScreenState extends State<AnimeDetailsScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        GestureDetector(
+        TvGestureTap(
           onTap: () => setState(() => _isDescriptionExpanded = !_isDescriptionExpanded),
           child: AnimatedCrossFade(
             firstChild: Text(
@@ -500,7 +501,7 @@ class _AnimeDetailsScreenState extends State<AnimeDetailsScreen> {
               itemBuilder: (_, i) {
                 final p = _availableProviders[i];
                 final isSelected = _selectedProvider == p;
-                return GestureDetector(
+                return TvGestureTap(
                   onTap: () => _onProviderChanged(p),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
@@ -557,7 +558,7 @@ class _AnimeDetailsScreenState extends State<AnimeDetailsScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (_hasSub)
-                      GestureDetector(
+                      TvGestureTap(
                         onTap: () => setState(() => _selectedCategory = 'sub'),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
@@ -579,7 +580,7 @@ class _AnimeDetailsScreenState extends State<AnimeDetailsScreen> {
                         ),
                       ),
                     if (_hasDub)
-                      GestureDetector(
+                      TvGestureTap(
                         onTap: () => setState(() => _selectedCategory = 'dub'),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
@@ -677,7 +678,7 @@ class _EpisodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(

@@ -220,6 +220,43 @@ class PlayTorrioAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
+  @override
+  Future<void> rewind() async {
+    if (_currentType == AudioPlayerType.video) {
+      await _seekVideoBy(const Duration(seconds: -30));
+    } else if (_currentType == AudioPlayerType.music) {
+      final pos = _musicPlayer.state.position;
+      await _musicPlayer.seek(
+        pos > const Duration(seconds: 10)
+            ? pos - const Duration(seconds: 10)
+            : Duration.zero,
+      );
+    } else {
+      await seek(
+        (_activePlayer as mk.Player).state.position -
+            const Duration(seconds: 30),
+      );
+    }
+  }
+
+  @override
+  Future<void> fastForward() async {
+    if (_currentType == AudioPlayerType.video) {
+      await _seekVideoBy(const Duration(seconds: 30));
+    } else if (_currentType == AudioPlayerType.music) {
+      final pos = _musicPlayer.state.position;
+      final dur = _musicPlayer.state.duration;
+      var target = pos + const Duration(seconds: 30);
+      if (dur > Duration.zero && target > dur) target = dur;
+      await _musicPlayer.seek(target);
+    } else {
+      await seek(
+        (_activePlayer as mk.Player).state.position +
+            const Duration(seconds: 30),
+      );
+    }
+  }
+
   void updateState(PlaybackState state) {
     if (_currentType == AudioPlayerType.audiobook) {
       playbackState.add(state);

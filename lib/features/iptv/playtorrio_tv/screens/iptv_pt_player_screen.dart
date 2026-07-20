@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:android_pip/android_pip.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +11,14 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../../../api/settings_service.dart';
+import '../../../../platform_flags.dart';
+import '../../../../services/built_in_video_media_session.dart';
+import '../../../../services/playtorrio_cast_service.dart';
+import '../../../../api/local_server_service.dart';
+import '../../../../utils/device_profile.dart';
 import '../data/models.dart';
+import '../../../../widgets/tv_interactive.dart';
 
 /// Single source for the IPTV player.
 class IptvPlaySource {
@@ -95,6 +104,10 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   double _seekPreview = 0.0;
   bool get _isVod => _duration.inSeconds > 1;
 
+  AndroidPIP? _androidPip;
+  bool _showAndroidPipButton = true;
+  bool _autoEnterPipAndroid = false;
+
   int _sourceIdx = 0;
   bool _playing = false;
   bool _buffering = false;
@@ -129,6 +142,9 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   // Retry state
   int _retryAttempt = 0;
   DateTime? _lastRecoveryAt;
+  bool _audioSessionConfigured = false;
+  bool _mediaSessionAttached = false;
+  final SettingsService _settings = SettingsService();
   // When the user explicitly paused (so play-after-pause can rejoin live edge)
   // ignore: unused_field
   DateTime? _pausedAt;
@@ -146,6 +162,9 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isAndroid || Platform.isIOS) {
+      unawaited(PlaytorrioCastService.instance.initialize());
+    }
     _initOrientationAndChrome();
     WakelockPlus.enable();
     _player = Player(
@@ -161,9 +180,128 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     _controller = VideoController(_player);
     _bind();
     _applyMpvTunables();
+    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+      unawaited(_configureIptvAudioSession());
+    }
     _openCurrent();
     _startWatchdog();
     _scheduleHideControls();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _showAndroidPipButton = await _settings.showAndroidPipButton();
+      _autoEnterPipAndroid = await _settings.autoEnterPipAndroid();
+      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        _androidPip = AndroidPIP(
+          onPipEntered: () {
+            if (mounted) setState(() {});
+          },
+          onPipExited: () {
+            if (mounted) setState(() {});
+          },
+          onPipMaximised: () {
+            if (mounted) setState(() {});
+          },
+        );
+        try {
+          if (_autoEnterPipAndroid &&
+              await AndroidPIP.isAutoPipAvailable == true) {
+            await _androidPip!.setAutoPipMode(autoEnter: true);
+          }
+        } catch (e) {
+          debugPrint('[IPTV Player] setAutoPipMode: $e');
+        }
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<bool> _enterPipIfPossible() async {
+    if (_androidPip == null || !Platform.isAndroid) return false;
+    try {
+      final avail = await AndroidPIP.isPipAvailable;
+      if (avail != true) return false;
+      final entered = await _androidPip!.enterPipMode();
+      return entered == true;
+    } catch (e) {
+      debugPrint('[IPTV Player] enterPipMode: $e');
+      return false;
+    }
+  }
+
+  Future<void> _onPipButtonPressed() async {
+    if (_androidPip == null) return;
+    final ok = await _enterPipIfPossible();
+    if (mounted && !ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is not available on this device.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    _scheduleHideControls();
+  }
+
+  /// Same behavior as the main [MobilePlayerScreen]: do not auto-pause in
+  /// background when the user allows background playback; configure OS audio focus.
+  Future<void> _configureIptvAudioSession() async {
+    if (_audioSessionConfigured) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.movie,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      ));
+      _audioSessionConfigured = true;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[IPTV Player] AudioSession: $e');
+    }
+  }
+
+  Future<void> _ensureIptvAudioSessionActive() async {
+    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      debugPrint('[IPTV Player] setActive: $e');
+    }
+  }
+
+  void _attachIptvMediaSession() {
+    if (kIsWeb) return;
+    if (!Platform.isAndroid || DeviceProfile.isAndroidTv) return;
+    if (_mediaSessionAttached) return;
+    _mediaSessionAttached = true;
+    String? art;
+    final u = widget.logoUrl;
+    if (u != null && u.isNotEmpty && u.startsWith('http')) {
+      art = u;
+    }
+    attachBuiltInVideoMediaSession(
+      _player,
+      title: widget.title,
+      posterPath: art,
+      displaySubtitle: widget.subtitle,
+      album: 'PlayTorrio TV',
+      isLive: true,
+    );
+  }
+
+  void _detachIptvMediaSession() {
+    if (!_mediaSessionAttached) return;
+    _mediaSessionAttached = false;
+    if (kIsWeb) return;
+    if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+      detachBuiltInVideoMediaSession(_player);
+    }
   }
 
   /// Set libmpv/FFmpeg properties that turn media_kit into a real IPTV player.
@@ -313,8 +451,15 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
     _playingSub = _player.stream.playing.listen((p) {
       if (!mounted) return;
       setState(() => _playing = p);
+      if (Platform.isAndroid && _androidPip != null) {
+        unawaited(_androidPip!.setIsPlaying(p));
+      }
       if (p) {
         _readyNotPlayingSince = null;
+        if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+          unawaited(_ensureIptvAudioSessionActive());
+          _attachIptvMediaSession();
+        }
       } else if (_userPlayWhenReady) {
         // libmpv silently went paused while the user wants playback. On a
         // live IPTV stream this is the classic "feed died, mpv hit EOF and
@@ -685,6 +830,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   Future<void> _disposePlayer() async {
+    _detachIptvMediaSession();
     await _posSub?.cancel();
     await _durSub?.cancel();
     await _playingSub?.cancel();
@@ -712,6 +858,195 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
       if (!mounted) return;
       setState(() => _controlsVisible = false);
     });
+  }
+
+  bool get _eligibleForPtCast {
+    if (kIsWeb) return false;
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
+    final url = widget.sources[_sourceIdx].url.trim();
+    return PlaytorrioCastService.instance.eligibleForCastUi(
+      mediaPath: url,
+      magnetLink: null,
+    );
+  }
+
+  Future<void> _openPtCast() async {
+    final raw = widget.sources[_sourceIdx].url.trim();
+    await LocalServerService().start();
+    final proxied =
+        LocalServerService().getHlsProxyUrl(raw, {'User-Agent': _ua});
+    await PlaytorrioCastService.instance.initialize();
+    final hwPref =
+        Platform.isAndroid && await SettingsService().androidCastHwTranscodeEnabled();
+    await PlaytorrioCastService.instance.openCastSheet(
+      context: context,
+      streamUrl: proxied,
+      title: widget.title,
+      subtitle: widget.subtitle,
+      posterUrl: widget.logoUrl,
+      liveStream: true,
+      startPosition: Duration.zero,
+      headers: null,
+      preferAndroidHwTranscode: hwPref,
+      onCastStarted: () {
+        if (mounted) unawaited(_player.pause());
+      },
+    );
+  }
+
+  Widget _buildPtCastBanner() {
+    return StreamBuilder<bool>(
+      stream: PlaytorrioCastService.instance.isCastingActiveStream,
+      initialData: PlaytorrioCastService.instance.isCastingActiveNow,
+      builder: (context, snap) {
+        final casting = snap.data == true;
+        if (!casting) return const SizedBox.shrink();
+        final pad = MediaQuery.of(context).padding;
+        final name =
+            PlaytorrioCastService.instance.connectedCastDeviceName ?? 'TV';
+        return Positioned(
+          top: pad.top + 8,
+          left: 10,
+          right: 10,
+          child: Material(
+            color: const Color(0xE6151520),
+            borderRadius: BorderRadius.circular(12),
+            elevation: 6,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.cast_connected_rounded,
+                      color: Color(0xFF00E5FF), size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Casting',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.65),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Back 30s',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekRelative(
+                                  const Duration(seconds: -30)),
+                          icon: Icon(Icons.replay_30_rounded,
+                              size: 22,
+                              color:
+                                  Colors.white.withValues(alpha: 0.9)),
+                        ),
+                        IconButton(
+                          tooltip: 'Forward 30s',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekRelative(
+                                  const Duration(seconds: 30)),
+                          icon: Icon(Icons.forward_30_rounded,
+                              size: 22,
+                              color:
+                                  Colors.white.withValues(alpha: 0.9)),
+                        ),
+                        StreamBuilder<bool>(
+                          stream: PlaytorrioCastService
+                              .instance.castRemoteIsPlayingStream,
+                          initialData: false,
+                          builder: (_, ps) {
+                            final playing = ps.data == true;
+                            return IconButton(
+                              tooltip: playing ? 'Pause' : 'Play',
+                              visualDensity: VisualDensity.compact,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                  minWidth: 36, minHeight: 36),
+                              onPressed: () => playing
+                                  ? PlaytorrioCastService.instance
+                                      .remotePause()
+                                  : PlaytorrioCastService.instance
+                                      .remotePlay(),
+                              icon: Icon(
+                                playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                size: 26,
+                                color: Colors.white,
+                              ),
+                            );
+                          },
+                        ),
+                        IconButton(
+                          tooltip: 'Jump to live',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          onPressed: () => PlaytorrioCastService.instance
+                              .remoteSeekLiveEdge(),
+                          icon: Icon(Icons.live_tv_rounded,
+                              size: 22,
+                              color: Colors.redAccent
+                                  .withValues(alpha: 0.95)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await PlaytorrioCastService.instance.stopCasting();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Stopped casting'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'Stop',
+                      style: TextStyle(
+                        color: Color(0xFF00E5FF),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _toggleControls() {
@@ -746,6 +1081,34 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!platformIsAndroid && !Platform.isIOS) return;
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      if (Platform.isAndroid &&
+          !DeviceProfile.isAndroidTv &&
+          _autoEnterPipAndroid &&
+          _playing &&
+          _androidPip != null) {
+        unawaited(_enterPipIfPossible());
+      }
+      if (_playing && Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        _attachIptvMediaSession();
+      }
+      unawaited(_settings.continuePlaybackInBackground().then((allow) {
+        if (!mounted) return;
+        if (!allow && _playing) {
+          unawaited(_player.pause());
+        }
+      }));
+    } else if (state == AppLifecycleState.resumed) {
+      if (Platform.isAndroid && !DeviceProfile.isAndroidTv) {
+        unawaited(_ensureIptvAudioSessionActive());
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final compact = size.shortestSide < 600;
@@ -757,12 +1120,20 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Video
+            // Video — respect "Continue playback in background" (same as main player)
             Center(
-              child: Video(
-                controller: _controller,
-                fit: BoxFit.contain,
-                controls: NoVideoControls,
+              child: ValueListenableBuilder<bool>(
+                valueListenable:
+                    SettingsService.continuePlaybackInBackgroundNotifier,
+                builder: (context, allowBg, _) {
+                  return Video(
+                    controller: _controller,
+                    fit: BoxFit.contain,
+                    controls: NoVideoControls,
+                    fill: Colors.black,
+                    pauseUponEnteringBackgroundMode: !allowBg,
+                  );
+                },
               ),
             ),
             // Reconnect/buffering banner
@@ -776,6 +1147,7 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
                 child: _buildOverlay(compact),
               ),
             ),
+            _buildPtCastBanner(),
           ],
         ),
       ),
@@ -906,6 +1278,28 @@ class _IptvPtPlayerScreenState extends State<IptvPtPlayerScreen>
             _SourceChip(
               label: widget.sources[_sourceIdx].label,
               onTap: _showSourcePicker,
+            ),
+          ],
+          if (_eligibleForPtCast) ...[
+            IconButton(
+              tooltip: 'Cast',
+              onPressed: () async {
+                await _openPtCast();
+                _scheduleHideControls();
+              },
+              icon: const Icon(Icons.cast_rounded, color: Colors.white70),
+            ),
+          ],
+          if (Platform.isAndroid &&
+              !DeviceProfile.isAndroidTv &&
+              _showAndroidPipButton) ...[
+            IconButton(
+              tooltip: 'Picture-in-picture',
+              onPressed: _onPipButtonPressed,
+              icon: const Icon(
+                Icons.picture_in_picture_alt_outlined,
+                color: Colors.white70,
+              ),
             ),
           ],
         ],
@@ -1242,7 +1636,7 @@ class _RoundIcon extends StatelessWidget {
     return Material(
       color: Colors.white.withValues(alpha: 0.12),
       shape: const CircleBorder(),
-      child: InkWell(
+      child: TvInkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
         onLongPress: onLongPress,
@@ -1263,7 +1657,7 @@ class _SourceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return TvInkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: onTap,
       child: Container(
