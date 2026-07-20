@@ -2,7 +2,7 @@
 
 Stream anything, anywhere. Movies, TV shows, music, manga, comics, audiobooks, live TV, sports, and IPTV — all in one app.
 
-**Current version:** 1.2.3
+**Current version:** 1.2.4
 
 Made by [ayman708-UX](https://github.com/ayman708-UX), updates made by [killamfkr](https://github.com/killamfkr) with the assistance of Cursor AI. If you like it, star it or whatever.
 
